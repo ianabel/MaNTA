@@ -24,14 +24,16 @@ manta = "manta.cli:main"
 [project.urls]
 Documentation = "https://manta-docs.readthedocs.io"
 
-# The extension is built by the project's Makefile, not by setuptools: the build
-# needs SUNDIALS, netCDF, Eigen and autodiff located through Makefile.local, and
+# The extension is built by the project's CMake build, not by setuptools: the
+# build needs SUNDIALS, netCDF, Eigen and autodiff located through CMake, and
 # reproducing that discovery in setup.py would give two build systems that have
-# to agree. `pip install .` therefore shells out to `make python`.
+# to agree. `pip install .` therefore shells out to `cmake`, reusing an already
+# configured `build/` when there is one (MANTA_CMAKE_BUILD_DIR names another)
+# and taking the extension from its package directory, <build>/python/manta.
 #
 # The consequence is that a wheel built here is not portable -- it links the
-# SUNDIALS the Makefile found. That is the same constraint the standalone binary
-# has always had.
+# SUNDIALS CMake found. That is the same constraint the standalone binary has
+# always had.
 [tool.setuptools]
 package-dir = { "" = "python" }
 
@@ -39,5 +41,7 @@ package-dir = { "" = "python" }
 where = ["python"]
 include = ["manta*"]
 
+# The extension is not package data: setup.py copies it in from the CMake build
+# directory, so a stray _manta*.so in python/manta/ cannot be shipped instead.
 [tool.setuptools.package-data]
-manta = ["*.so", "*.pyi", "py.typed"]
+manta = ["*.pyi", "py.typed"]

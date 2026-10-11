@@ -3,7 +3,7 @@ Running MaNTA, and its output
 
 .. code-block:: sh
 
-   ./MaNTA myproblem.conf
+   build/MaNTA myproblem.conf
 
 Output file names
 -----------------
@@ -14,7 +14,7 @@ Output names default to the **stem of the configuration file**, and
 .. warning::
 
    Whichever name is used, the files land in the **current working directory**:
-   any directory part is dropped. ``./MaNTA runs/case7.conf`` writes
+   any directory part is dropped. ``build/MaNTA runs/case7.conf`` writes
    ``./case7.nc``, not ``runs/case7.nc``, and setting
    ``OutputFilename = "out/case7"`` still writes ``./case7.nc``. Two drivers
    running in different directories under the same base name will overwrite each
@@ -76,6 +76,39 @@ whatever else it likes through the ``initialiseDiagnostics`` and
 ``writeDiagnostics`` hooks, which is how derived quantities end up in the same
 file.
 
+.. _coupled-output:
+
+What a coupled run adds
+~~~~~~~~~~~~~~~~~~~~~~~
+
+With a :doc:`field model <field_coupling>` attached, both ``<stem>.nc`` and
+``<stem>.restart.nc`` gain **one further group**, named by the model's spec
+(``FieldModelSpec::name``, defaulting to ``Field``), carrying:
+
+* one **time series per field unknown**, named, described and given units by the
+  spec's ``dofs`` — :math:`\psi` has no :math:`x` dependence, so it is written
+  the way a global scalar is;
+* one **spatial variable per geometry slot**, from the spec's ``geometry``,
+  sampled at the same ``OutputPoints`` positions as ``u`` at every output time —
+  these *are* functions of :math:`x`, so they are written the way ``u`` is;
+* a group attribute ``label``, the spec's name for the spatial coordinate its
+  geometry is expressed against. MaNTA does not interpret it; recording it is
+  what lets a reader know what the run's :math:`x` meant.
+
+The restart file additionally records ``RestartData/nField``, which is how many
+of the trailing entries of ``Y`` are :math:`\psi`. It is written on every run,
+so an uncoupled file says ``nField = 0`` rather than leaving a reader to
+distinguish "no field model" from "written before the field block existed"; a
+file predating this is read back as zero, which is the truth about it. Resuming
+a coupled run needs both the file and a config naming a ``FieldModel`` that
+declares the same number of unknowns, and a mismatch is reported by name rather
+than as an ``nVars``/``nAux``/``nScalars`` disagreement.
+
+Everything above is gated on ``WriteOutput``, like the rest of the netCDF and
+restart output. A run with no field model writes exactly what it wrote before
+the feature existed — byte for byte, apart from that one ``nField = 0`` in the
+restart file.
+
 With ``solveAdjoint`` set, the file also carries the scalars ``ng``, ``np`` and
 ``np_boundary``, one ``G<i>`` value per objective, and the groups ``G<i>_p`` and
 ``G<i>_boundary`` holding the gradient with respect to each named parameter.
@@ -115,10 +148,10 @@ point a config file at it:
    t_initial = 0.5
    t_final = 1.0
 
-The grid comes from the restart file, so ``Grid_size``, ``Grid_points``,
-``Lower_boundary`` and ``Upper_boundary`` are ignored on this path.
+The grid comes from the restart file, so ``GridSize``, ``GridPoints``,
+``LowerBoundary`` and ``UpperBoundary`` are ignored on this path.
 
-``Polynomial_degree`` is **not** ignored. It defaults to the degree the file was
+``PolynomialDegree`` is **not** ignored. It defaults to the degree the file was
 written at, and setting it to something else resumes the run at that degree
 instead, projecting the stored state onto the new space:
 
@@ -126,8 +159,8 @@ instead, projecting the stored state onto the new space:
 
    [configuration]
    restart = true
-   RestartFile = "case7.restart.nc"   # written at Polynomial_degree = 2
-   Polynomial_degree = 3              # resume at 3
+   RestartFile = "case7.restart.nc"   # written at PolynomialDegree = 2
+   PolynomialDegree = 3              # resume at 3
 
 Refining loses nothing — a degree-*k* element polynomial lies inside the
 degree-(*k*\ +1) space, so the projection reproduces it exactly. Coarsening
@@ -148,11 +181,104 @@ elsewhere as a deliberate request.
    constructed with the grid where nothing hands it the degree, so changing the
    mesh changes what the case was built against.
 
+The **field model is not ignored either**: it is named by the config as usual,
+and its declared ``nFieldDOF`` is checked against the ``nField`` the file
+records before anything is read into it. Resuming a coupled run therefore needs
+the same ``FieldModel`` line the original run had.
+
+**A restart may change the mesh as well as the degree.** ``GridSize`` and
+``GridPoints`` are honoured on a restart the way ``PolynomialDegree`` is: an
+identical mesh keeps the copy path and is bit for bit unchanged, while a
+different one is projected onto — the stored element polynomials are evaluated
+at the new cell nodes — with a warning naming both meshes. An end of the domain
+the configuration does not give is the file's. Give neither key and the run
+resumes on the file's mesh as it stands, graded or not (see
+:ref:`restarting`). The trace is rebuilt when the cells move, since ``lambda``
+lives on faces, where a change of degree alone leaves it transferable verbatim.
+
+.. note::
+
+   ``DegreeLadder`` and ``GridLadder`` express that directly, so it need not be
+   driven by hand::
+
+      Polynomial_degree = 5
+      Grid_size         = 10
+      DegreeLadder      = [1, 2]
+      GridLadder        = [2, 4]
+
+   solves at 2 cells and :math:`k = 1`, then 4 and :math:`k = 2`, then the
+   configured 10 and :math:`k = 5`, each rung warm-starting the next. **The last
+   rung is always the configured resolution**, so a ladder is a route and not a
+   change of destination: remove the keys and the answer is the same, which is
+   what makes it safe to try on a problem you already have an answer for. Either
+   list alone holds the other quantity at its configured value, so a pure
+   :math:`h`- or :math:`k`-ladder needs only one of them; given both, they must
+   be the same length.
+
+   A rung at the configured cell count — every rung of a pure ``DegreeLadder``
+   — solves on the configured mesh itself, so a :math:`k`-ladder works on any
+   mesh: ``GridPoints``, graded, or a restart file's. A rung at another count
+   is built by ``GridSize``'s rule at that count, graded the same way under
+   ``GradedGridBoundary`` with its own default ``GradingCells``.
+
+   ``GridPoints`` and a restart file's mesh are one mesh at one count and no
+   rule for any other, so ``GridLadder`` is refused with either unless
+   ``GridLadderRescaling = "Map"`` asks for the map rule. That reads the
+   :math:`N` boundaries as a piecewise-linear map :math:`x(\xi)` with
+   :math:`x(i/N) = x_i` and samples it at :math:`\xi = j/M` for an
+   :math:`M`-cell rung. When :math:`M` divides :math:`N` the rung is every
+   :math:`(N/M)`-th boundary exactly, so it is nested in the final mesh and the
+   warm start passes up without projection error. Otherwise the rung keeps the
+   cell density and moves every interior boundary — including one placed on a
+   coefficient jump or a source edge, which then sits inside a cell on that
+   rung. That is why it is opt-in: a list of boundaries does not say which it
+   was placed for. The last rung is the configured mesh either way, so a poor
+   rung costs Newton iterations and never accuracy; prefer rung counts that
+   divide the final one. A ladder needs a steady solve, is refused alongside
+   ``DegreeAdaptation`` — both choose the sequence of discretisations — and is
+   refused inside a sliced steady solve, since each rung replaces the solver.
+
+   **Do not loosen the early rungs.** Solving each rung only to its own
+   discretisation error is the classical nested-iteration advice and it is wrong
+   here, measured: on the Jardin benchmark a ramp from :math:`10^{-2}` costs
+   twice what converging every rung costs, because a *fully* converged coarse
+   rung is what lets every rung above it exit at zero Newton iterations through
+   the already-converged test. On Shestakov it is a wash either way. The coarse
+   rungs of a good ladder are cheap — two cells at :math:`k = 1` is a few per
+   cent of the budget — so there is very little there to save, and the saving
+   they buy above them is large.
+
+   That makes a *ladder* expressible in configuration: solve coarse, restart
+   finer, solve again. On a nonlinear problem started far from its answer this
+   is worth between 1.5x and 7x in transport-model calls, and on a linear one it
+   is a loss, since Newton is exact in one step from any guess and every rung is
+   overhead. ``PERFORMANCE.md`` has the measurements and the two traps — a rung
+   costs a full solve whatever it achieves, so few large jumps beat many small
+   ones; and the boundaries default to 0 and 1, so a restart config that omits
+   them will remesh a run over another domain, which is what the warning is for.
+
 A restart written by a steady solve carries ``dYdt = 0``, which is the defining
 property of the state it holds. It used to carry the ``t_initial`` derivative
 instead — ``solveSteadyState`` damps through a scratch vector and never wrote
 back to the one the restart file is built from — so a resumed run started from a
 solution and a time derivative that did not belong together.
+
+.. warning::
+
+   **Keep** ``delta_t`` **at a size the resumed run could actually take as its
+   first step.** On a restart, ``IDASetInitStep`` is given ``delta_t`` as the
+   **first step**, on the reading that a resumed run should continue at the same
+   step it left off with. A cadence chosen for output frequency rather than for
+   stability can therefore hand IDA a first step approaching the whole remaining
+   integration, and the error test then fails repeatedly until it gives up with
+   ``IDA_ERR_FAIL`` (-3). Setting ``dt0`` overrides it.
+
+   This warning used to have a second half, about ``t_initial == delta_t``
+   failing with ``IDA_ILL_INPUT`` (-22) and ``tout1 too close to t0``. That was
+   a MaNTA bug — ``IDACalcIC`` was handed the *interval* where SUNDIALS wants
+   the first output *time* — and it is fixed; the two agree only at
+   ``t0 = 0``, which is where every fixture in the tree starts, so no cold run
+   ever noticed.
 
 .. warning::
 
@@ -169,6 +295,229 @@ solution and a time derivative that did not belong together.
 
    :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
    accuracy of the algebraic components that a restart resumes from.
+
+.. _coupled-field-sweeps:
+
+What a coupled run reports
+--------------------------
+
+A run with ``FieldModel`` set and ``FieldSolve = iterative`` — the default —
+prints one extra line beside the step and Jacobian counts at the end::
+
+   Coupled field sweeps                  :1043 over 342 solves (0 exact fallbacks)
+
+The ratio is what to read. A sweep is one transport solve; the exact Schur
+complement is :math:`\texttt{nField}+1` of them. So the iterative path is
+*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`, and
+on every fixture in this tree it is not — see :doc:`field_coupling` for the
+numbers. Measured in a real integration the sweep runs 2.5 to 3.6 iterations per
+Jacobian solve.
+
+.. important::
+
+   **A nonzero fallback count is a cost report, not an error.** A sweep that
+   exhausts ``FieldSolveMaxSweeps`` escalates to the exact Schur solve, so the
+   answers are correct; the run is simply paying for both, at
+   :math:`\texttt{nField}+1` transport solves on top of the sweeps it already
+   spent. The run says so:
+
+   .. code-block:: text
+
+      WARNING: 17 of 342 coupled Jacobian solves exhausted FieldSolveMaxSweeps = 20
+      and fell back to the exact Schur solve, at 6 transport solves each. The answers
+      are correct; the run is paying for both. Raise FieldSolveMaxSweeps, or set
+      FieldSolve = exact and skip the sweeps.
+
+   Nothing latches that decision, so a genuinely divergent coupling pays both on
+   *every* Jacobian solve for the whole run. If the count is a large fraction of
+   the solve count, ``FieldSolve = exact`` is the cheaper answer.
+
+The escalation runs in **both** directions, forward and adjoint, which is what
+makes ``FieldSolve`` a cost choice and never an accuracy one. The adjoint has its
+own cap, ``FieldSolveMaxAdjointSweeps``, defaulting to 100 against the forward
+20: the transposed iteration has the same spectrum — it *is* the transpose — but
+always runs at :math:`c_j = 0`, where the spectral radius is largest, so it is
+strictly the harder direction. Five field unknowns have been measured needing
+13–38 sweeps on isolated right-hand sides, which is why inheriting the forward
+cap would under-serve it.
+
+.. note::
+
+   The counts are per run. ``initialize`` zeroes them, alongside the field
+   model's own ``resetForRun``, so a second run on a reused solver reports its
+   own numbers rather than a cumulative total.
+
+Two failures worth being able to read
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``initialize`` refuses a **field DOF declared differential whose residual row
+carries no time derivative**, naming the DOF. Left to IDA that is an
+``IDA_LINESEARCH_FAIL`` (-13): ``IDA_YA_YDP_INIT`` holds every differential
+*value* fixed, so a row that reaches no unknown it may move is irreducible and
+the backtracking loop runs to exhaustion — a message about the linesearch for a
+defect in the declaration.
+
+A field model that **cannot evaluate at the state it is handed** should throw
+from ``FieldResidual``. That is caught and reported to IDA as a *recoverable*
+error, so the step is retried with a smaller ``h`` rather than the run failing.
+
+.. _warm-starts:
+
+Warm starts and ``IDACalcIC``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A restart resumes from a state the previous run had already driven onto the
+constraint manifold, so ``IDACalcIC`` — whose job is to put it there — often has
+little to do. **It cannot find that out cheaply.** Its convergence test is on the
+Newton *step* rather than on the residual: ``IDANewtonIC`` calls the linear solve
+and only then tests :math:`\|J^{-1}F\|` against ``epsNewt``
+(``ida_ic.c:404-417``), ``IDAnlsIC`` calls the Jacobian setup unconditionally
+before that (``ida_ic.c:345``), and the outer loop repeats the whole thing on
+success to refresh the error weights (``ida_ic.c:232``). Handed a state it had
+itself just converged to, it still costs **two residual evaluations, two Jacobian
+builds and two Jacobian solves**, with zero Newton iterations — measured on four
+fixtures. For MaNTA a build is ``updateMatricesForJacSolve()``: assemble and
+factorise every per-cell :math:`M_X`.
+
+**So a restart skips it by default**, and integrates from the state the file
+carried. ``initialize()`` still evaluates the residual once — no Jacobian work —
+and takes its WRMS norm with the solver's own error weights, on every
+time-marching run whether or not the skip applies; that number is logged at
+``INFO`` and readable from C++ through ``getInitialResidualNorm()``, so a caller
+can see afterwards how consistent the state they resumed from actually was.
+Measured on an already consistent warm start, skipping saves exactly
+``IDACalcIC``'s floor and nothing more: two residual evaluations and two Jacobian
+builds — 2 of 89 and 2 of 21 on ``AuxVarTest`` at rtol 1e-6.
+
+.. important::
+
+   **Only a restart that was *copied*.** Resuming at a different polynomial degree
+   projects instead: ``setInitialConditions`` transfers :math:`u`, :math:`q`, the
+   auxiliary variables and the scalars, then rebuilds :math:`\sigma` and the trace.
+   What that hands IDA is a guess like any other, and skipping ``IDACalcIC`` there
+   is a broken run rather than a saving — the ``AuxVarTest`` regression case
+   resuming at a lower degree fails with ``IDA_ERR_FAIL`` when it is skipped and
+   completes when it runs. The default is conditional on the transfer having been
+   a copy, so this needs no configuration; ``ForceConsistentIC`` is there for the
+   cases nobody has measured yet.
+
+**A cold time-marching run always runs it, and there is no option to turn that
+off.** Its guess is not a consistent state, ``IDA_ERR_FAIL`` on the first step is
+what starting from one looks like, and a local error estimate that will not shrink
+with :math:`h` is not something a key should let you opt into. A caller who does
+not care about the transient wants ``SteadyStateSolver = PseudoTransient`` or
+``Newton``.
+
+``ForceConsistentIC`` is therefore one-directional: it adds ``IDACalcIC`` back to
+a steady solve or a restart, and cannot remove it from the run that needs it.
+
+.. warning::
+
+   **The decision is made from what the run is, not from a residual threshold,
+   and that is a measurement.** It replaced ``ConsistentICTolerance``, which
+   skipped when the initial weighted
+   residual fell below a number the caller supplied. That number turned out not
+   to be calibratable. What ``IDACalcIC`` tests is
+   :math:`\|J^{-1}F\|_{\mathrm{wrms}}`, a *correction to* :math:`y`; what that
+   key tested is :math:`\|F\|_{\mathrm{wrms}}`. The two differ by the per-row
+   amplification :math:`s_i = \|J^{-1}e_i\|_{\mathrm{wrms}}`, and that is not
+   close to proportional to the error weights the norm applies. Measured as
+   :math:`s_i/\mathrm{ewt}_i` across ``LinearDiffusion``, ``MatTest`` and
+   ``AuxVarTest``:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - block
+        - ``s/ewt``
+        - reading
+      * - ``sigma``, ``q``
+        - 0.6 – 10
+        - about right, and uniform, so harmless
+      * - ``u``
+        - 2.3e-4 – 2.0
+        - over-weighted by up to ~4000x
+      * - ``lambda``, Dirichlet ends
+        - exactly 0
+        - largest weight in the vector, on rows ``residual`` never writes
+      * - ``aux``
+        - 0.9 – 39
+        - under-weighted by up to ~10x *relative to* ``sigma``
+
+   The ``u`` rows are the differential ones, whose residual IDA absorbs into
+   :math:`u'`. The Dirichlet trace rows are imposed inside the linear solve, so
+   :math:`J^{-1}e_i` is identically zero there and they can only dilute the mean.
+   The ``aux`` spread is the one that bites, because it is an error *relative* to
+   the block a corrected state's residual lands in.
+
+   **What that costs on the tree as it stands is calibration.** Over six
+   ``AuxVarTest`` warm-start states — three tolerances, corrected and not — the
+   amplification :math:`\|J^{-1}F\|/\|F\|` runs from **15 to 187**, for one
+   problem at one discretisation. A threshold on :math:`\|F\|` therefore means
+   something different at each of them.
+
+   **Until recently it was worse than uncalibrated — it was inverted**, and that
+   is how the underlying defect was found. Before ``AuxVarTest``'s missing
+   ``dSigma_dPhi`` block was declared, a warm start there measured:
+
+   .. list-table::
+      :header-rows: 1
+
+      * - measure
+        - uncorrected
+        - corrected
+        - verdict
+      * - :math:`\|F\|` — what the old key tested
+        - 1.6e-4
+        - 3.8e-4
+        - uncorrected 2.4x *better*
+      * - :math:`\|J^{-1}F\|` — what CalcIC tests
+        - 2.0e-2
+        - 3.1e-3
+        - uncorrected 6.3x *worse*
+
+   The run agreed with the second: skipping failed with ``IDA_CONV_FAIL``,
+   correcting worked. Under ``SUNLOGGER_INFO_FILENAME`` the failing Newton's
+   correction plateaued at 1.98e-2 as :math:`h` fell — which *is*
+   :math:`\|J^{-1}F\|` — while :math:`\|F\|` could not see it. Note that
+   :math:`\|J^{-1}F\|` predicted the failure using the *defective* :math:`J`,
+   which is the point of the quantity: it measures the Newton the solver will
+   actually run, not the one it ought to.
+
+   That particular failure is gone — with the block declared, every restart round
+   trip in the suite completes with the skip armed, and on the current tree the
+   two norms order those states alike. Read it as removing the counter-example
+   rather than as licensing a default: the threshold is unconstrained from below
+   rather than shown safe, and the proxy still varies by an order of magnitude
+   within one problem. Hence no threshold at all: whether a run is a steady solve
+   or a copied restart is something the solver knows exactly, where the residual
+   norm only guesses.
+
+   For scale, on ``TestDiffusion`` round trips a cold start's residual measures
+   0.30 at ``Absolute_tolerance = 1e-3`` and 417 at ``1e-8``, while a warm start
+   lands between 7.7e-4 and 1.9e-2.
+
+**What makes a warm start consistent at all is that the trace is now kept.**
+``setInitialConditions`` used to finish every restart with ``EvaluateLambda()``,
+which sets :math:`\lambda` to :math:`\{\{u\}\}` — the average of the two cell
+traces, not the HDG trace equation
+:math:`C_\sigma \sigma + C_q q + G_c u + H\lambda = L(t)` that :math:`\lambda`
+actually solves. On a restart that discarded a converged trace and replaced it
+with something that solves nothing: measured on a ``TestDiffusion`` round trip at
+``Absolute_tolerance = 1e-8``, that one call took the weighted residual from
+2.6e-3 to 556. It is why a restart used to need about ten times as many residual
+evaluations inside ``IDACalcIC`` as a cold start; on ``AuxVarTest``'s round trip
+keeping the trace takes the resumed run from 1139 residual evaluations to 1033.
+
+The trace is kept whenever the discretisation matches. The degree-change path
+still builds one, because ``copy()`` refused the transfer and there is none to
+keep. ``ApplyDirichletBCs`` deliberately still runs *above* ``EvaluateLambda``
+rather than below it, even though that means the boundary data it writes is
+overwritten again on the projection path: moving it below breaks the
+``AuxVarTest`` round trip on its own, and the only difference is whether a
+Dirichlet end's trace holds the boundary datum or :math:`u`'s trace there — a
+node whose row and column are identically zero, so it is IDA's error test that
+notices rather than the residual.
 
 .. _steady-state-solver:
 
@@ -263,9 +612,70 @@ transient *is* the answer.
    with more than one steady state, such as a transport model with a barrier
    bifurcation.
 
+.. _steady-merit-function:
+
+What ``SteadyStateTolerance`` is measured against
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On the two continuation modes the tolerance is compared against a weighted norm
+of the undamped steady residual,
+
+.. math::
+
+   \|F\| = \Bigl[ \sum_i (w_i F_i)^2 \Bigr]^{1/2}, \qquad
+   w_i = \begin{cases} h_K^{-1/2} & \text{row } i \text{ is in cell } K \\
+                       1          & \text{row } i \text{ is a trace or a scalar}
+         \end{cases}
+
+*Undamped* is what makes it a merit function: the residual KINSOL sees carries
+the backward-Euler term, which can be driven to zero by shrinking ``dt`` without
+going anywhere.
+
+The weights are there so that one tolerance means one thing on every mesh. A
+cell row is a pairing against the basis — the assembly forms it through the cell
+mass matrix, so it holds :math:`\langle R, \phi_i \rangle \sim h R(x_i)` for a
+residual density :math:`R`. An unweighted 2-norm over :math:`n_\mathrm{cells}
+(k+1)` such rows therefore goes like :math:`\sqrt{h}`, and dividing by
+:math:`\sqrt{h_K}` recovers the discrete :math:`L^2` norm of the equation
+residual, which is a property of the solution rather than of the discretisation.
+Measured on the unit-test diffusion problem at 4/8/16/32/64 cells, same initial
+function throughout: unweighted 0.5557, 0.3935, 0.2784, 0.1969, 0.1392 — ratios
+converging on :math:`1/\sqrt2` — against weighted 1.11145, 1.11294, 1.11344,
+1.11358, 1.11361, converging on a limit at second order.
+
+The trace rows carry weight 1 because a ``lambda`` row is a flux condition at a
+single face and has no :math:`h` in it; the global scalars are not spatial at
+all. Near a solution the choice makes no measurable difference either way, since
+those rows are the algebraic constraints and the solve has driven them to
+round-off.
+
+.. note::
+
+   "Mesh-independent" holds **near a solution**, which is the regime the
+   convergence test fires in, and not everywhere. Far from one the trace and
+   derivative terms of the weak form dominate the cell rows instead; those are
+   :math:`O(1)` per row, with no :math:`h` to divide out, and the norm then
+   *grows* under refinement. So a reported starting ``||F||`` is not comparable
+   across meshes even though the tolerance is. No fixed choice of :math:`w_i`
+   fixes both, because the two mechanisms scale oppositely and which dominates is
+   a property of the state;
+   ``the_weighted_norm_is_mesh_independent_only_near_a_solution`` pins that.
+
+KINSOL is handed the same weights as its ``f_scale``, so its own stopping test
+and the continuation loop's are the identical quantity rather than two that
+happen to agree — they match bit for bit in ``Newton`` mode, where the damping
+term is identically zero. Its ``u_scale`` stays unit: that one is about the
+solution's units, and it drives the step-length test and the Newton step clamp.
+
+``TimeMarch`` does not use any of this. It compares ``dY/dt`` against the same
+tolerance in the time loop, so a config that switches between the modes is
+changing what the number means.
+
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — evaluations of the physics per point, for an
-answer identical in every digit printed:
+answer identical in every digit printed. The resolution is stated because the
+counts depend on it: ``park-convergence`` at 4 cells, the other two at 10, all
+three at :math:`k = 3`.
 
 .. list-table::
    :header-rows: 1
@@ -275,20 +685,44 @@ answer identical in every digit printed:
      - ``PseudoTransient``
      - ``Newton``
    * - ``park-convergence``
-     - 113
-     - **19**
-     - **11**
+     - 120
+     - **6**
+     - **5**
    * - ``jardin-critical-gradient``
-     - 176
-     - **92**
-     - 117
+     - 183
+     - **116**
+     - 140
    * - ``shestakov-nonlinear``
-     - **283**
-     - 705
-     - 731
+     - **257**
+     - 442
+     - 467
 
-Park's own solver reaches that state in 9–15 iterations, which is where
-``Newton`` lands. The last row is the counter-example and is why ``TimeMarch``
+Three things a steady solve does not pay for account for a constant few
+evaluations of those two columns, and none of them for the order of magnitude in
+the first row — that is the algorithm. It does not run ``IDACalcIC`` (see
+:ref:`the-run-lifecycle` below); ``setInitialConditions`` does not solve the
+initial ``du/dt`` out of the u row, a sweep whose whole product a steady solve
+discards; and at ``dt = inf`` the merit function reads the residual norm KINSOL
+already computed rather than evaluating it again. Every converged answer is
+unchanged bit for bit by all three, and ``TimeMarch``, which needs the first two,
+is untouched.
+
+The budget that leaves is exact: ``2 + 3n`` physics sweeps for ``Newton`` and
+``2 + 4n`` for ``PseudoTransient``, over ``n`` continuation steps. Two are fixed
+— building ``sigma``, and the residual evaluation that tests whether the initial
+state is already converged — and each step costs KINSOL's residual at both ends
+plus a Jacobian, with a fourth sweep at finite ``dt`` where the damped residual
+KINSOL drives to zero and the steady one the step-size rule needs are different
+functions.
+
+Park's own solver reaches a steady state in 9–15 iterations on the nonlinear
+problems he reports, which ``Newton`` matches or beats. On ``park-convergence``
+itself the comparison is not that: the diffusivity there is constant, so his
+relaxation is converged at its first iterate and he solves the linear system in
+one pass over the grid. Three of ``Newton``'s five sweeps are the floor for a
+method that does not know the problem is linear — a residual to form the
+right-hand side, a Jacobian, and a residual to learn the correction was exact —
+and the other two are ``sigma`` and the already-converged test. The last row is the counter-example and is why ``TimeMarch``
 stays: that problem's flux ``D0 q^3/u^2`` is degenerate, the mass term
 continuation exists to shed is what was damping it, and as ``dt`` grows the inner
 solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
@@ -348,6 +782,129 @@ is reading the initial condition's rate of change; and **nothing in the file
 distinguishes a failed last slice from a converged one** — the exception, the
 logged error and the exit status do.
 
+**Running out of rejected steps is not a failure.** A solve that has had more
+than ``MaxRejectedSteps`` continuation steps rejected stops, logs a warning with
+the residual it reached, and returns ``OutOfSteps`` with its last accepted state —
+which the run then writes and carries on with as its result, adjoint solve
+included. A residual stalled just above the tolerance at its round-off floor is
+the usual cause, and that state is a usable one.
+
+The step budget, and resuming
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``MaxContinuationSteps`` (default 200) is how many ``KINSol`` calls one steady
+solve may make. Each is a full Newton solve, so a healthy run uses ten or so and
+the default is a runaway backstop rather than a budget.
+
+Lowering it deliberately is how a solve is stopped early enough to be looked at.
+Running out is not a failure of the method — the state reached and the
+pseudo-time step SER has climbed to are both still good — so
+``continueSteadyState()`` picks up both and carries on, where a second
+``solveSteadyState()`` re-enters at ``PseudoTransientInitialStep`` and re-climbs
+the ramp from the bottom.
+
+The difference is the whole solve, not a margin on it. A nonlinear diffusion that
+converges in 15 continuation steps uninterrupted takes **the same 15** in slices
+of three when each slice resumes, and does not converge at all in 40 slices when
+each one starts over.
+
+Resuming drives the phases directly rather than going through ``runSolver()``,
+which frees the state on its way out of a failed solve:
+
+.. code-block:: cpp
+
+   system.setMaxContinuationSteps(slice);
+   system.initialize();
+   for (;;)
+   {
+       try
+       {
+           first ? system.solveSteadyState() : system.continueSteadyState();
+       }
+       catch (std::exception const &)
+       {
+           // Out of steps for this slice. Nothing has been freed; Y still holds
+           // the last accepted iterate and ptcStep the dt it was reached at.
+       }
+       if (system.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged)
+           break;
+       // ... inspect lastSteadyStats(), lastObjectiveEstimate(), yJac ...
+   }
+
+``lastSteadyStats()`` describes the slice that just ran, not the solve as a
+whole, so a caller wanting the total sums them. It includes the objective
+estimate's cost when that is armed, so the number a driver reads is the whole of
+what the slice spent.
+
+From Python
+"""""""""""
+
+``manta.SteadySolve`` wraps the same three phases, and is the form to prefer: a
+slice loop owns live SUNDIALS objects that nothing else frees, so leaving the
+block is what guarantees teardown.
+
+.. code-block:: python
+
+   runner.configure({..., "MaxContinuationSteps": 5})
+
+   with manta.SteadySolve(runner, estimate=False) as solve:
+       for outcome, stats in solve:
+           print(stats["residual_norm"], stats["pseudo_transient_step"])
+           if good_enough(runner.getSolution(0, points)):
+               solve.stop()
+
+Iterating yields ``(outcome, stats)`` and ends of its own accord when a slice
+returns anything but ``SteadyOutcome.OutOfSteps``. ``stop()`` ends the loop and
+still writes the result; ``abandon()``, and any exception out of the block, ends
+it and writes nothing. ``runner.configure(...)`` while a loop is live abandons it
+the same way.
+
+``OutOfSteps`` is *returned*, not raised — a budget, ``MaxContinuationSteps`` or
+``MaxRejectedSteps``, is spent and nothing is wrong. A genuine ``SolverFailed`` raises, having written the last state it
+reached, so a driver tells the two apart without reading a message.
+
+The state between slices is the state reached: each slice refreshes what
+``getSolution``, ``getDerivative`` and ``getPostprocessedSolution`` read. The
+underlying methods are ``start_steady``, ``continue_steady``, ``finish_steady``
+and ``abandon_steady`` for a driver that wants the loop written out.
+
+``estimate`` is a cost knob. Every finished solve estimates the objective and its
+remaining error (``objectiveEstimate()``), which costs a residual, a Jacobian
+build and a solve — charged *per slice*, so a driver reading the estimate only at
+the end should pass ``estimate=False`` and let the last slice produce the one
+that counts. Without ``solveAdjoint`` there is nothing to estimate and nothing to
+pay. ``EstimateObjectiveOnFinish = false`` turns it off for a whole run.
+
+Slicing is refused with ``DegreeAdaptation``: adapting the degree replaces the
+solver, and a slice loop holds the state of the one it started on.
+
+Through the JAX FFI
+'''''''''''''''''''
+
+``manta.jax.FFIRunner`` implements the same four names as FFI ops, so
+``manta.SteadySolve(ffi_runner)`` works unchanged. They keep their lowercase
+spelling rather than being disabled the way ``run`` and ``run_ss`` are, because
+that is what the context manager calls.
+
+``steadyStats()`` and ``objectiveEstimate()`` need no FFI op — they read
+host-side state and touch no device memory, so the inherited ``Runner`` methods
+serve.
+
+CPU only, like ``Run`` and ``Run_ss``. In eager code a slice returns a
+``SteadyOutcome``, which forces the sync a Python ``while`` needs. Under a trace
+— ``jit``, a ``custom_jvp`` — the solve has not run yet, so the outcome is the
+traced ``int32`` it will produce. ``SteadyOutcome`` is an ``enum.IntEnum``, so
+that scalar is tested against its members in the same way:
+
+.. code-block:: python
+
+   outcome = ffi_runner.start_steady()
+   jax.lax.cond(jnp.equal(outcome, manta.SteadyOutcome.Converged),
+                ffi_runner.finish_steady, ffi_runner.abandon_steady)
+
+A *loop* of slices cannot be traced, since how many there are depends on the
+outcomes; it belongs in eager code, or inside an ``io_callback``.
+
 What the solve did
 ~~~~~~~~~~~~~~~~~~
 
@@ -384,6 +941,71 @@ The same numbers are available programmatically from
 ``SystemSolver::lastSteadyStats()``, filled in whether or not they were printed
 and whether or not the solve converged.
 
+Per continuation step
+~~~~~~~~~~~~~~~~~~~~~
+
+``SteadyStateStepDiagnostics = true`` reports each ``KINSol`` invocation as it
+returns, one row per continuation step:
+
+.. code-block:: text
+
+   Steady solve: PseudoTransient on 6 cells at k = 3, tolerance 1e-10
+     initial ||F|| = 4.74756, dt = 0.05, SER rate 1, floor 2, max step inf
+     step          dt       ||F||  iters    res    jac  solves  outcome
+        0   5.000e-02   9.359e-01     13     15      2      13  accepted
+        1   2.536e-01   1.105e-01     11     13      2      11  accepted
+        2   2.148e+00   2.108e-03      7      9      1       7  accepted
+        3   1.126e+02   7.974e-07      3      5      1       3  accepted
+        4   2.977e+05   1.653e-13      1      3      1       1  accepted
+     converged: ||F|| = 1.6533e-13 after 5 continuation steps.
+
+That is the same solve the totals above describe — 35 Newton iterations, 46
+residual evaluations, 7 Jacobian builds, 35 solves — and the point of the table
+is what the totals cannot say: **the cost is all in the first two steps.** 24 of
+the 35 Newton iterations go on getting ``||F||`` from 4.7 to 0.11, and the last
+three steps together cost 5. A solve that took twenty cheap steps and one that
+took three expensive ones report similar totals and want opposite things done to
+them, and only the trace distinguishes the two.
+
+The two flags are **independent** and compose: either can be had on its own. A
+trace is the more specialised request, so it is not nested inside the summary.
+
+Reading the columns:
+
+* ``dt`` is the pseudo-time step the call was *damped with*, before SER updates it — so the row shows what was tried, not what will be tried next.
+* ``||F||`` is the **steady** residual after the call, which is not the norm ``KINSol`` converged. KINSOL sees the damped residual, and a small enough ``dt`` makes that small whatever the state; the merit function re-evaluates at ``dt = infinity``. That extra evaluation is why ``res`` exceeds KINSOL's own count by exactly one per step.
+* ``iters``, ``res``, ``jac``, ``solves`` are that step's Newton iterations, residual evaluations, Jacobian builds and Jacobian solves. They sum to the totals, with one documented offset: the merit function is evaluated once *before* the loop, so ``sum(res) + 1`` is the total. ``sum(jac)`` and ``sum(solves)`` are equalities — nothing builds or solves outside the loop.
+* ``outcome`` is ``accepted`` when the step reduced ``||F||``, ``rejected`` when it was rolled back and ``dt`` cut, and ``FAILED (n)`` for the ``KINSol`` return that ends the solve. A failing row is printed before the exception propagates, which is the case the trace is most useful in — and ``||F||`` is ``nan`` there, because no steady residual was evaluated after that call.
+
+``SystemSolver::lastSteadyStepStats()`` returns the same records as a vector, in
+order, **filled whether or not they were printed** — so a driver can have the
+trace without putting it through ``stdout``. It is cleared at the top of every
+``solveSteadyState``, so it describes one solve rather than the solver's history,
+which matters for ``PyRunner``: it runs many solves on one object.
+
+Over a whole run
+~~~~~~~~~~~~~~~~
+
+One run holds one steady solve, except under :ref:`degree adaptation
+<degree-adaptation>`, which builds a solver per level and solves at each. There
+the totals above are *per level*, and ``SteadyStateDiagnostics`` adds a run total
+after the last one:
+
+.. code-block:: text
+
+   Degree adaptation totals -- 4 levels, one steady solve each
+     continuation steps      : 15  (0 rejected)
+     KINSOL Newton iterations: 71
+     residual evaluations    : 105  (of which KINSOL: 86)
+     Jacobian builds         : 19  (KINSOL asked for 19)
+     Jacobian solves         : 71
+
+That is the number to compare against a fixed-degree run, since the whole bet of
+adapting the degree is that the coarse levels are cheap enough to be worth
+paying for. It is printed even at one level, where it duplicates that level's
+own block: a log whose shape depends on how many levels a run happened to take
+is one nothing can read mechanically.
+
 .. note::
 
    Before this was fixed, a ``PseudoTransient`` or ``Newton`` run wrote **only**
@@ -397,6 +1019,218 @@ and whether or not the solve converged.
 The inner solve for both modes is **KINSOL**, driving the same static
 condensation IDA does, so MaNTA links ``sundials_kinsol`` whichever mode a run
 selects — see :doc:`install` if the build stops at ``kinsol/kinsol.h``.
+
+Controlling the inner solve
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Four keys reach KINSOL. They apply to ``PseudoTransient`` and ``Newton`` alike —
+pseudo-transient continuation *is* Newton on a damped residual — and not at all
+to ``TimeMarch``, which never builds a KINSOL object.
+
+``NewtonJacobianReuse``
+   How many Newton iterations may share one Jacobian factorisation (KINSOL's
+   ``msbset``). ``1``, the default, is full Newton; larger is modified Newton. **This is the
+   setting the** ``jac`` **and** ``solves`` **columns above measure**, and the
+   section below is about why it is worth setting per case.
+
+``NewtonMaxIterations``
+   Newton iterations one ``KINSol`` call may take before handing back to the
+   continuation loop. The default is **20 against KINSOL's own 200**, deliberately:
+   an inner solve only has to make progress, because SER re-damps and tries again
+   from a better ``dt``. Raise it for ``SteadyStateSolver = "Newton"``, where
+   there is no outer loop to fall back on.
+
+``NewtonStepTolerance``
+   KINSOL's scaled-step test. A ``KINSol`` below it returns
+   ``KIN_STEP_LT_STPTOL`` — which the continuation loop treats as *ordinary* and
+   answers by damping, not as a failure. So raising it makes inner solves give up
+   sooner and ``dt`` be cut more eagerly: a continuation-schedule control wearing
+   a tolerance's clothing. Zero leaves KINSOL's ``uround^(2/3)`` ≈ 3.7e-11.
+
+``NewtonScaling``
+   ``Unit`` (default) or ``ErrorWeights``. KINSOL's convergence tests are on
+   *scaled* quantities, so unit scaling makes them dimensional: on a case carrying
+   densities near 1e19 beside temperatures near 1e3, one ``SteadyStateTolerance``
+   means something different for each variable and the largest dominates.
+   ``ErrorWeights`` fills the vectors from the same ``1/(rtol|y| + atol)`` weights
+   IDA's WRMS norm uses, refreshed every continuation step because they depend on
+   the state and the state moves a long way. One honest limitation: KINSOL takes
+   separate ``u_scale`` and ``f_scale`` and both get the same vector here, as they
+   already did when both were ones — the residual does not carry the solution's
+   units, so a properly derived ``f_scale`` would be a different vector.
+
+.. _jacobian-reuse-measurement:
+
+What Jacobian reuse actually trades
+"""""""""""""""""""""""""""""""""""
+
+The three costs are not comparable, and the ordering is what makes this worth a
+key rather than a constant:
+
+* **A Jacobian solve is always cheap.** It is a static condensation against a
+  factorisation that already exists.
+* **A Jacobian assembly is at least as expensive as a residual evaluation**, and
+  the ratio is set by *your physics case*, not by the solver. A case whose flux
+  is differentiable — hand-written derivatives, ``AutodiffTransportSystem``, JAX —
+  pays value-and-gradient against value, which is more but not by much. A case
+  whose Jacobian comes from finite-differencing expensive flux calls pays many
+  flux evaluations per assembly, and **assemblies then dominate the run**.
+
+So raising ``NewtonJacobianReuse`` trades assemblies away for extra Newton
+iterations, and each of those costs a residual evaluation plus a (cheap) solve.
+Which side wins is a property of how your flux model is differentiated. **That is
+the whole reason this is configurable**, and it is why there is no default that is
+right for every case.
+
+KINSOL's own default is 10. At the cheap-Jacobian end of the range that is
+conservative — measured on ``AdjointPoster``, an analytic flux, at k = 3, driving
+the residual to 1e-10:
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``NewtonJacobianReuse``
+     - 800 cells
+     - builds
+     - solves
+     - residual evals
+   * - 1 (full Newton)
+     - **3.39 s**
+     - 15
+     - 15
+     - 26
+   * - 2
+     - 3.64 s
+     - 10
+     - 17
+     - 28
+   * - 5
+     - 4.94 s
+     - 8
+     - 25
+     - 36
+   * - 10
+     - 6.21 s
+     - 7
+     - 32
+     - 43
+   * - 20
+     - 8.30 s
+     - 5
+     - 45
+     - 56
+
+Full Newton is 1.8× faster *there*, and the gap widens with the mesh — at 200
+cells it is 0.18 s against 0.21 s. ``AdjointPoster`` differentiates cheaply, so it
+sits at the end of the range where assemblies are nearly free.
+
+Measured on the three benchmarks under ``python-examples/``, in the units
+``PERFORMANCE.md`` uses — calls into the ``TransportSystem``, split into flux
+evaluations (residual cost) and derivative evaluations (assembly cost):
+
+.. list-table::
+   :header-rows: 1
+
+   * - case
+     - mode
+     - reuse
+     - flux calls
+     - derivative calls
+   * - Park
+     - ``TimeMarch``
+     - —
+     - 1504
+     - 400
+   * - Park
+     - ``PseudoTransient``
+     - 10 / 1
+     - 176
+     - 64
+   * - Park
+     - ``Newton``
+     - 10 / 1
+     - **128**
+     - **48**
+   * - Jardin
+     - ``TimeMarch``
+     - —
+     - 4256
+     - 1088
+   * - Jardin
+     - ``PseudoTransient``
+     - 10
+     - 2560
+     - 384
+   * - Jardin
+     - ``PseudoTransient``
+     - 1
+     - 544
+     - 320
+   * - Jardin
+     - ``Newton``
+     - 10
+     - 3264
+     - 480
+   * - Jardin
+     - ``Newton``
+     - 1
+     - **416**
+     - **256**
+   * - Shestakov
+     - ``TimeMarch``
+     - —
+     - 7808
+     - 1216
+   * - Shestakov
+     - ``PseudoTransient``
+     - 10
+     - *fails*
+     - *fails*
+   * - Shestakov
+     - ``PseudoTransient``
+     - 1
+     - 1920
+     - 704
+   * - Shestakov
+     - ``Newton``
+     - 10
+     - *fails*
+     - *fails*
+   * - Shestakov
+     - ``Newton``
+     - 1
+     - **1792**
+     - **640**
+
+Three things to take from it.
+
+**Park does not care, and that is the control.** Its ``chi`` is constant, so the
+flux is linear in the unknowns, every inner solve converges in one Newton
+iteration, and there is never a second iteration to reuse a Jacobian across. A
+setting that changed Park's numbers would be evidence of a bug, not of tuning.
+
+**On the two nonlinear cases, reuse is not a trade — it loses on both axes.**
+Jardin under ``Newton`` costs 416 flux and 256 derivative calls at reuse 1
+against 3264 and 480 at reuse 10. Fewer assemblies *per iteration* bought so many
+extra iterations that the total assembly count went up as well. The trade
+described above is real only while the Jacobian is stable enough that a stale one
+still points somewhere useful; on a strongly nonlinear problem it is not, and the
+extra iterations are pure loss.
+
+**At reuse 10, Shestakov does not converge at all**, in either steady mode,
+returning ``KIN_MXNEWT_5X_EXCEEDED``. A Jacobian ten iterations old gives a bad
+enough direction that the step clamp fires five times running. At reuse 1 both
+modes converge, and ``PseudoTransient`` beats ``TimeMarch`` four to one — which
+reverses the note in ``../shestakov-nonlinear/`` that continuation costs 2.5× what
+time marching does. That measurement was taken at reuse 10 and is a statement
+about ``msbset``, not about pseudo-transient continuation.
+
+So KINSOL's default of 10 suits neither of MaNTA's nonlinear benchmarks, and on
+one of them it is the difference between converging and not; MaNTA's default is
+therefore 1. The cost model above says the opposite case exists -- a physics case
+whose Jacobian is finite-differenced from expensive flux calls pays far more per
+assembly than these do, and would rather have the iterations -- and that is what
+raising it is for.
 
 .. _degree-adaptation:
 
@@ -451,8 +1285,13 @@ binds, the run says so::
 
    raising k from 2 to 5 (the rule asked for +7, capped at +3)
 
-Four things worth knowing:
+Five things worth knowing:
 
+* **Each level is a new evaluation plan** for the physics case, so the case has to
+  be able to follow one: it declares ``RegridPolicy::InPlace``, or the
+  configuration sets ``RebuildPhysicsOnRegrid = true`` to have a new instance
+  built for each level. Otherwise the run is refused before its first solve.
+  Every case in this tree declares ``InPlace``. See :ref:`evaluation-plans`.
 * **It implies** ``Superconvergent = true``. The whole estimate rests on
   :math:`u^*` being the better of the two approximations, which is only assured
   with the superconvergent scheme on. Setting ``Superconvergent = false``
@@ -520,8 +1359,13 @@ by the Newton tolerance, and two things read them:
   ``1.9e-6`` degrades to ``8.6e-4`` with this on — see the warning above, which
   this key makes worse rather than better.
 * **``phi`` is a physics quantity when ``nAux > 0``**, not merely an
-  intermediate. The ``AuxVarTest`` regression case drifts 1.0% against its
-  reference with this on, past its 0.84% tolerance.
+  intermediate, and ``q`` and ``sigma`` are what the flag drops from the error
+  test. On ``AuxVarTest`` those land 1.0e-6 from a converged solution with this
+  on against 4.1e-7 with it off — a factor of 2.5. (This bullet used to claim a
+  1.0% drift past a 0.84% tolerance. That was measured when the case ran at
+  ``rtol = atol = 1e-2``, where its own answer is 4.1% from converged, so the
+  drift was step-sequence noise; at the ``1e-6 / 1e-8`` the case now uses the
+  flag moves ``u`` by 3.5e-7 and passes the regression outright.)
 
 So it is the right key for a hard steady-state or transient solve whose output is
 ``u``, and the wrong one if you intend to restart from the result or care about
@@ -531,6 +1375,8 @@ the initial condition rather than on the formulation, which is worth knowing
 before reaching for this key. A start whose flux is badly scaled needs it; the
 same problem from a physically scaled start does not. That example's
 ``ANALYSIS.md`` measures both.
+
+.. _the-run-lifecycle:
 
 The three phases
 ----------------
@@ -554,6 +1400,14 @@ condition and integrating:
        (:math:`q`, :math:`\sigma`, the auxiliary variables, and :math:`u^\star`
        through :math:`q`); :math:`u` is differential, so ``IDACalcIC`` holds it
        fixed and it is the same either way.
+
+       **``IDACalcIC`` is not always run.** A steady solve skips it outright:
+       ``solveSteadyState`` drives the whole residual to zero from the guess, so
+       a correction made first is discarded by the first accepted continuation
+       step. A time-marching run skips it when the state it was handed is already
+       consistent — see :ref:`warm-starts`, which is the usual case for a
+       restart. Either way the :math:`t_0` slice is then the guess, which is the
+       state the run really started from.
    * - ``integrate(tFinal)``
      - The time loop, then the adjoint solve if requested, then the final netCDF
        and restart output.

@@ -28,17 +28,26 @@ from ._manta import (
     Aux as Aux,
     BoundaryCondition as BoundaryCondition,
     BoundaryKind as BoundaryKind,
+    EvaluationCadence as EvaluationCadence,
+    EvaluationEntry as EvaluationEntry,
+    EvaluationKind as EvaluationKind,
+    EvaluationPlan as EvaluationPlan,
+    EvaluationSite as EvaluationSite,
     Field as Field,
     Grid as Grid,
     Mixed as Mixed,
+    Regrid as Regrid,
     Runner as Runner,
     Scalar as Scalar,
+    SteadyOutcome as SteadyOutcome,
     State as State,
     StateField as StateField,
     SystemSpec as SystemSpec,
     TomlValue as TomlValue,
     getNodes as getNodes,
+    load_physics_plugin as load_physics_plugin,
     numbered_spec as numbered_spec,
+    physics_cases as physics_cases,
     registerPhysicsCase as registerPhysicsCase,
     run as run,
 )
@@ -48,6 +57,17 @@ Dirichlet: BoundaryKind
 Neumann: BoundaryKind
 
 __all__: list[str]
+
+
+class SteadySolve:
+    """A steady solve driven in slices; see manta.SteadySolve."""
+
+    def __init__(self, runner: Runner, estimate: bool = ...) -> None: ...
+    def __enter__(self) -> SteadySolve: ...
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool: ...
+    def __iter__(self) -> Any: ...
+    def stop(self) -> None: ...
+    def abandon(self) -> None: ...
 
 class TransportSystem(_TransportSystem):
     """Base class for a physics case.
@@ -60,6 +80,7 @@ class TransportSystem(_TransportSystem):
     variables: Sequence[Field]
     scalars: Sequence[Scalar]
     aux: Sequence[Aux]
+    regrid: Regrid
 
     def __init__(
         self,
@@ -102,6 +123,21 @@ class TransportSystem(_TransportSystem):
     def dSources_du(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dq(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dsigma(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # d(Sources)/d(state.udot), asked for only of a variable whose Field sets
+    # source_reads_time_derivatives. Optional in the same sense as the five
+    # above -- an absent hook is a zero block -- but with a sharper consequence:
+    # a source that reads udot and does not report this is a wrong Jacobian, not
+    # an absent coupling, and the solver says so at startup rather than leaving
+    # it to the iteration counts.
+    def dSources_dudot(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # Derivatives with respect to a field model's geometry slots (state.geom).
+    # Optional, like the five above: an absent hook is an identically zero
+    # coupling block, which is the correct answer for a case that does not
+    # read geometry at all.
+    def dSigmaFn_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+    def dSources_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def aFn(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def LowerBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def UpperBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
@@ -115,6 +151,7 @@ class TransportSystem(_TransportSystem):
     def AuxGPrime(self, i: int, out: State, state: State, x: float, t: float) -> None: ...  # type: ignore[override]
     def dSources_dPhi(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSigma_dPhi(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+    def dAuxG_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
 
     # Global scalars. These take the solution sampled on the element nodes, as
     # dicts of (nPoints, nVars) arrays, plus the quadrature data.
@@ -123,3 +160,8 @@ class TransportSystem(_TransportSystem):
     def ScalarG(self, s: int, states: Any, states_dot: Any, abscissae: Any, weights: Any, phi_boundary: Any, t: float) -> float: ...  # type: ignore[override]
     def ScalarGPrime(self, states: Any, states_dot: Any, abscissae: Any, weights: Any, phi_boundary: Any, t: float) -> tuple[list[Any], list[Any]]: ...
     def dSources_dScalars(self, s: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # Where the solver will evaluate the case, before the first physics call of
+    # a run whose plan is new to this instance. Optional. It matches the bound
+    # base exactly, so it carries no ignore.
+    def prepareEvaluation(self, plan: EvaluationPlan) -> None: ...

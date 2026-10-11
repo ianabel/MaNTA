@@ -5,35 +5,68 @@ Lists upcoming features that are in development or being thought about
 
   **Partly done, and not in the shape this entry expected.** `DegreeAdaptation`
   adapts the global *polynomial degree* between steady solves — see
-  `docs/running.rst`. It went first because it is where the measured win is:
-  raising `k` beat adaptive `h` by seven orders on every benchmark in this tree,
-  and h-adaptivity did not pay on any of them once the cost of the extra solves
-  was counted. It covers both steady modes at once, since `SteadyMode::Newton`
-  is the same code with `ptcStep = infinity`.
+  `docs/running.rst`. It went first because that is where the win looked to be,
+  and it covers both steady modes at once, since `SteadyMode::Newton` is the same
+  code with `ptcStep = infinity`.
 
-  Still open, in the order they look worth doing: *h*-adaptivity (needs a
-  transfer between meshes, which is not the same problem as between degrees —
-  the projections stop composing); per-cell degrees (a much larger change, ~320
-  `(k+1)` sites in the core); and TimeMarch, which is still blocked on exactly
-  what this entry says.
+  **The reason it went first has since been half retracted**, and the retraction
+  is the more useful finding. "Raising `k` beat adaptive `h` by seven orders on
+  every benchmark, and h-adaptivity did not pay on any of them" holds only for the
+  *indicator-driven equidistribution loop* that was tried, and only on the smooth
+  problems. A mesh **graded geometrically towards a singularity**, at an unchanged
+  cell count and unchanged DOF, is worth **14900×** on Shestakov — and the reason
+  the earlier loop found 1.5× is that the accuracy indicator cannot see that
+  error, which `MESH-REFINEMENT.md` §3 had already measured without drawing the
+  conclusion. Grading is now a configuration option (`GradedGridBoundary`).
 
-- Scope out coupling to a magnetic field solver. From an algorithmic point of view, a self-consistent magnetic field is just a large set of algebraic constraints, which IDA / KINSOL already handle. However, because this can be a large degree of freedom system (N_{magnetics} >> N_{HDG}) we should take care about the Jacobian solve. 
-Assume that the coupled magnetic field solve is a differentiable solver, and so will provide both a nonlinear solution B to
+  What the measurements settled, all in `MESH-REFINEMENT.md` §8–§10:
 
-B^{GS}({MaNTA State}, B) 
+  * the error on a graded mesh is `0.0487 h0` in the width of the cell touching
+    the singularity and in *nothing else* — not the cell count — so the useful
+    move is redistribution at a fixed budget rather than refinement;
+  * the modal decay rate decides whether to grade and at which end, reliably from
+    `k >= 3`, and at `k = 2` the decision is *inverted* rather than merely noisy;
+  * so the order of an hp scheme is forced: **p, then h, then p**;
+  * per-cell degrees are **gated no** — 217 `(k+1)` sites for a few percent of DOF,
+    because the smooth region's degrees were measured to buy nothing.
 
-as well as 
+  Still open: the driver that runs that sequence; and TimeMarch, which is blocked
+  on exactly what this entry says.
 
-dB^{GS}/d {MaNTA State}
+- ~~Scope out coupling to a magnetic field solver.~~ **Done, in 1-D.** The
+coupling described here is implemented: a `FieldModel` supplies `nFieldDOF`
+unknowns `psi` and their residual rows, MaNTA appends them to the solution
+vector after the global scalars, and the geometry the model derives from them
+reaches the transport physics through `State::geom`. The Jacobian really does
+have the block form this entry predicted,
 
-and the internal jacobian that is used to solve for B. From this we can construct the full Jacobian
+    ( HDG Jacobian | A1 )
+    ( A2           | B  )
 
-( HDG Jacobian | A1              )
-( A2           | B^{GS} Jacobian )
+with A1 assembled by the chain rule through the physics case's three
+`d*_dGeometry` hooks and the model's `dGeometry_dpsi`. Both routes this entry
+proposed are there and are selected by `FieldSolve`: the exact block elimination
+(a Schur complement onto `psi`, `nField + 1` transport solves per Jacobian
+solve) and the iterate-assuming-weak-coupling one (block Gauss-Seidel with
+Irons-Tuck acceleration, one transport solve per sweep). The guess that the
+exact route "would almost certainly be expensive" turned out to be the wrong way
+round for every problem in the tree so far: the break-even is
+`#sweeps < nField + 1`, and nothing here is on the winning side of it. The
+iterative path is a bet on `N_magnetics >> N_HDG`, which is the regime this
+entry was written for and which nothing yet exercises. See
+`docs/field_coupling.rst`.
 
-where A1 & A2 are the couplings. We already have a fast/robust static condensation solver for the HDG Jacobian. We could use the Woodbury formula to get an exact solution to 
+  What remains, and is not in scope of that work:
 
-J_{full} x = y
-
-but this would almost certainly be expensive.
-One approach is to assume that the coupling is weak, and iterate. This is probably a good first pass.
+  * **A field model with real physics in it.** Nothing is registered in the tree
+    — the two that exist are unregistered test fixtures — so `FieldModel` has
+    nothing to name in the shipped binary. A 2-D Grad-Shafranov solve is the
+    obvious first one; a DESC stellarator equilibrium is the other. Both plug in
+    by overriding `updateFieldJacobian`, `applyB`/`applyBTranspose` and
+    `solveB`/`solveBTranspose` so MaNTA never forms the model's Jacobian.
+  * **`nScalars > 0` alongside a field model**, refused today for a reason
+    recorded at `setFieldModel`.
+  * **A Python or JAX field model.** `FieldModel` has no pybind11 class.
+  * Two structural gaps in the coupled adjoint — an objective that reads
+    geometry, and a field residual that depends on an adjoint parameter — both
+    in `TODO`.

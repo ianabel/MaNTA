@@ -43,13 +43,17 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 	// E and I are differential -- G_0 and G_2 depend explicitly on dE/dt and
 	// dI/dt -- while J is algebraic. This was isScalarDifferential(s).
 	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
 					   .scalars = {{"E", "mass error, M0 - M", "", true},
 								   {"J", "source strength from the PID controller", "", false},
-								   {"I", "integral of the error", "", true}}})
+								   {"I", "integral of the error", "", true}},
+					   .regrid = RegridPolicy::InPlace})
 {
 	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
@@ -70,7 +74,7 @@ ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
 
 	M0 = 2 * u0 + 4 * beta / std::numbers::pi;
 	// Was an unconditional std::cerr, which printed once per construction --
-	// eight times in a `make test` run, and once per regression case. INFO is
+	// eight times in a unit-test run, and once per regression case. INFO is
 	// compiled out of a release build and still available with VERBOSE.
 	logmsg<LOG_LEVEL::INFO>("ScalarTestLD3 target mass M0 = {}", M0);
 }

@@ -1,0 +1,21 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@/manta
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: manta
+Description: @PROJECT_DESCRIPTION@
+Version: @PROJECT_VERSION@
+# Both include paths: -I${prefix}/include so a case can write the namespaced
+# <manta/PhysicsCases.hpp>, and -I${includedir} so the headers' own quoted
+# includes of each other resolve when included from elsewhere.
+#
+# The ABI flags below are what a plugin MUST be compiled with, not merely may be.
+# Eigen aligns its fixed-size types to the widest vector unit the compiler knows
+# about and inlines its expression templates into both sides of the boundary, so
+# a plugin built without the core's -march= faults inside an aligned AVX-512 load
+# the first time the solver touches its state. -DEIGEN_USE_BLAS travels for the
+# same reason. The architecture is recorded concretely rather than as `native`,
+# so a plugin compiled on a different machine is a compile error here instead of
+# a run-time crash there.
+Cflags: -I${prefix}/@CMAKE_INSTALL_INCLUDEDIR@ -I${includedir} -std=@MANTA_PC_STD@ -DEIGEN_USE_BLAS @MANTA_PC_MARCH@
+Libs: -L${libdir} -lmanta

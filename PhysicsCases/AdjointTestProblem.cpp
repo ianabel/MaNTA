@@ -3,8 +3,12 @@
 
 REGISTER_PHYSICS_IMPL(AdjointTestProblem);
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
 AdjointTestProblem::AdjointTestProblem(toml::value const &config, Grid const &grid)
-    : AutodiffTransportSystem(config, grid, {.variables = {{"u", "the diffused quantity", ""}}})
+    : AutodiffTransportSystem(config, grid, {.variables = {{"u", "the diffused quantity", ""}},
+                                             .regrid = RegridPolicy::InPlace})
 {
     if (config.count("AdjointTestProblem") != 1)
     {

@@ -1,10 +1,8 @@
 import pytest
-import sys
 from netCDF4 import Dataset
 import numpy as np
-from util import get_transport_system_as_module
+from util import data_path, get_transport_system_as_module
 
-sys.path.append("../")
 import manta as MaNTA
 
 
@@ -116,9 +114,13 @@ def compare_ref_soln_l2(filename, ref_filename, tolerance):
 
 
 def compare_solution(transport_system):
-    fname = get_transport_system_as_module(transport_system + ".conf")
+    # Output is named after the config's stem and lands in the cwd; the config
+    # and the reference are read from beside this file.
+    fname = get_transport_system_as_module(data_path(transport_system + ".conf"))
     MaNTA.run(fname)
-    compare_ref_soln_l2(transport_system + ".nc", transport_system + ".ref.nc", 1.0e-2)
+    compare_ref_soln_l2(
+        transport_system + ".nc", data_path(transport_system + ".ref.nc"), 1.0e-2
+    )
 
 
 def test_jax_linear_diffusion():

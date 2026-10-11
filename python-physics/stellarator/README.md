@@ -20,7 +20,7 @@ Three specific things to expect:
   It was left as found rather than repaired on a guess, since nothing here can
   check the repair.
 * `stellarator.py` and `stellarator2.py` need an `XLA_FFI` build
-  (`make python XLA_FFI=on`), because they use `manta.jax.FFIRunner` to put the
+  (`cmake -B build -DMANTA_XLA_FFI=ON`), because they use `manta.jax.FFIRunner` to put the
   solver inside a JAX computation.
 * There are two generations of the whole stack — `stellarator.py` /
   `objective.py` / `yancc_wrapper.py` and their `2` counterparts.
@@ -39,7 +39,7 @@ Three specific things to expect:
 | `objective.py`, `objective2.py` | The optimisation objective, as a DESC objective |
 | `desc_optimize.py` | The driver: build an equilibrium, optimise it against the objective |
 | `desc_optimize-vp.ipynb` | The same, interactively, with plots |
-| `desc_optimize_bfgs.py` | Optimise with BFGS rather than DESC's default, with the dG/dt gate armed |
+| `desc_optimize_bfgs.py` | Optimise with BFGS rather than DESC's default |
 | `scan_eq.py` | Scan an equilibrium parameter, solving transport at each point |
 | `scan_eq_ambipolar.py` | The same scan for the multi-channel ambipolar case |
 | `stellarator_example.py` | One multi-channel solve, no scan — the smallest example of that case |
@@ -66,7 +66,7 @@ from the imports:
 |---|---|
 | `yancc_gpu_test.py` | Closest. Uses `manta.jax.State` and `yancc_wrapper2` only — no transport case, so nothing below applies to it |
 | `scan_eq.py` | Against `stellarator2.py`. Needed `use_chunking`, which that file reads and the branch had no notion of; added as `False`, which is what it ran with |
-| `desc_optimize_bfgs.py` | As above, and its `"optimizeMode": True` became `"ObjectiveDecreaseTolerance": 0.05` — see the comment at that line |
+| `desc_optimize_bfgs.py` | As above. Its `"optimizeMode": True` has no MaNTA equivalent — see below |
 | `scan_eq_ambipolar.py`, `stellarator_example.py` | Against `stellarator_multichannel.py`, which is what their `st_config` describes. `scan_eq_ambipolar.py` has one loose end — see below |
 | `stellarator_state.py` | `stellarator_multichannel.py`'s state accessors and parameters |
 
@@ -135,7 +135,7 @@ config it asks for describes physics (a split particle and heat source, three
 evolved channels) that `stellarator2.py` does not have, so translating the key
 names would produce something that runs and does not mean what it says.
 
-`optimizeMode` was translated rather than left, because unlike the above it is a
-plain rename: main has the same dG/dt early-exit gate, keyed
-`ObjectiveDecreaseTolerance` and with the branch's hardcoded `stoptol = 0.05`
-exposed as the value.
+`optimizeMode` has no translation, because MaNTA has no early-exit gate. A sweep
+pays for every steady solve it asks for. `TODO` records what a sound early exit
+would need — a bound on the objective *between steady states*, not a derivative at
+the initial condition.

@@ -5,6 +5,7 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "Types.hpp"
 #include <toml.hpp>
@@ -27,6 +28,17 @@ struct PhysicsCases {
 		// exists -- so a case whose name collided with an existing one was
 		// simply never instantiated, with nothing said at build or run time.
 		static void RegisterPhysicsCase( std::string const& s, function_type creator );
+
+		// Every name InstantiateProblem will accept, ascending.
+		//
+		// The map is populated by static-initialisation side effects, so this is
+		// the only way to find out what a given binary actually carries -- and
+		// the answer differs between MaNTA, libmanta.so, the unit tests and the
+		// Python extension, since each links its own set of object files and a
+		// config may dlopen more on top. InstantiateProblem's failure message
+		// already reports this list; manta.physics_cases() reports it before the
+		// caller has to get a name wrong to see it.
+		static std::vector<std::string> RegisteredNames();
 
 	protected:
 		static map_type* getMap();

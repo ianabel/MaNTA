@@ -73,8 +73,8 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
         for (Eigen::Index j = 0; j < k + 1; j++)
         {
           ref(ii, j) +=
-            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
-            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+            system->tauc * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tauc * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
         }
       }
       BOOST_TEST((system->D_cellwise[i] - ref).norm() < 1e-9);
@@ -98,8 +98,8 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
       ref.setZero();
       for(Eigen::Index j = 0; j < k + 1; j++)
       {
-        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tau(I.x_l));
-        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tau(I.x_u));
+        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tauc);
+        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tauc);
         if (i==0) {
           ref(j,0) = 0;
         }
@@ -184,11 +184,11 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
         for (Eigen::Index j = 0; j < k + 1; j++)
         {
           ref(ii, j) +=
-            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
-            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+            system->tauc * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tauc * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
           ref(ii + 2, j + 2 ) +=
-            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
-            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+            system->tauc * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tauc * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
         }
       }
       BOOST_TEST((system->D_cellwise[i] - ref).norm() < 1e-9);
@@ -213,8 +213,8 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
       ref.setZero();
       for(Eigen::Index j = 0; j < k + 1; j++)
       {
-        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tau(I.x_l));
-        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tau(I.x_u));
+        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tauc);
+        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tauc);
         if (i==0) {
           ref(j,0) = 0;
         }

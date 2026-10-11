@@ -1,4 +1,6 @@
+#include <dlfcn.h> // physics plugins loaded by load_physics_plugin
 #include <pybind11/functional.h>
+#include <pybind11/native_enum.h>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -12,6 +14,9 @@
 #include "PyIntegrator.hpp"
 #include "PyRunner.hpp"
 #include "PyState.hpp"
+// cast_toml lives here now, alongside the Python -> toml direction PyRunner
+// needs. TODO: check whether pytoml could replace both.
+#include "PyToml.hpp"
 #include "PyTransportSystem.hpp"
 #include "State.hpp"
 #include "TransportSystem.hpp"
@@ -51,6 +56,26 @@ public:
     value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
     value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
     value.Aux() = py::cast<Matrix>(d["Aux"]).transpose();
+    // Geometry is optional on the way in: every physics case and test fixture
+    // that predates field models builds a dict with no "Geometry" key, and
+    // GlobalState defaults to zero geometry slots, so a missing key means the
+    // same thing an explicitly empty one would. Still size it to (0, nPoints)
+    // rather than leave it at PYBIND11_TYPE_CASTER's default-constructed 0x0:
+    // operator[] slices every field's column i unconditionally, and a matrix
+    // with zero *columns* fails that where zero *rows* would not.
+    if (d.contains("Geometry"))
+      value.GeometryMatrix() = py::cast<Matrix>(d["Geometry"]).transpose();
+    else
+      value.GeometryMatrix().setZero(0, value.Variable().cols());
+
+    // VariableDot is optional on the way in, and left *empty* when absent
+    // rather than sized like Geometry above. Empty is the state that means "no
+    // variable declares sourceReadsTimeDerivatives": GlobalState guards every
+    // read of it with hasVariableDot(), where the geometry rows are sliced
+    // unconditionally. A dict carrying no such key therefore says the same
+    // thing the solver says when it builds one itself.
+    if (d.contains("VariableDot"))
+      value.setVariableDot(py::cast<Matrix>(d["VariableDot"]).transpose());
 
     auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
     py::buffer_info info = scalars.request();
@@ -73,6 +98,11 @@ public:
     d["Derivative"] = src.Derivative().transpose();
     d["Flux"] = src.Flux().transpose();
     d["Aux"] = src.Aux().transpose();
+    d["Geometry"] = src.GeometryMatrix().transpose();
+    // (nPoints, nVars) when some variable declares sourceReadsTimeDerivatives,
+    // and an empty array when none does -- which is what a case should test if
+    // it wants to know, rather than assuming the run it is in.
+    d["VariableDot"] = src.VariableDot().transpose();
     d["Scalars"] = src.Scalars();
     return d.release();
   }
@@ -80,39 +110,41 @@ public:
 } // namespace detail
 }; // namespace pybind11
 
-// TODO: Check if we can just use pytoml instead and
-// remove this extra cast
-py::object cast_toml(toml::value v) {
-  if (v.is_boolean())
-    return py::bool_(v.as_boolean());
-  else if (v.is_integer())
-    return py::int_(v.as_integer());
-  else if (v.is_floating())
-    return py::float_(v.as_floating());
-  else if (v.is_string())
-    return py::str(v.as_string());
-  else if (v.is_array()) {
-    py::list lst;
-    for (const auto &elem : v.as_array()) {
-      lst.append(cast_toml(elem));
-    }
-    return lst;
-  } else if (v.is_table()) {
-    py::dict d;
-    for (const auto &[key, val] : v.as_table()) {
-      d[py::str(key)] = cast_toml(val);
-    }
-    return d;
-  } else {
-    return py::none();
-  }
-}
-
 // Defines the MaNTA module and what can be called
 // The extension is private to the `manta` package: python/manta/__init__.py
 // re-exports it and adds the parts that are more naturally written in Python
 // (the declarative class-attribute spec, chiefly). Users import `manta`.
-PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
+//
+// **No py::mod_gil_not_used(), deliberately, and please do not add it back
+// without doing the audit it stands for.** That tag asserts this module is safe
+// to run without the GIL. It was here, asserted rather than established, and the
+// assertion was false in at least two places:
+//
+//   * Basis.hpp's three `singletons` maps -- LegendreBasis, ChebyshevBasis and
+//     NodalBasis each cache their flyweight in a static std::map that getBasis(k)
+//     mutates on first touch. Concurrent insert, or a read racing one, is UB.
+//   * PhysicsCases::map, a lazily allocated static registry. Static-init
+//     population is single-threaded and fine; registerPhysicsCase is *bound to
+//     Python* (below), so it is also mutated at runtime.
+//
+// Neither can race today, and that is the point: PyRunner never releases the
+// GIL -- there is no gil_scoped_release or call_guard anywhere in this module --
+// so a Python thread calling run() holds it for the whole solve and the GIL is
+// silently doing all the synchronisation. Declaring the tag removes exactly that
+// and leaves the statics above unguarded.
+//
+// Without the tag, importing this on a free-threaded interpreter makes CPython
+// re-enable the GIL and say so. That is the conservative outcome and it
+// announces itself, where a false declaration does neither. The tag costs
+// nothing on an ordinary build either way -- measured, it is inert there.
+//
+// To make it true: mutexes on those two (about half a day), then a free-threaded
+// interpreter, its own ABI-tagged build and a CI leg to test against, plus a
+// stated contract for what a user's Python physics case must guarantee once the
+// trampolines' gil_scoped_acquire no longer serialises it. Worth doing when
+// something actually calls in from several threads -- the XLA FFI path is the
+// candidate -- and not before.
+PYBIND11_MODULE(_manta, m) {
   m.doc() =
       "Compiled core of the MaNTA Python package; import `manta` instead.";
 
@@ -187,18 +219,29 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
   py::class_<FieldSpec>(m, "Field")
       .def(py::init([](std::string name, std::string description,
                        std::string units, BoundaryCondition lower,
-                       BoundaryCondition upper) {
-             return FieldSpec{std::move(name), std::move(description),
-                              std::move(units), lower, upper};
+                       BoundaryCondition upper,
+                       bool source_reads_time_derivatives) {
+             return FieldSpec{std::move(name),
+                              std::move(description),
+                              std::move(units),
+                              lower,
+                              upper,
+                              source_reads_time_derivatives};
            }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "",
            py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
-           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet))
+           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet),
+           py::arg("source_reads_time_derivatives") = false)
       .def_readwrite("name", &FieldSpec::name)
       .def_readwrite("description", &FieldSpec::description)
       .def_readwrite("units", &FieldSpec::units)
       .def_readwrite("lower", &FieldSpec::lower)
-      .def_readwrite("upper", &FieldSpec::upper);
+      .def_readwrite("upper", &FieldSpec::upper)
+      .def_readwrite("source_reads_time_derivatives",
+                     &FieldSpec::sourceReadsTimeDerivatives,
+                     "Set when this variable's Sources reads state.udot. It is "
+                     "what makes udot be filled and dSources_dudot be asked "
+                     "for.");
 
   py::class_<ScalarSpec>(m, "Scalar")
       .def(py::init([](std::string name, std::string description,
@@ -244,19 +287,134 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       "A SystemSpec using the historical placeholder names (Var0, Scalar0, "
       "AuxVariable0).");
 
+  // Whether a case follows a changed evaluation plan: SystemSpec.hpp. Named
+  // Regrid, the way a case writes it -- `regrid = manta.Regrid.InPlace`.
+  py::enum_<RegridPolicy>(m, "Regrid")
+      .value("Fixed", RegridPolicy::Fixed)
+      .value("InPlace", RegridPolicy::InPlace);
+
   py::class_<SystemSpec>(m, "SystemSpec")
       .def(py::init([](std::vector<FieldSpec> variables,
                        std::vector<ScalarSpec> scalars,
-                       std::vector<AuxSpec> aux) {
+                       std::vector<AuxSpec> aux, RegridPolicy regrid) {
              return SystemSpec{std::move(variables), std::move(scalars),
-                               std::move(aux)};
+                               std::move(aux), regrid};
            }),
            py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
-           py::arg("aux") = std::vector<AuxSpec>{})
+           py::arg("aux") = std::vector<AuxSpec>{},
+           py::arg("regrid") = RegridPolicy::Fixed)
       .def_readwrite("variables", &SystemSpec::variables)
       .def_readwrite("scalars", &SystemSpec::scalars)
       .def_readwrite("aux", &SystemSpec::aux)
+      .def_readwrite("regrid", &SystemSpec::regrid,
+                     "InPlace when the case follows a changed evaluation plan -- a "
+                     "new mesh or degree -- through prepareEvaluation. Fixed, the "
+                     "default, lets it be evaluated by its first plan only.")
       .def("validate", &SystemSpec::validate);
+
+  // Before TransportSystem, and in this order, because prepareEvaluation()
+  // names these types: pybind11 renders a signature from the types registered
+  // at the point the method is bound, so binding them later would leave C++
+  // names in the generated stub.
+  py::class_<Grid>(m, "Grid")
+      .def(py::init<>(), py::return_value_policy::reference)
+      .def(py::init<Grid::Position, Grid::Position, Grid::Index>(),
+           py::return_value_policy::reference)
+      // Explicit boundaries, which is how a Python caller reaches a non-uniform
+      // mesh now that the `highGridBoundary` flag on the constructor above is
+      // gone. Configure a Runner with GridPoints for the same thing from a dict.
+      .def(py::init<std::vector<Grid::Position> const &>(),
+           py::return_value_policy::reference)
+      .def("getNCells", &Grid::getNCells)
+      .def("lowerBoundary", &Grid::lowerBoundary)
+      .def("upperBoundary", &Grid::upperBoundary)
+      // The nCells + 1 cell boundaries, for a case rebuilding anything cell by
+      // cell from a plan's grid.
+      .def("cellBoundaries", [](Grid const &g) {
+        std::vector<Position> out;
+        out.reserve(g.getNCells() + 1);
+        for (Grid::Index i = 0; i < g.getNCells(); ++i)
+          out.push_back(g[i].x_l);
+        out.push_back(g.upperBoundary());
+        return py::array_t<double>(static_cast<py::ssize_t>(out.size()), out.data());
+      });
+
+  // The evaluation plan: EvaluationPlan.hpp. Everything is read-only -- a plan
+  // is the solver's statement about itself, and a case that edits its copy
+  // changes nothing -- and every point set crosses as a fresh numpy array.
+  py::enum_<EvaluationKind>(m, "EvaluationKind")
+      .value("Residual", EvaluationKind::Residual)
+      .value("Jacobian", EvaluationKind::Jacobian)
+      .value("InitialCondition", EvaluationKind::InitialCondition)
+      .value("TauFaces", EvaluationKind::TauFaces)
+      .value("TauNodes", EvaluationKind::TauNodes)
+      .value("ScalarConstraint", EvaluationKind::ScalarConstraint)
+      .value("ScalarJacobian", EvaluationKind::ScalarJacobian)
+      .value("ScalarCoupling", EvaluationKind::ScalarCoupling)
+      .value("FieldCoupling", EvaluationKind::FieldCoupling)
+      .value("Adjoint", EvaluationKind::Adjoint)
+      .value("InitialProjection", EvaluationKind::InitialProjection)
+      .value("MassMatrix", EvaluationKind::MassMatrix);
+
+  py::enum_<EvaluationEntry>(m, "EvaluationEntry")
+      .value("ComputePhysics", EvaluationEntry::ComputePhysics)
+      .value("ComputePhysicsDerivatives", EvaluationEntry::ComputePhysicsDerivatives)
+      .value("ComputeSourceTimeDerivatives",
+             EvaluationEntry::ComputeSourceTimeDerivatives)
+      .value("ScalarG", EvaluationEntry::ScalarG)
+      .value("ScalarGPrime", EvaluationEntry::ScalarGPrime)
+      .value("InitialScalarDerivative", EvaluationEntry::InitialScalarDerivative)
+      .value("Pointwise", EvaluationEntry::Pointwise);
+
+  py::enum_<EvaluationCadence>(m, "EvaluationCadence")
+      .value("PerResidual", EvaluationCadence::PerResidual)
+      .value("PerJacobianBuild", EvaluationCadence::PerJacobianBuild)
+      .value("PerContinuationStep", EvaluationCadence::PerContinuationStep)
+      .value("PerAdjointSolve", EvaluationCadence::PerAdjointSolve)
+      .value("OncePerRun", EvaluationCadence::OncePerRun)
+      .value("OncePerSolver", EvaluationCadence::OncePerSolver);
+
+  auto positions = [](std::vector<Position> const &x) {
+    return py::array_t<double>(static_cast<py::ssize_t>(x.size()), x.data());
+  };
+
+  py::class_<EvaluationSite>(m, "EvaluationSite")
+      .def_readonly("kind", &EvaluationSite::kind)
+      .def_readonly("entry", &EvaluationSite::entry)
+      .def_readonly("cadence", &EvaluationSite::cadence)
+      .def_readonly("calls", &EvaluationSite::calls)
+      .def_readonly("pointsPerCell", &EvaluationSite::pointsPerCell)
+      .def_property_readonly(
+          "points",
+          [positions](EvaluationSite const &s) { return positions(s.points); })
+      .def("batchSize", &EvaluationSite::batchSize)
+      .def("isBatched", &EvaluationSite::isBatched)
+      .def("__repr__", [](EvaluationSite const &s) {
+        return std::string("EvaluationSite(") + toString(s.kind) + ", " +
+               std::to_string(s.batchSize()) + " points, " +
+               std::to_string(s.calls) + " call(s))";
+      });
+
+  py::class_<EvaluationPlan>(m, "EvaluationPlan")
+      .def_readonly("grid", &EvaluationPlan::grid)
+      .def_readonly("k", &EvaluationPlan::k)
+      .def_readonly("superconvergent", &EvaluationPlan::superconvergent)
+      .def_readonly("steady", &EvaluationPlan::steady)
+      .def_readonly("sites", &EvaluationPlan::sites)
+      .def("has", &EvaluationPlan::has, py::arg("kind"))
+      .def("sitesOf", &EvaluationPlan::sitesOf, py::arg("kind"))
+      .def(
+          "points",
+          [positions](EvaluationPlan const &p, EvaluationKind kind) {
+            return positions(p.points(kind));
+          },
+          py::arg("kind"))
+      .def("batchSizes", &EvaluationPlan::batchSizes, py::arg("entry"))
+      .def("announces", &EvaluationPlan::announces, py::arg("entry"),
+           py::arg("points"),
+           "Whether a call through `entry` at `points` is one this plan "
+           "announced. A case may assert it in its own hooks: an unannounced "
+           "call is a solver bug.");
 
   // List all interfaces of the main TransportSystem class which is what has to
   // be derived from in python
@@ -304,6 +462,20 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_du", &TransportSystem::dSources_du)
       .def("dSources_dq", &TransportSystem::dSources_dq)
       .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+      // d(Sources)/d(state.udot), asked for only of a variable whose spec sets
+      // sourceReadsTimeDerivatives. Bound like the four above so the family is
+      // uniform: it is what puts the method in the generated stub, and so what
+      // makes a case's own override something mypy checks against a base rather
+      // than a new name it has never seen.
+      .def("dSources_dudot", &TransportSystem::dSources_dudot)
+      // Derivatives with respect to a field model's geometry slots. Optional,
+      // like the five above: absent means an identically zero column of the A1
+      // coupling block, which is exactly right for a case that does not read
+      // geometry. They are live -- Matrices.cpp's fieldChainOnNodes calls all
+      // three, once per node, whenever a field model is attached.
+      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
+      .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
+      .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -338,6 +510,22 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def("dSources_dScalars", &TransportSystem::dSources_dScalars)
       .def("createAdjointProblem", &TransportSystem::createAdjointProblem)
       .def("isScalarDifferential", &TransportSystem::isScalarDifferential)
+      // Where and how often the solver will evaluate the case, delivered
+      // before the first physics call of a run whose plan is new to this
+      // instance. Optional: the base does nothing, and a case that does not
+      // define it pays one override lookup per new plan.
+      .def("prepareEvaluation", &TransportSystem::prepareEvaluation,
+           py::arg("plan"))
+      .def("regridPolicy", &TransportSystem::regridPolicy)
+      // A copy of the plan prepareEvaluation was last handed, or None before
+      // any run has initialised with this case.
+      .def_property_readonly(
+          "evaluationPlan",
+          [](TransportSystem const &s) -> std::optional<EvaluationPlan> {
+            if (auto const *plan = s.evaluationPlan())
+              return *plan;
+            return std::nullopt;
+          })
       .def_property_readonly("spec", &TransportSystem::spec)
       // Read-only now: these are derived from the spec. Assigning self.nVars
       // in a subclass __init__ is the pattern this replaces, and leaving it
@@ -374,13 +562,6 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
       .def_readwrite("ng", &PyAdjointProblem::ng)
       .def_readwrite("spatialParameters", &PyAdjointProblem::spatialParameters);
 
-  py::class_<Grid>(m, "Grid")
-      .def(py::init<>(), py::return_value_policy::reference)
-      .def(py::init<Grid::Position, Grid::Position, Grid::Index, bool, double,
-                    double>(),
-           py::return_value_policy::reference)
-      .def("getNCells", &Grid::getNCells);
-
   py::class_<toml::value>(m, "TomlValue")
       .def(py::init<>())
       .def("__getitem__", [](const toml::value &v, const std::string &key) {
@@ -412,21 +593,132 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
         py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
         "Register a physics case under the name a config file can ask for.");
 
+  // Test support only -- not part of the public API. manta/__init__.py does
+  // not re-export this, so it is reachable only as
+  // manta._manta._test_dSigmaFn_dGeometry, the same way python/Tests already
+  // reaches manta._manta.runner_ffi_ops directly rather than through the
+  // curated `manta` surface.
+  //
+  // It exists because dSigmaFn_dGeometry has no batched (GlobalState-taking)
+  // entry point the way SigmaFn/Sources/AuxG do -- the A1 assembly in
+  // Matrices.cpp calls the *pointwise* hook per node through a member pointer
+  // -- and a State cannot be constructed standalone from Python (see
+  // PyState.hpp), so python/Tests/test_trampolines.py had no way at all to
+  // drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher, its
+  // optional_override lookup, and the Values cast.
+  //
+  // A free function rather than a TransportSystem method, deliberately: it
+  // adds nothing inheritable or overridable to the interface a physics case
+  // implements, unlike a batched virtual would. It builds a State carrying
+  // only the given geometry (u/q/sigma/phi are left zero, since this is
+  // about the geometry dispatch, not the physics) and calls the pointwise
+  // hook directly -- exactly what a C++ test does, and what the real caller
+  // does: Matrices.cpp's fieldChainOnNodes builds the A1 column the same way,
+  // one pointwise call per node.
+  m.def(
+      "_test_dSigmaFn_dGeometry",
+      [](TransportSystem &sys, Index i, Vector const &geom, Position x, Time t) {
+        State s(sys.getNumVars(), sys.getNumScalars(), sys.getNumAux(),
+                static_cast<Index>(geom.size()));
+        s.geom() = geom;
+        Vector out = Vector::Zero(geom.size());
+        sys.dSigmaFn_dGeometry(i, out, s, x, t);
+        return out;
+      },
+      py::arg("sys"), py::arg("i"), py::arg("geom"), py::arg("x"), py::arg("t"),
+      "Test support only: builds a State carrying the given geometry and calls "
+      "the pointwise dSigmaFn_dGeometry dispatcher directly.");
+
+  m.def("physics_cases", &PhysicsCases::RegisteredNames,
+        "Every physics case name manta.Runner(name) will accept, ascending. "
+        "Includes the C++ cases compiled into this extension, anything a "
+        "loaded plugin registered, and anything registerPhysicsCase was "
+        "called with.");
+
+  m.def(
+      "load_physics_plugin",
+      [](std::string const &path) {
+        // RTLD_GLOBAL so a plugin can be linked against another plugin's
+        // symbols; RTLD_NOW so an unresolved symbol is reported here rather
+        // than at the first call into the case. Both match what runManta does
+        // for the PhysicsPlugins key, deliberately -- a plugin must behave the
+        // same however it was loaded.
+        //
+        // The registration is a side effect of loading: the case's
+        // PhysicsCaseRegister runs during the shared object's static
+        // initialisation and inserts into the same process-global map the
+        // built-in cases use. So there is nothing to return, and nothing to
+        // keep -- the handle is deliberately not closed, because the map would
+        // then hold a factory pointing into unmapped code.
+        if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
+          throw std::runtime_error("Could not load physics plugin " + path +
+                                   ": " + dlerror());
+      },
+      py::arg("path"),
+      "Load a physics case built outside the MaNTA tree, so that "
+      "manta.Runner(name) can reach it. The dict equivalent of a config "
+      "file's PhysicsPlugins key. Compile the plugin with the flags "
+      "`pkg-config --cflags manta` reports, and do not link it against "
+      "-lmanta; see the out-of-tree section of the docs.");
+
+  // A real enum.IntEnum, not a py::enum_, so that its members are ints. Under
+  // jit, FFIRunner's slice ops return the outcome as a traced int32 -- a value
+  // the compiled program will produce, which no Python enum object can stand
+  // for -- and a driver tests it with jnp.equal(outcome,
+  // SteadyOutcome.Converged). That needs the member to be a number JAX can read,
+  // which a py::enum_ member is not; eagerly it is the same member as ever.
+  py::native_enum<SystemSolver::SteadyOutcome>(
+      m, "SteadyOutcome", "enum.IntEnum",
+      "Why a steady solve, or one slice of one, stopped.\n\n"
+      "NotRun: no steady solve has been taken on this solver.\n"
+      "Converged: ||F|| fell below SteadyStateTolerance.\n"
+      "OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. "
+      "Not a failure: the state reached is the last accepted one, and "
+      "continue_steady() resumes from it and the pseudo-time step.\n"
+      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n\n"
+      "An IntEnum, so a traced outcome compares with the members under jit: "
+      "jnp.equal(outcome, SteadyOutcome.Converged).")
+      .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
+             "No steady solve has been taken on this solver.")
+      .value("Converged", SystemSolver::SteadyOutcome::Converged,
+             "||F|| fell below SteadyStateTolerance.")
+      .value("OutOfSteps", SystemSolver::SteadyOutcome::OutOfSteps,
+             "A budget was spent: MaxContinuationSteps, or MaxRejectedSteps. Not a "
+             "failure: the state reached is the last accepted one, and "
+             "continue_steady() resumes from it and the pseudo-time step.")
+      .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
+             "KINSol failed in a way pseudo-transient damping cannot answer.")
+      .finalize();
+
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
       .def(py::init<std::shared_ptr<TransportSystem>>())
+      // A C++ case by the name a config file's TransportSystem key would give.
+      // Registered second, so a TransportSystem object still binds to the
+      // overload above rather than being str()'d into this one.
+      .def(py::init<std::string>(), py::arg("physics_case"))
+      .def_property_readonly("physics_case", &PyRunner::physicsCase,
+                             "The registered C++ case name this Runner was "
+                             "built from, or \"\" when it was handed a "
+                             "transport system object.")
       .def("configure", &PyRunner::configure)
       // Two overloads: run(tFinal) is the usual way in, run() uses the
       // configuration's t_final -- the same key a config file must carry.
       .def("run", static_cast<void (PyRunner::*)(double)>(&PyRunner::run))
       .def("run", static_cast<void (PyRunner::*)()>(&PyRunner::run))
       .def("run_ss", &PyRunner::run_ss)
-      .def("wasRejected", &PyRunner::wasRejected)
-      .def("lastDGdt", &PyRunner::lastDGdt)
+      .def("start_steady", &PyRunner::start_steady, py::arg("estimate") = true)
+      .def("continue_steady", &PyRunner::continue_steady,
+           py::arg("estimate") = true)
+      .def("finish_steady", &PyRunner::finish_steady)
+      .def("abandon_steady", &PyRunner::abandon_steady)
+      .def("steadyStats", &PyRunner::steadyStats)
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
+      .def("objectiveEstimate", &PyRunner::objectiveEstimate)
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
+      .def("getCellBoundaries", &PyRunner::getCellBoundaries)
       .def("get_address", [](const PyRunner &runner) // needed for xla interface
            { return reinterpret_cast<std::uint64_t>(&runner); });
 #ifdef XLA_FFI
@@ -438,6 +730,10 @@ PYBIND11_MODULE(_manta, m, py::mod_gil_not_used()) {
     ffi_ops["get_g_val"] = EncapsulateFfiCall(get_g_val_ffi_ops);
     ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
     ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
+    ffi_ops["start_steady_ffi"] = EncapsulateFfiCall(start_steady_ffi_ops);
+    ffi_ops["continue_steady_ffi"] = EncapsulateFfiCall(continue_steady_ffi_ops);
+    ffi_ops["finish_steady_ffi"] = EncapsulateFfiCall(finish_steady_ffi_ops);
+    ffi_ops["abandon_steady_ffi"] = EncapsulateFfiCall(abandon_steady_ffi_ops);
     return ffi_ops;
   });
 #ifdef CUDA

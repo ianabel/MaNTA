@@ -9,6 +9,7 @@
 
 #include "CapturedOutput.hpp"
 #include "DegreeAdaptation.hpp"
+#include "PhysicsInstance.hpp"
 #include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
 #include "TestDiffusion.hpp"
@@ -60,12 +61,12 @@ SolverConfig steadyConfig(std::string const &extra, unsigned int k = 2,
                           int cells = 8, bool steadyTolerance = true)
 {
     const std::string body =
-        "Polynomial_degree = " + std::to_string(k) + "\n"
-        "Grid_size = " + std::to_string(cells) + "\n"
+        "PolynomialDegree = " + std::to_string(k) + "\n"
+        "GridSize = " + std::to_string(cells) + "\n"
         "delta_t = 0.05\n"
         "t_final = 1.0\n"
-        "Lower_boundary = 0.0\n"
-        "Upper_boundary = 1.0\n"
+        "LowerBoundary = 0.0\n"
+        "UpperBoundary = 1.0\n"
         "TransportSystem = \"LinearDiffusion\"\n"
         "OutputFilename = \"degree_adaptation_test\"\n"
         "WriteOutput = false\n"
@@ -287,7 +288,8 @@ BOOST_AUTO_TEST_CASE(an_answer_the_space_already_holds_is_not_refined)
     std::unique_ptr<SystemSolver> sys;
     {
         CapturedOutput capture;
-        sys = runAdaptiveDegree(cfg, problem, nullptr, grid, 2, 1.0);
+        PhysicsInstance physics(problem, grid);
+        sys = runAdaptiveDegree(cfg, physics, grid, 2, 1.0);
         log = capture.text();
     }
 
@@ -318,7 +320,8 @@ BOOST_AUTO_TEST_CASE(a_solution_the_space_cannot_hold_raises_the_degree_until_it
     std::unique_ptr<SystemSolver> sys;
     {
         CapturedOutput capture;
-        sys = runAdaptiveDegree(cfg, problem, nullptr, grid, 1, 1.0);
+        PhysicsInstance physics(problem, grid);
+        sys = runAdaptiveDegree(cfg, physics, grid, 1, 1.0);
         log = capture.text();
     }
     BOOST_TEST_MESSAGE(log);
@@ -361,7 +364,8 @@ BOOST_AUTO_TEST_CASE(the_degree_rises_in_bounded_steps)
     std::unique_ptr<SystemSolver> sys;
     {
         CapturedOutput capture;
-        sys = runAdaptiveDegree(cfg, problem, nullptr, grid, 1, 1.0);
+        PhysicsInstance physics(problem, grid);
+        sys = runAdaptiveDegree(cfg, physics, grid, 1, 1.0);
         log = capture.text();
     }
     BOOST_TEST_MESSAGE(log);
@@ -408,7 +412,8 @@ BOOST_AUTO_TEST_CASE(the_ceiling_is_reported_rather_than_thrown)
     std::unique_ptr<SystemSolver> sys;
     {
         CapturedOutput capture;
-        BOOST_CHECK_NO_THROW(sys = runAdaptiveDegree(cfg, problem, nullptr, grid, 2, 1.0));
+        PhysicsInstance physics(problem, grid);
+        BOOST_CHECK_NO_THROW(sys = runAdaptiveDegree(cfg, physics, grid, 2, 1.0));
         log = capture.text();
     }
 
@@ -433,7 +438,8 @@ BOOST_AUTO_TEST_CASE(the_degree_may_not_start_above_its_own_ceiling)
         "DegreeAdaptation = true\n"
         "MaxPolynomialDegree = 4\n", 2, 6);
 
-    BOOST_CHECK_THROW(runAdaptiveDegree(cfg, problem, nullptr, grid, 5, 1.0),
+    PhysicsInstance physics(problem, grid);
+    BOOST_CHECK_THROW(runAdaptiveDegree(cfg, physics, grid, 5, 1.0),
                       std::invalid_argument);
 }
 

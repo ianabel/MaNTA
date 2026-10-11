@@ -11,6 +11,9 @@ REGISTER_PHYSICS_IMPL(LinearDiffusion);
 // The shape of this case depends on its configuration -- LowerNeumann decides
 // the lower boundary kind -- so the spec is built here and passed up, rather
 // than assembled by assignment once the object already exists.
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 SystemSpec LinearDiffusion::buildSpec(toml::value const &config)
 {
 	bool lowerNeumann = false;
@@ -19,7 +22,8 @@ SystemSpec LinearDiffusion::buildSpec(toml::value const &config)
 
 	return {.variables = {{"u", "the diffused quantity", "",
 						   lowerNeumann ? BoundaryKind::Neumann : BoundaryKind::Dirichlet,
-						   BoundaryKind::Dirichlet}}};
+						   BoundaryKind::Dirichlet}},
+			.regrid = RegridPolicy::InPlace};
 }
 
 LinearDiffusion::LinearDiffusion(toml::value const &config, Grid const &)

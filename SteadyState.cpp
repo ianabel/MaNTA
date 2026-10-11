@@ -20,9 +20,8 @@
 //
 // Two pieces of the existing solver make this cheap. setAlpha already scales the
 // mass term in the u row -- IDA's cj for the forward solve, and 0 where dF/dy
-// alone is wanted, which computeAlgebraicTimeDerivatives has relied on for as
-// long as it has existed -- so alpha = 1/dt and alpha = 0 are both already
-// supported and exercised. And SunLinSolWrapper is solver-agnostic: its Setup is
+// alone is wanted -- so alpha = 1/dt and alpha = 0 are both already supported
+// and exercised. And SunLinSolWrapper is solver-agnostic: its Setup is
 // a no-op and its Solve calls solveJacEq, so KINSOL drives the same static
 // condensation IDA does.
 //
@@ -34,7 +33,7 @@
 // This was very nearly justified on a different and false ground. CLAUDE.md
 // describes the Dirichlet constraints as "imposed inside the linear solve",
 // which would make ||F|| blind to a Dirichlet violation and rule out any merit
-// function built on it. The code says otherwise: the block in solveJacEq that
+// function built on it. The code says otherwise: the block in solveHDGJac that
 // would force del_y.lambda to (boundary value - current lambda) is commented
 // out, above the words "We really should do something here", and the boundary
 // data reaches the residual instead -- Dirichlet through RF_cellwise into the
@@ -74,9 +73,6 @@ namespace
         return 0;
     }
 
-    // How many KINSol calls before giving up. Each is a full Newton solve, so a
-    // healthy run uses ten or so; this is a runaway backstop, not a budget.
-    constexpr int MaxContinuationSteps = 200;
 } // namespace
 
 int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
@@ -95,7 +91,24 @@ int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
         N_VConst(0.0, ptcDYdt);
     }
 
-    return residual(t0, u, ptcDYdt, fval);
+    const int retval = residual(t0, u, ptcDYdt, fval);
+
+    // With ptcDYdt identically zero this call *is* steadyResidualNorm()'s call: same
+    // state, same time, same zero derivative, same physics sweep. Recording the
+    // norm here is what lets the loop below skip evaluating it again -- and it
+    // is recorded rather than recomputed so the number is bit for bit what
+    // steadyResidualNorm() would have returned, which keeps the SER schedule, and so
+    // every run's step sequence, exactly as it was.
+    //
+    // Only on success: a recoverable failure leaves fval unfinished, and a norm
+    // of it would be a plausible number rather than a measurement.
+    if (retval == 0 && !std::isfinite(ptcStep))
+    {
+        kinSteadyNorm = N_VWL2Norm(fval, resScale);
+        ++kinSteadyNormStamp;
+    }
+
+    return retval;
 }
 
 void SystemSolver::steadyJacSetup(N_Vector u)
@@ -107,25 +120,52 @@ void SystemSolver::steadyJacSetup(N_Vector u)
     updateMatricesForJacSolve();
 }
 
-// Add the KINSol call that just returned to the running totals. Must be called
-// after *every* KINSol, because KINSOL zeroes these at the top of each call
-// (KINSolInit) -- reading them once at the end reports the final inner solve
-// and nothing else.
+// Read what the KINSol call that just returned did. Must be called after *every*
+// KINSol, because KINSOL zeroes these at the top of each call (KINSolInit) --
+// reading them once at the end reports the final inner solve and nothing else.
+// That per-call reset is also what makes these numbers per-step for free: there
+// is nothing to difference, and a difference would in fact be wrong.
 //
-// A read that fails contributes nothing rather than taking the run down: this
-// is diagnostics, and a counter is not worth an exception.
-void SystemSolver::accumulateKinStats(SteadyStats &s) const
+// A read that fails leaves the field at zero rather than taking the run down:
+// this is diagnostics, and a counter is not worth an exception.
+void SystemSolver::readKinStats(SteadyStepStats &s) const
 {
     if (kin_mem == nullptr)
         return;
 
     long v = 0;
     if (KINGetNumNonlinSolvIters(kin_mem, &v) == KIN_SUCCESS)
-        s.newtonIters += v;
+        s.newtonIters = v;
     if (KINGetNumFuncEvals(kin_mem, &v) == KIN_SUCCESS)
-        s.kinFuncEvals += v;
+        s.kinFuncEvals = v;
     if (KINGetNumJacEvals(kin_mem, &v) == KIN_SUCCESS)
-        s.kinJacEvals += v;
+        s.kinJacEvals = v;
+}
+
+// One line per continuation step, printed as the step finishes rather than
+// collected and dumped at the end -- a solve that is going to fail is one whose
+// trace you want *while* it runs, and the failure paths below throw.
+//
+// The header is printed by the caller, once, so this stays a single row and the
+// column widths live in one place. Widths are sized for the numbers a healthy
+// solve produces and are allowed to overflow rather than truncate: a step that
+// takes 1000 residual evaluations has told you something, and eliding a digit
+// to keep the table straight would be the one case where the alignment costs
+// more than it is worth.
+void SystemSolver::reportSteadyStep(SteadyStepStats const &s) const
+{
+    if (!steadyStepDiagnostics)
+        return;
+
+    std::println("  {:>4}  {:>10.3e}  {:>10.3e}  {:>5}  {:>5}  {:>5}  {:>6}  {}",
+                 s.step, s.dt, s.residualNorm, s.newtonIters, s.residualEvals,
+                 s.jacBuilds, s.jacSolves,
+                 s.kinRetval < 0 && s.kinRetval != KIN_MAXITER_REACHED &&
+                         s.kinRetval != KIN_MXNEWT_5X_EXCEEDED &&
+                         s.kinRetval != KIN_STEP_LT_STPTOL
+                     ? std::format("FAILED ({})", s.kinRetval)
+                 : s.accepted ? "accepted"
+                              : "rejected");
 }
 
 void SystemSolver::reportSteadyStats(std::string_view outcome, SteadyStats const &s) const
@@ -143,22 +183,109 @@ void SystemSolver::reportSteadyStats(std::string_view outcome, SteadyStats const
     std::println("  Jacobian solves         : {}", s.jacSolves);
 }
 
-void SystemSolver::solveSteadyState()
+// Scratch vectors live as long as the solver so a second call reuses them,
+// which is what keeps repeated configure/run cycles cheap.
+void SystemSolver::allocateSteadyScratch()
+{
+    if (uPrev != nullptr)
+        return;
+
+    uPrev = N_VClone(Y);
+    ptcDYdt = N_VClone(Y);
+    kinScale = N_VClone(Y);
+    resScale = N_VClone(Y);
+    fScaleScratch = N_VClone(Y);
+    if (uPrev == nullptr || ptcDYdt == nullptr || kinScale == nullptr ||
+        resScale == nullptr || fScaleScratch == nullptr)
+        throw std::runtime_error("N_VClone failed in solveSteadyState");
+
+    // The grid cannot change under a live solver, so these are filled once. Note
+    // that a *second* run on the same solver reuses them, which is only safe
+    // because of that -- see the RF_cellwise trap in CLAUDE.md for the version of
+    // this that was not.
+    residualWeights();
+}
+
+// Why the merit function is weighted at all, and why by this.
+//
+// The residual's cell rows are pairings against the basis: residual() forms them
+// through the cell mass matrix, so row i holds <R, phi_i> ~ h * R(x_i) for a
+// residual density R. A flat 2-norm over nCells*(k+1) such rows therefore goes
+// like sqrt((1/h) * h^2) = sqrt(h) -- measured on TestDiffusion at 4/8/16/32/64
+// cells as 0.5557, 0.3935, 0.2784, 0.1969, 0.1392, ratios converging on
+// 1/sqrt(2). Dividing each by sqrt(h) recovers sqrt(sum h R_i^2), the discrete
+// L2 norm of the equation residual, which is a property of the *function* and not
+// of the mesh: the same five runs give 1.11145, 1.11294, 1.11344, 1.11358,
+// 1.11361, converging at O(h^2) over a 16x refinement.
+//
+// The lambda rows are not pairings -- lambda is a trace unknown and its row is a
+// flux condition at a single face, with no h in it -- so they are left at 1
+// rather than given a weight there is no argument for. The same goes for the
+// global scalars, whose rows are not spatial at all. Near a solution this makes
+// no measurable difference either way, because those rows are the algebraic
+// constraints and the solve has driven them to round-off: 1.4e-24 of the total
+// on the fixture above. It matters for honesty rather than for the number.
+//
+// What this does *not* do, and it is worth being exact about it because the
+// obvious reading of "mesh-independent norm" is stronger than what is on offer:
+// the sqrt(h) above is the scaling near a solution, where the algebraic rows are
+// satisfied and the u row carries the residual. Far from one it is not. Overwrite
+// u with a fixed function and leave sigma/q/lambda stale -- the q and lambda rows
+// then hold the O(1) trace and derivative terms rather than an O(h) pairing, and
+// the flat norm *grows* like 1/sqrt(h) instead: 4.275, 6.166, 8.834, 12.58, 17.86
+// on those same meshes. The weight below makes that case worse, not better. So no
+// fixed row weighting makes this norm mesh-independent for every state, because
+// the two mechanisms scale oppositely and which dominates is a property of the
+// state. What is fixed here is the regime the *tolerance* is tested in -- the
+// convergence test fires when the residual is small, which is the sqrt(h) regime
+// -- and that is the claim the tests pin.
+void SystemSolver::residualWeights()
+{
+    double *w = N_VGetArrayPointer(resScale);
+    const Index perCell = (3 * nVars + nAux) * (k + 1);
+
+    for (Index c = 0; c < static_cast<Index>(nCells); ++c)
+    {
+        const double scale = 1.0 / std::sqrt(grid[c].h());
+        for (Index j = 0; j < perCell; ++j)
+            w[c * perCell + j] = scale;
+    }
+
+    // lambda, then the scalars: everything after the cell blocks.
+    for (sunindextype i = static_cast<sunindextype>(nCells) * perCell;
+         i < N_VGetLength(resScale); ++i)
+        w[i] = 1.0;
+}
+
+double SystemSolver::steadyResidualNorm()
+{
+    if (!initialised)
+        throw std::runtime_error("steadyResidualNorm called before initialize()");
+
+    allocateSteadyScratch();
+
+    // Zeroing ptcDYdt is what makes this the steady residual rather than the
+    // damped one: no backward-Euler term, whatever ptcStep currently is.
+    N_VConst(0.0, ptcDYdt);
+    residual(t0, Y, ptcDYdt, res);
+
+    // The same norm KINSOL forms from the same weights, which is what keeps the
+    // inner and outer stopping tests measuring one quantity.
+    return N_VWL2Norm(res, resScale);
+}
+
+void SystemSolver::solveSteadyState(bool resume)
 {
     if (!initialised)
         throw std::runtime_error("solveSteadyState called before initialize()");
 
-    // Scratch vectors live as long as the solver so a second call reuses them,
-    // which is what keeps repeated configure/run cycles cheap.
-    if (uPrev == nullptr)
-    {
-        uPrev = N_VClone(Y);
-        ptcDYdt = N_VClone(Y);
-        kinScale = N_VClone(Y);
-        if (uPrev == nullptr || ptcDYdt == nullptr || kinScale == nullptr)
-            throw std::runtime_error("N_VClone failed in solveSteadyState");
-    }
-    N_VConst(1.0, kinScale); // no scaling; the DOFs are already commensurate
+    allocateSteadyScratch();
+
+    // u_scale is unit unless NewtonScaling = ErrorWeights fills it below, per
+    // continuation step: KINSOL uses it for the step-length test and the max
+    // Newton step clamp, which are about the solution's units. f_scale carries
+    // the residual weights (resScale), times the error weights in that mode.
+    N_VConst(1.0, kinScale);
 
     if (kin_mem == nullptr)
     {
@@ -189,8 +316,20 @@ void SystemSolver::solveSteadyState()
     // Each inner solve only has to make progress, not converge to the eventual
     // tolerance: SER re-damps and tries again. Asking for the final tolerance at
     // a small dt would burn Newton iterations chasing a heavily damped problem.
+    // That is why NewtonMaxIterations defaults to a tenth of KINSOL's own 200.
+    //
+    // Set on every call rather than once when kin_mem is created: PyRunner
+    // reconfigures and re-runs on one solver, so a value that changed between
+    // runs would otherwise be ignored on the second.
     KINSetFuncNormTol(kin_mem, steady_state_tol);
-    KINSetNumMaxIters(kin_mem, 20);
+    KINSetNumMaxIters(kin_mem, newtonMaxIters);
+
+    // How many Newton iterations may share one Jacobian factorisation, and the
+    // scaled-step stopping test. Both are pass-through: KINSOL restores its own
+    // default when handed zero, which is what newtonStepTol's zero sentinel
+    // relies on.
+    KINSetMaxSetupCalls(kin_mem, newtonJacReuse);
+    KINSetScaledStepTol(kin_mem, newtonStepTol);
 
     // Take KINSOL's step clamp out of the picture. Its default maximum Newton
     // step is 1000*||u_0||, which is *zero* when the initial condition is zero
@@ -208,9 +347,14 @@ void SystemSolver::solveSteadyState()
     // term NaN and every continuation step a no-op -- which is exactly what it
     // did, silently, until the residual trace showed dt = 0.
     const double fallback = (dt0 > 0.0) ? dt0 : dt;
-    ptcStep = (steadyMode == SteadyMode::Newton)
-                  ? std::numeric_limits<double>::infinity()
-                  : (ptcInitialStep > 0.0 ? ptcInitialStep : fallback);
+    // A resumed solve keeps the step SER has already climbed to. Re-entering at
+    // PseudoTransientInitialStep would repeat the ramp the previous call paid
+    // for, which on a solve that stopped against MaxContinuationSteps rather
+    // than against its tolerance is the entire cost of the previous call.
+    if (!(resume && ptcStep > 0.0))
+        ptcStep = (steadyMode == SteadyMode::Newton)
+                      ? std::numeric_limits<double>::infinity()
+                      : (ptcInitialStep > 0.0 ? ptcInitialStep : fallback);
 
     if (!(ptcStep > 0.0))
         throw std::runtime_error(
@@ -220,37 +364,84 @@ void SystemSolver::solveSteadyState()
 
     N_VScale(1.0, Y, uPrev);
 
-    // The steady residual, which is what convergence is measured against
-    // throughout -- not the damped one KINSOL sees, which vanishes at any dt
-    // simply by taking a small enough step.
+    // Under a tau frozen per continuation step, tau is brought to the current
+    // state before the merit function is measured, so that "converged" means
+    // F(y; tau(y)) = 0 rather than zero for the tau the step happened to start
+    // with. That also leaves tau right for the next step, which therefore only
+    // has to refresh it after a rejection.
+    bool tauAtY = false;
+    auto refreshTau = [&]()
+    {
+        DGSoln Yh(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+        freezeTauAt(Yh, t0);
+        tauAtY = true;
+    };
     auto steadyNorm = [&]() -> double
     {
-        N_VConst(0.0, ptcDYdt);
-        residual(t0, Y, ptcDYdt, res);
-        return std::sqrt(N_VDotProd(res, res));
+        if (tauFrozenPerStep())
+            refreshTau();
+        return steadyResidualNorm();
     };
 
     // What this call costs. MaNTA's counters are monotonic over the solver --
     // IDA writes to them too -- so they are differenced against here, which is
     // also what makes a second solve on one object report its own cost.
     //
-    // Snapshotted *before* the first steadyNorm() below, or that evaluation goes
+    // Snapshotted *before* the first steadyResidualNorm() below, or that goes
     // unreported: the merit function is part of what a steady solve pays for,
     // and it costs one residual per continuation step plus this one.
     SteadyStats stats;
     const long residualEvals0 = nResidualEvals, jacBuilds0 = nJacBuilds,
                jacSolves0 = nJacSolves;
 
+    // Cleared, not appended to: this describes one solve, and PyRunner runs many
+    // on one solver.
+    steadyStepStats.clear();
+
+    // Likewise the outcome, and for a sharper reason than tidiness: finish()
+    // is the only thing that sets it, so an exception raised from anywhere else
+    // -- a physics case throwing, say -- would otherwise leave the *previous*
+    // solve's verdict standing. A caller classifying that exception by asking
+    // what the outcome was would then be told OutOfSteps, and a driver looping
+    // on OutOfSteps would loop forever.
+    steadyOutcome = SteadyOutcome::NotRun;
+
     double Fprev = steadyNorm();
 
-    auto finish = [&](std::string_view outcome, int steps, int rejected)
+    // Every way out of the loop goes through here, including the two that then
+    // throw. That is what lets a caught failure still carry a partial answer:
+    // the objective estimate below is taken at whatever state the solve reached,
+    // and it comes with a bound saying how much that state is worth.
+    auto finish = [&](std::string_view outcome, int steps, int rejected,
+                      SteadyOutcome why, double Fnorm)
     {
+        steadyOutcome = why;
+
+        // Only when there is an objective to estimate, so a run without
+        // solveAdjoint pays nothing. One Jacobian build and one solve against a
+        // whole continuation, and it is what tells a sweep whether a difference
+        // between two parameter points is the answer moving or the solver
+        // stopping short.
+        //
+        // Charged per *solve*, so a solve driven in slices pays it per slice.
+        // EstimateObjectiveOnFinish turns it off for a driver that only wants
+        // the estimate at the end.
+        //
+        // Before the counters are differenced, so its cost lands in the stats
+        // of the solve that paid it. After them it would fall between two
+        // slices and be charged to neither, which is exactly the number a
+        // driver deciding whether to go on estimating needs to see.
+        if (estimateObjectiveOnFinish)
+            objectiveEstimate = estimateObjective();
+
         stats.steps = steps;
         stats.rejected = rejected;
+        stats.residualNorm = Fnorm;
         stats.residualEvals = nResidualEvals - residualEvals0;
         stats.jacBuilds = nJacBuilds - jacBuilds0;
         stats.jacSolves = nJacSolves - jacSolves0;
         steadyStats = stats;
+
         reportSteadyStats(outcome, stats);
     };
 
@@ -273,33 +464,137 @@ void SystemSolver::solveSteadyState()
         logmsg<LOG_LEVEL::INFO>("Steady solve: initial state already converged");
         std::println("  the initial state is already converged; nothing to do.");
         setJacEvalY(Y, ptcDYdt);
-        finish("converged (no continuation steps needed)", 0, 0);
+        finish("converged (no continuation steps needed)", 0, 0, SteadyOutcome::Converged,
+               Fprev);
         return;
     }
 
+    // The per-step table's header, once. Printed here rather than from
+    // reportSteadyStep so that the widths and the labels are declared together
+    // and a row cannot drift from its column.
+    //
+    // "res" is MaNTA's count for the whole step, so it includes the merit
+    // function's one evaluation and KINSOL's count is therefore one lower --
+    // that offset is deliberate and is what the totals' two residual numbers
+    // separate. dt is the step the call was damped with, ||F|| the *steady*
+    // residual afterwards, which is not the norm KINSol converged: KINSol sees
+    // the damped residual, which any small enough dt makes small.
+    if (steadyStepDiagnostics)
+        std::println("  {:>4}  {:>10}  {:>10}  {:>5}  {:>5}  {:>5}  {:>6}  {}",
+                     "step", "dt", "||F||", "iters", "res", "jac", "solves",
+                     "outcome");
+
     int step = 0;
-    int rejected = 0;
-    for (; step < MaxContinuationSteps; ++step)
+    unsigned int rejected = 0;
+    for (; step < maxContinuationSteps; ++step)
     {
+        // What this one continuation step costs. MaNTA's counters are monotonic,
+        // so they are differenced across the whole step body -- not just across
+        // KINSol -- which is what puts the merit evaluation below into the step
+        // that paid for it. KINSOL's own counters need no snapshot: it zeroes
+        // them in KINSolInit, so they are already per-call.
+        SteadyStepStats rec;
+        rec.step = step;
+        rec.dt = ptcStep;
+        const long stepResidualEvals0 = nResidualEvals, stepJacBuilds0 = nJacBuilds,
+                   stepJacSolves0 = nJacSolves;
+
+        // Bring the record up to date with everything counted so far. Called at
+        // each exit from the step, because two of the three leave through a
+        // `return` or a `throw` and a record completed only at the bottom of the
+        // loop would be missing exactly the steps worth looking at.
+        auto closeRecord = [&](double Fnow, bool accepted)
+        {
+            rec.residualNorm = Fnow;
+            rec.accepted = accepted;
+            rec.residualEvals = nResidualEvals - stepResidualEvals0;
+            rec.jacBuilds = nJacBuilds - stepJacBuilds0;
+            rec.jacSolves = nJacSolves - stepJacSolves0;
+            stats.add(rec);
+            steadyStepStats.push_back(rec);
+            reportSteadyStep(rec);
+        };
+
         // uPrev is both the backward-Euler anchor for this attempt and the state
         // to fall back to if the attempt makes things worse.
         N_VScale(1.0, Y, uPrev);
 
-        const int retval = KINSol(kin_mem, Y, KIN_NONE, kinScale, kinScale);
+        // tau for this step, from the state it starts at. Already there unless
+        // the last step was rejected and Y put back.
+        if (tauFrozenPerStep() && !tauAtY)
+            refreshTau();
+
+        // Refreshed here rather than once on entry, because the weights are a
+        // function of Y and Y moves a long way over a continuation run -- on
+        // AdjointPoster ||F|| falls thirteen orders. Scaling fixed at the initial
+        // state would be calibrated for a state the solve left immediately.
+        // KINSol reads the vectors afresh on every call, so changing them between
+        // calls is exactly as intended; within a call they are constant, which is
+        // what KINSOL requires.
+        //
+        // f_scale is resScale, the merit function's weights, so that KINSOL's
+        // func norm -- N_VWL2Norm(F, f_scale) -- and the loop's own test below
+        // are one quantity rather than two that happen to agree. Under
+        // ErrorWeights it is those times the error weights, which is the
+        // dimensionless scaling that mode exists for; the loop's test stays the
+        // mesh-weighted norm either way.
+        N_Vector fScale = resScale;
+        if (newtonScaling == NewtonScaling::ErrorWeights)
+        {
+            getErrorWeights(Y, kinScale);
+            N_VProd(kinScale, resScale, fScaleScratch);
+            fScale = fScaleScratch;
+        }
+
+        // Snapshotted so the read below can tell "KINSOL evaluated the steady
+        // residual during this call" from "kinSteadyNorm is left over from an
+        // earlier step, or an earlier solve".
+        const long kinNormStamp = kinSteadyNormStamp;
+
+        const int retval = KINSol(kin_mem, Y, KIN_NONE, kinScale, fScale);
+        rec.kinRetval = retval;
 
         // Immediately: KINSOL zeroes its counters at the top of each KINSol.
-        accumulateKinStats(stats);
+        readKinStats(rec);
 
         // Only a genuinely broken solve is fatal. "Ran out of iterations"
-        // (KIN_MAXITER_REACHED) and "the step stopped moving"
-        // (KIN_STEP_LT_STPTOL) are the ordinary way an attempt at too large a dt
-        // ends, and answering them by damping is the entire point of pseudo-
-        // transient continuation. Treating them as failures is what made the
-        // Jardin and Shestakov benchmarks throw at dt = 1000 rather than back
-        // off to a dt they could solve.
-        if (retval < 0 && retval != KIN_MAXITER_REACHED && retval != KIN_STEP_LT_STPTOL)
+        // (KIN_MAXITER_REACHED) and "the Newton direction kept coming back
+        // enormous" (KIN_MXNEWT_5X_EXCEEDED) are both the ordinary way an attempt
+        // at too large a dt ends, and answering them by damping is the entire
+        // point of pseudo-transient continuation. Treating them as failures is
+        // what made the Jardin and Shestakov benchmarks throw at dt = 1000 rather
+        // than back off to a dt they could solve.
+        //
+        // -7 was fatal here until it was measured not to be. It is KINSOL's
+        // report that five consecutive Newton steps hit the maximum length, and
+        // KINSetMaxNewtonStep above is 1e10, so it means the direction really is
+        // that long -- but that is a statement about the *iteration*, not about
+        // the problem, and the response the loop already has for -6 is the right
+        // one. On Shestakov's degenerate D0 q^3/u^2 flux it is the only thing
+        // between a converged answer and an exception: 20 cells at k = 2 threw at
+        // continuation step 12, and every schedule lever -- PseudoTransientMaxStep
+        // from 1 to infinity, the SER rate and floor, an initial dt from 1e-4 to
+        // 1e3, the tolerance over eight orders -- failed at the *same* step with
+        // the *same* residual, which is what says the schedule was never the
+        // problem. Treated as a rejected step it converges.
+        //
+        // KIN_STEP_LT_STPTOL used to be excluded here too and never did anything:
+        // it is +2, a warning-level return, so it cannot reach a `retval < 0`
+        // branch. Dropped rather than left looking load-bearing.
+        //
+        // KIN_LINESEARCH_NONCONV (-5) is the analogue for KIN_LINESEARCH and is
+        // deliberately not listed: this loop passes KIN_NONE, so it cannot occur,
+        // and adding it would imply a globalisation strategy that is not in use.
+        if (retval < 0 && retval != KIN_MAXITER_REACHED &&
+            retval != KIN_MXNEWT_5X_EXCEEDED)
         {
-            finish(std::format("FAILED: KINSol returned {}", retval), step, rejected);
+            // NaN rather than Fprev: no steady residual was evaluated after this
+            // call, and reporting the previous step's norm as this one's would
+            // be a plausible number that is not a measurement.
+            closeRecord(std::numeric_limits<double>::quiet_NaN(), false);
+            finish(std::format("FAILED: KINSol returned {}", retval), step, rejected,
+                   SteadyOutcome::SolverFailed,
+                   std::numeric_limits<double>::quiet_NaN());
             throw std::runtime_error(std::format(
                 "Steady solve failed: KINSol returned {} at continuation step {} "
                 "with dt = {:g} and ||F|| = {:g}. Consider SteadyStateSolver = "
@@ -307,7 +602,25 @@ void SystemSolver::solveSteadyState()
                 retval, step, ptcStep, Fprev));
         }
 
-        const double Fnow = steadyNorm();
+        // KINSol's last act is to evaluate its system function at the iterate
+        // it returns -- KIN_NONE takes no line search, so nothing rolls the
+        // iterate back behind that evaluation. At dt = infinity that function
+        // is the steady residual, so its norm is already known and the merit
+        // evaluation here is a duplicate physics sweep. Worth one of the seven
+        // a Newton solve of python-examples/park-convergence spends.
+        //
+        // Both conditions are needed. A finite dt makes KINSOL's residual the
+        // damped one, which is a different function -- any small enough dt
+        // makes it small, which is the whole reason the loop measures the
+        // steady norm separately. And a KINSol that returned without a
+        // successful evaluation leaves the stamp untouched, so the previous
+        // step's norm can never be read as this one's.
+        //
+        // Not under a frozen tau: KINSOL's last evaluation used the step's tau,
+        // and the merit function wants tau at the state the step reached.
+        const bool kinHasIt = !std::isfinite(ptcStep) && kinSteadyNormStamp != kinNormStamp &&
+                              !tauFrozenPerStep();
+        const double Fnow = kinHasIt ? kinSteadyNorm : steadyNorm();
         logmsg<LOG_LEVEL::INFO>("Steady solve: step {}, dt = {:g}, ||F|| = {:g}",
                                 step, ptcStep, Fnow);
 
@@ -321,8 +634,10 @@ void SystemSolver::solveSteadyState()
 
             // dYdt is IDA's derivative vector, and nothing in this function has
             // touched it -- the damping above runs on the scratch ptcDYdt. So on
-            // return it still holds whatever IDACalcIC left at t0, which for a
-            // converged steady state is simply wrong: the defining property of
+            // return it still holds the t0 derivative initialize() left there,
+            // which since this path skips IDACalcIC (Solver.cpp) is the guess
+            // setInitialConditions solved out of the u row. Either way it is
+            // simply wrong for a converged steady state: the defining property of
             // the answer is that dy/dt vanishes. Two things read it afterwards
             // and both were getting the t0 derivative -- WriteRestartFile
             // (Solver.cpp), so a restart resumed from a state whose y was the
@@ -337,11 +652,21 @@ void SystemSolver::solveSteadyState()
             // all three agree.
             N_VConst(0.0, dYdt);
 
+            // Accepted by construction: the loop only reaches here with
+            // Fnow < steady_state_tol, and Fprev is at least the tolerance or
+            // the early return above would have taken it.
+            closeRecord(Fnow, true);
+
             std::println("  converged: ||F|| = {:g} after {} continuation steps.",
                          Fnow, step + 1);
-            finish("converged", step + 1, rejected);
+            finish("converged", step + 1, rejected, SteadyOutcome::Converged, Fnow);
             return;
         }
+
+        // Closed here, before Fprev moves: "accepted" is the same test the
+        // branch below makes, and taking it after the assignment would record
+        // every step as accepted.
+        closeRecord(Fnow, Fnow < Fprev);
 
         if (Fnow < Fprev)
         {
@@ -370,6 +695,12 @@ void SystemSolver::solveSteadyState()
                 ptcStep *= std::max(growth, ptcSERFloor);
                 if (ptcStep > ptcMaxStep)
                     ptcStep = ptcMaxStep;
+
+                if (writeDatFile)
+                {
+				          print(out0, ptcStep, nOut, true);
+                }
+
             }
             Fprev = Fnow;
         }
@@ -381,16 +712,37 @@ void SystemSolver::solveSteadyState()
             // damp, so drop to a finite one and continue as pseudo-transient --
             // which is the honest thing to do when the undamped step failed.
             N_VScale(1.0, uPrev, Y);
+            tauAtY = false;
             ptcStep = std::isfinite(ptcStep) ? ptcStep * 0.25 : fallback;
             ++rejected;
+            logmsg<LOG_LEVEL::PDEBUG>("Rejected steps: {}, Max rejected steps: {}", rejected, maxRejectedSteps);
+        }
+        // A budget, not a failure: the solve stops and returns OutOfSteps with
+        // the last accepted state in Y, which is often a usable answer -- a
+        // residual stalled just above a tolerance at its round-off floor rejects
+        // step after step without the state being wrong. So it returns rather
+        // than throws, and the run goes on to write that state; a sliced solve
+        // can resume it. This step's record is already closed, so step + 1 of
+        // them were taken.
+        if (rejected > maxRejectedSteps)
+        {
+            finish("stopped: MaxRejectedSteps reached", step + 1, rejected,
+                   SteadyOutcome::OutOfSteps, Fprev);
+            logmsg<LOG_LEVEL::WARNING>(
+                "Steady solve stopped after {} rejected continuation steps "
+                "(MaxRejectedSteps = {}) with ||F|| = {:g} against a tolerance of {:g}; "
+                "the last accepted state is the result.",
+                rejected, maxRejectedSteps, Fprev, steady_state_tol);
+            return;
         }
     }
 
-    finish("FAILED: ran out of continuation steps", step, rejected);
+    finish("FAILED: ran out of continuation steps", step, rejected,
+           SteadyOutcome::OutOfSteps, Fprev);
 
     throw std::runtime_error(std::format(
         "Steady solve did not converge in {} continuation steps: ||F|| = {:g} "
         "against a tolerance of {:g}, with dt = {:g}. The residual is not "
         "falling; SteadyStateSolver = \"TimeMarch\" is the fallback.",
-        MaxContinuationSteps, Fprev, steady_state_tol, ptcStep));
+        maxContinuationSteps, Fprev, steady_state_tol, ptcStep));
 }

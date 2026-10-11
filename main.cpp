@@ -24,7 +24,15 @@ std::string defaultText( ConfigSchema::Value const &v )
 			return x ? "true" : "false";
 		else if constexpr ( std::is_same_v<T, std::string> )
 			return "\"" + x + "\"";
+		// Every vector alternative of Value has to be named here, and the cost of
+		// forgetting one is a build that works locally and fails on CI. The `else`
+		// below formats the value whole, and a std::vector is formattable only
+		// from libstdc++ 15 (P2286's range formatters); CI's clang legs run on the
+		// ubuntu-24.04 image's libstdc++ 14, where it is a static_assert inside
+		// <format> naming nothing in this file. Adding std::vector<unsigned int>
+		// to the variant without adding it here did exactly that.
 		else if constexpr ( std::is_same_v<T, std::vector<double>> ||
+		                    std::is_same_v<T, std::vector<unsigned int>> ||
 		                    std::is_same_v<T, std::vector<std::string>> )
 		{
 			std::string out = "[";

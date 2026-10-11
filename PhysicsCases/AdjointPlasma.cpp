@@ -41,9 +41,13 @@ SystemSpec AdjointPlasma::buildSpec(toml::value const &)
     return {.variables = {{"IonEnergy", "ion energy density", "n0 T0",
                            BoundaryKind::Neumann, BoundaryKind::Dirichlet},
                           {"ElectronEnergy", "electron energy density", "n0 T0",
-                           BoundaryKind::Neumann, BoundaryKind::Dirichlet}}};
+                           BoundaryKind::Neumann, BoundaryKind::Dirichlet}},
+            .regrid = RegridPolicy::InPlace};
 }
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
 AdjointPlasma::AdjointPlasma(toml::value const &config, Grid const &grid)
     : AutodiffTransportSystem(config, grid, buildSpec(config))
 {
@@ -290,7 +294,7 @@ Real AdjointPlasma::qe(RealVector u, RealVector q, Real x, Time t) const
 
     Real GeometricFactor = r * r; // pi * a * Btor * r;
 
-    Real R_LTi_crit = 4 / 3 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
+    Real R_LTi_crit = 4.0 / 3.0 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
 
     Real Chi_i = Chi_min;
 
@@ -328,7 +332,7 @@ Real AdjointPlasma::qi(RealVector u, RealVector q, Real x, Time t) const
 
     Real GeometricFactor = r * r; // pi * a * Btor * r;
 
-    Real R_LTi_crit = 4 / 3 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
+    Real R_LTi_crit = 4.0 / 3.0 * (1 + tau) * (1 + 2 * abs(Shear(r)) / SafetyFactor(r));
 
     Real Chi_i = Chi_min;
 

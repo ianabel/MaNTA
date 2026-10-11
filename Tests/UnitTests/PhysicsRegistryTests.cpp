@@ -195,11 +195,13 @@ BOOST_AUTO_TEST_CASE(the_real_physics_cases_are_all_reachable_by_name)
     // failure mode that makes a model vanish from the available list, with no
     // compile or link error to point at it.
     //
-    // Only the cases in REQUIRED_OBJECTS (Tests/UnitTests/Makefile) are linked
-    // into this binary, which is a deliberately small subset -- LinearDiffusion
-    // and the rest are absent here but present in the MaNTA executable. So this
-    // asserts the mechanism works for the ones that *are* linked, not that
-    // every physics case in the repo exists.
+    // Every physics case is linked into this binary now, as into the MaNTA
+    // executable: Tests/UnitTests/CMakeLists.txt links the whole manta_objects
+    // target, where the Makefile named a hand-maintained subset. The four spot
+    // checks below are therefore a sample rather than the whole of what is
+    // present -- kept as a sample deliberately, because naming all eighteen would
+    // turn this into a list that has to be edited whenever a case is added, which
+    // is the kind of maintenance the registry exists to avoid.
     //
     // Checked through the map rather than by instantiating: construction would
     // need each case's own config section, and a throw there would say nothing
