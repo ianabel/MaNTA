@@ -102,7 +102,7 @@ class PlasmaConstants(eqx.Module):
         return self.IonSpecies.mass / self.ElectronMass
 
     def NormalizingTime(self):
-        return self.a / (self.cs0 * self.RhoStarRef() ** 2)
+        return self.a / (self.ReferenceIonThermalVelocity() * self.RhoStarRef() ** 2)
 
     def LogLambda_ii(self, ni, Ti):
         LogLambdaRef = 24.0 - jnp.log(self.n0cgs) / 2.0 + jnp.log(self.T0eV)
