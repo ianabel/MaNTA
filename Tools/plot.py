@@ -33,6 +33,15 @@ Groups and root variables are therefore discovered by *shape*, never by name --
 see `variable_groups` and `root_series` below for why that is the only rule that
 works.
 
+Every label is read from the file as well. Each variable group carries the
+`description` its physics case declared, each field (`u`, `q`, ...) a
+`description` of its own ("Value", "Flux"), and every variable its `units` when
+the case gave any; `t` carries both. So a figure is titled with the field's
+description, each subplot with its variable's, the axes and the time legend with
+their units, and `--list` prints all of it -- including for the groups this
+script does not plot, such as a field model's (which also carries a `label`).
+Where an attribute is absent the bare name is used, which is what `x` gets today.
+
 `u_star` is written for every run with `PolynomialDegree >= 1` regardless of
 whether `Superconvergent` was set: the flag controls whether the *method* uses
 the reconstruction, not whether it is computed. So its presence here says
@@ -102,9 +111,41 @@ def attr(var, name, default=""):
     return getattr(var, name, default)
 
 
+def description(obj):
+    """What the file says *obj* is, or "".
+
+    The writer spells it `description` everywhere but the `Grid` group and its
+    `PolyOrder`, which carry `Description`. `long_name` is the CF spelling, read
+    so that a file written by anything else is labelled too.
+    """
+    for key in ("description", "Description", "long_name"):
+        text = attr(obj, key)
+        if text:
+            return str(text)
+    return ""
+
+
 def label(name, var):
+    """`name [units]`, or `name` when the file records no units."""
     units = attr(var, "units")
     return f"{name} [{units}]" if units else name
+
+
+def axis_label(nc, name):
+    """The label for the `t` or `x` axis, from that variable's own attributes."""
+    return label(name, nc.variables[name])
+
+
+def time_text(nc, value):
+    """`t = 0.5 s`, with the units `t` carries."""
+    units = attr(nc.variables["t"], "units")
+    return f"t = {value:g} {units}" if units else f"t = {value:g}"
+
+
+def headed(name, obj):
+    """`name -- description`, or `name` alone when there is no description."""
+    text = description(obj)
+    return f"{name} -- {text}" if text else name
 
 
 def cell_boundaries(nc):
@@ -121,41 +162,62 @@ def mark_cells(ax, boundaries):
 
 
 def describe(nc, path):
-    """--list: everything the file holds, and anything this script cannot place."""
-    t = np.asarray(nc.variables["t"][:])
-    x = np.asarray(nc.variables["x"][:])
+    """--list: everything the file holds, as the file describes it."""
+    t_var, x_var = nc.variables["t"], nc.variables["x"]
+    t = np.asarray(t_var[:])
+    x = np.asarray(x_var[:])
     groups = variable_groups(nc)
     aux, scalars = root_series(nc)
     boundaries = cell_boundaries(nc)
 
+    def units(var):
+        text = attr(var, "units")
+        return f" [{text}]" if text else ""
+
+    def note(var):
+        text = description(var)
+        return f"   -- {text}" if text else ""
+
     print(f"{path}")
-    print(f"  {len(t)} timeslices, t = {t[0]:g} .. {t[-1]:g}")
-    print(f"  {len(x)} output points, x = {x[0]:g} .. {x[-1]:g}")
+    print(f"  {len(t)} timeslices, t = {t[0]:g} .. {t[-1]:g}{units(t_var)}{note(t_var)}")
+    print(f"  {len(x)} output points, x = {x[0]:g} .. {x[-1]:g}{units(x_var)}{note(x_var)}")
     if boundaries is not None:
-        order = nc.groups["Grid"].variables["PolyOrder"][...]
-        print(f"  {len(boundaries) - 1} cells, PolynomialDegree = {int(order)}")
+        grid = nc.groups["Grid"]
+        order = grid.variables["PolyOrder"]
+        print(f"  {len(boundaries) - 1} cells, PolynomialDegree = {int(order[...])}"
+              f"{note(order)}")
 
     for name in groups:
         grp = nc.groups[name]
-        fields = " ".join(f for f in FIELDS if f in grp.variables)
-        print(f"  variable {name!r}: {fields}"
-              f"{'   -- ' + attr(grp, 'description') if attr(grp, 'description') else ''}")
+        print(f"  variable {name!r}{note(grp)}")
+        for field in (f for f in FIELDS if f in grp.variables):
+            var = grp.variables[field]
+            print(f"    {field:<7}{units(var)}{note(var)}")
     for name in aux:
-        print(f"  auxiliary {name!r}   -- {attr(nc.variables[name], 'description')}")
+        var = nc.variables[name]
+        print(f"  auxiliary {name!r}{units(var)}{note(var)}")
     for name in scalars:
-        print(f"  scalar    {name!r}   -- {attr(nc.variables[name], 'description')}")
+        var = nc.variables[name]
+        print(f"  scalar    {name!r}{units(var)}{note(var)}")
 
-    # Said rather than skipped. A case's own diagnostics land in groups of their
-    # own, and the adjoint groups would too if WriteAdjoints() were enabled; this
-    # script plots neither, and silence would read as "the file has nothing else".
-    unplotted = sorted(set(nc.groups) - set(groups) - {"Grid"})
-    if unplotted:
-        print(f"  not plotted: {', '.join(unplotted)} "
-              "(a case's diagnostics, or adjoint output)")
+    # Listed rather than skipped. A case's own diagnostics, a field model's
+    # group and the adjoint groups all land here; this script plots none of
+    # them, and silence would read as "the file has nothing else".
+    for name in sorted(set(nc.groups) - set(groups) - {"Grid"}):
+        grp = nc.groups[name]
+        tag = attr(grp, "label")
+        print(f"  not plotted: group {name!r}{f' ({tag})' if tag else ''}{note(grp)}")
+        for vname, var in grp.variables.items():
+            print(f"    {vname}{units(var)}{note(var)}")
 
 
 def plot_fields(nc, groups, fields, indices, mark, times):
-    """One figure per field, one subplot per variable."""
+    """One figure per field, one subplot per variable.
+
+    The figure is titled with the field's description ("Flux") and each subplot
+    with its variable's ("electron density"), so the labels say whatever the
+    physics case declared.
+    """
     x = np.asarray(nc.variables["x"][:])
     boundaries = cell_boundaries(nc) if mark else None
 
@@ -169,22 +231,31 @@ def plot_fields(nc, groups, fields, indices, mark, times):
             continue
 
         fig, axes = plt.subplots(len(present), 1, sharex=True, squeeze=False,
-                                 figsize=(8, 2.6 * len(present)))
+                                 figsize=(8, 2.8 * len(present)))
         fig.canvas.manager.set_window_title(field)
         for ax, name in zip(axes[:, 0], present):
-            var = nc.groups[name].variables[field]
+            grp = nc.groups[name]
+            var = grp.variables[field]
             for i in indices:
                 ax.plot(x, np.asarray(var[i, :]),
-                        label=f"t = {times[i]:g}",
+                        label=time_text(nc, times[i]),
                         alpha=1.0 if len(indices) == 1 else 0.7)
             mark_cells(ax, boundaries)
             ax.set_ylabel(label(name, var))
+            if description(grp):
+                ax.set_title(description(grp), fontsize="medium")
             # The legend is the timeslice list, so it is noise for a single one:
             # the time is in the figure title instead.
             if len(indices) > 1:
                 ax.legend(fontsize="small", ncols=2)
-        axes[-1, 0].set_xlabel("x")
-        title = f"{field}" if len(indices) > 1 else f"{field} at t = {times[indices[0]]:g}"
+        axes[-1, 0].set_xlabel(axis_label(nc, "x"))
+
+        # Every group writes the same description for a given field, so the
+        # first one present speaks for the figure.
+        what = description(nc.groups[present[0]].variables[field])
+        title = f"{what} ({field})" if what else field
+        if len(indices) == 1:
+            title += f" at {time_text(nc, times[indices[0]])}"
         fig.suptitle(title)
         fig.tight_layout()
 
@@ -197,18 +268,23 @@ def plot_aux(nc, names, indices, mark, times):
     boundaries = cell_boundaries(nc) if mark else None
 
     fig, axes = plt.subplots(len(names), 1, sharex=True, squeeze=False,
-                             figsize=(8, 2.6 * len(names)))
+                             figsize=(8, 2.8 * len(names)))
     fig.canvas.manager.set_window_title("auxiliary")
     for ax, name in zip(axes[:, 0], names):
         var = nc.variables[name]
         for i in indices:
-            ax.plot(x, np.asarray(var[i, :]), label=f"t = {times[i]:g}")
+            ax.plot(x, np.asarray(var[i, :]), label=time_text(nc, times[i]))
         mark_cells(ax, boundaries)
         ax.set_ylabel(label(name, var))
+        if description(var):
+            ax.set_title(description(var), fontsize="medium")
         if len(indices) > 1:
             ax.legend(fontsize="small", ncols=2)
-    axes[-1, 0].set_xlabel("x")
-    fig.suptitle("auxiliary variables")
+    axes[-1, 0].set_xlabel(axis_label(nc, "x"))
+    title = "auxiliary variables"
+    if len(indices) == 1:
+        title += f" at {time_text(nc, times[indices[0]])}"
+    fig.suptitle(title)
     fig.tight_layout()
 
 
@@ -218,13 +294,15 @@ def plot_scalars(nc, names, times):
         print("note: this run has no scalars", file=sys.stderr)
         return
     fig, axes = plt.subplots(len(names), 1, sharex=True, squeeze=False,
-                             figsize=(8, 2.2 * len(names)))
+                             figsize=(8, 2.4 * len(names)))
     fig.canvas.manager.set_window_title("scalars")
     for ax, name in zip(axes[:, 0], names):
         var = nc.variables[name]
         ax.plot(times, np.asarray(var[:]), marker=".")
         ax.set_ylabel(label(name, var))
-    axes[-1, 0].set_xlabel("t")
+        if description(var):
+            ax.set_title(description(var), fontsize="medium")
+    axes[-1, 0].set_xlabel(axis_label(nc, "t"))
     fig.suptitle("scalars")
     fig.tight_layout()
 
