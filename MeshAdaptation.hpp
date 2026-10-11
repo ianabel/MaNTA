@@ -54,6 +54,52 @@ enum class GradingVerdict
     GradeUpper,
 };
 
+// What the sensor made of one end of the mesh, read on its own.
+enum class EndReading
+{
+    Smooth,
+    Rough,
+    Undecidable, // no reference the end can fairly be compared against
+};
+
+// What an end's rate was compared against. Which one depends on the widths,
+// because a smooth cell reads smoother the narrower it is, while a singular
+// one reads the same at every width -- the spectrum of x^a on [0, h] is h^a
+// times its spectrum on [0, 1]. Comparing cells of different widths therefore
+// measures the mesh as much as the solution.
+enum class EndReference
+{
+    // The median over interior cells within a factor 2 of the end cell's width.
+    // On a uniform mesh that is every interior cell, which is the comparison
+    // this driver has always made, unchanged.
+    Peers,
+    // The inward neighbour, for an end narrower than it by 1.5x or more -- a
+    // graded end, which has no peers. A smooth function reads *smoother* in the
+    // narrower cell, so neighbour / end < 1, while a singularity reads rougher:
+    // a ratio set by the grading ratio alone, at every depth of grading -- 1.69,
+    // 1.42 and 1.16 at ratios 0.5, 0.3 and 0.1 for x^(4/3), and at least 1.36 on
+    // solver output (MESH-REFINEMENT.md section 14). So the test is a sign with a
+    // margin, ratio > 1 + margin, plus a guard on the end's own rate; see
+    // gradingDecision. A gradedMeshPoints layer at ratio 0.5 has a neighbour no
+    // wider than its wall cell, so its end is judged against neither.
+    Neighbour,
+    // Neither applies: a wide end on a mesh with too few cells like it.
+    None,
+};
+
+struct EndDecision
+{
+    EndReading reading = EndReading::Smooth;
+    EndReference reference = EndReference::Peers;
+    // The rate compared against, capped like every rate here, and the ratio
+    // reference / end that was tested: against `threshold` for Peers, against
+    // 1 + margin for Neighbour. Zero for None.
+    double referenceRate = 0.0;
+    double ratio = 0.0;
+    // How many interior cells made up the Peers median.
+    size_t peers = 0;
+};
+
 // What the sensor concluded, and the numbers behind it, so a caller can log or
 // test the reasoning rather than just the answer.
 struct GradingDecision
@@ -77,7 +123,21 @@ struct GradingDecision
     // all.
     double lowerRatio = 0.0;
     double upperRatio = 0.0;
+
+    // Each end read on its own, which is what a driver starting from a
+    // non-uniform mesh acts on: it may grade both, or neither, or leave an end it
+    // could not judge. `verdict` above is the single end a uniform start grades,
+    // and on a uniform mesh lowerRatio/upperRatio and the verdict are exactly
+    // what they were before these were added.
+    EndDecision lowerEnd;
+    EndDecision upperEnd;
 };
+
+// The margin a graded end's neighbour test asks for, ratio > 1 + margin. Set
+// from the measurement in MESH-REFINEMENT.md section 14: guarded, smooth graded
+// ends read at most 1.00 and singular ones at least 1.36, so anything in
+// [0, 0.36) separates them and 0.2 sits in the middle.
+inline constexpr double defaultNeighbourMargin = 0.2;
 
 // Should this mesh be graded, and at which end?
 //
@@ -96,12 +156,22 @@ struct GradingDecision
 //
 // Requires at least 3 cells, so that there is an interior to compare against, and
 // k >= 2 from the sensor itself.
-GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold);
+//
+// Each end is compared against cells of its own width (EndReference above), so
+// a non-uniform mesh is read fairly; on a uniform one every interior cell is a
+// peer and the result is the comparison this always made.
+GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold,
+                                double neighbourMargin = defaultNeighbourMargin);
 
 // The same rule over rates already measured, at degree k -- which is what the
 // rule is, and what makes it testable on spectra no assigned function produces.
 // Every rate is compared capped at measurableDecayRate(k): above it nothing is
-// measured, only round-off on one side of the floor or the other.
+// measured, only round-off on one side of the floor or the other. `widths` is
+// one per cell; the overload without it reads the cells as equally wide.
+GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
+                                std::vector<double> const &widths,
+                                unsigned int k, double threshold,
+                                double neighbourMargin = defaultNeighbourMargin);
 GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
                                 unsigned int k, double threshold);
 
@@ -144,22 +214,29 @@ double gradingLayerFraction(GradingDecision const &decision,
 // Member order is load-bearing: `solver` holds a reference to `*grid`, and
 // members are destroyed in reverse declaration order, so declaring the grid first
 // is what makes the solver die before the mesh it points into. `grid` is always
-// owned here even when no grading happened -- a copy of the caller's uniform mesh
-// -- so the lifetime rule is the same either way rather than depending on the
+// owned here even when no grading happened -- a copy of the caller's mesh -- so the lifetime rule is the same either way rather than depending on the
 // verdict.
 struct AdaptiveMeshResult
 {
     std::unique_ptr<Grid> grid;
     std::unique_ptr<SystemSolver> solver;
     GradingDecision decision;
-    unsigned int gradingAttempts = 0; // 0 when the mesh was left uniform
+    unsigned int gradingAttempts = 0; // 0 when the mesh was left as it started
 };
 
 // Solve, decide, regrade, then adapt the degree: the p -> h -> p sequence.
 //
-// One solve at `k0` on the caller's uniform mesh, which is both the first `p`
-// (k0 >= 3 is what makes the decision trustworthy) and the sample the decision is
-// read from. Then, if an end is rough, the same cell count regraded towards it.
+// One solve at `k0` on the caller's mesh, which is both the first `p` (k0 >= 3 is
+// what makes the decision trustworthy) and the sample the decision is read from.
+// Then, if an end is rough, a regrade, whose kind depends on what the starting
+// mesh is (docs/adaptivity.rst):
+//
+//  * uniform: the same cell count regraded towards the rougher end;
+//  * graded (GradedGridBoundary) or explicit (GridPoints, a restart file's
+//    mesh): every face kept, and each rough end cell split into a geometric
+//    layer -- of the configured layer's size, or GradingCells / 4 -- so the
+//    count grows.
+//
 // Then runAdaptiveDegree to `DegreeTolerance` on whichever mesh won.
 //
 // **A grading that fails to solve is a rejected step, not an error.** Section 9
@@ -170,7 +247,7 @@ struct AdaptiveMeshResult
 // back to the uniform mesh and says so. A driver without that would die on a
 // third of the problems it is pointed at.
 //
-// The case must have been built against `uniform`. Each graded mesh, and the
+// The case must have been built against `start`. Each graded mesh, and the
 // degree loop's levels, are new evaluation plans, so the case follows its
 // RegridPolicy through PhysicsInstance::solverFor, and a Fixed one is refused
 // before the sampling solve; see DegreeAdaptation.hpp.
@@ -178,7 +255,7 @@ struct AdaptiveMeshResult
 // Throws std::invalid_argument for k0 < 3.
 AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
                                    PhysicsInstance &physics,
-                                   Grid const &uniform,
+                                   Grid const &start,
                                    unsigned int k0,
                                    double tFinal);
 

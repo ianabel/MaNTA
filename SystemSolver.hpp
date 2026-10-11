@@ -651,27 +651,39 @@ class SystemSolver
         //   Constant   tau everywhere, as given (the default).
         //   Diffusive  one-sided, per variable, per face of each cell I:
         //                tau_{I,f,v} = tau * ( kappa_v(f) / h_I + floor * max_f' kappa_v(f') / h )
-        //              with kappa_v = |d sigma_hat_v / d q_v| evaluated at the face
-        //              from the trace (u = lambda, or the Dirichlet datum) and the
-        //              cell's own one-sided q, sigma and aux. `tau` is then a
-        //              dimensionless multiplier, and the floor is a fraction of the
-        //              largest kappa/h on the grid, so neither depends on units.
+        //              with kappa_v = |d sigma_hat_v / d q_v| at the face. `tau` is
+        //              then a dimensionless multiplier, and the floor is a fraction
+        //              of the largest kappa/h on the grid, so neither depends on
+        //              units.
+        //
+        // TauKappa says where kappa at a face comes from:
+        //
+        //   Nodal  the cell's own d sigma_hat / d q at the physics nodes -- where
+        //          the residual and the Jacobian already evaluate the case --
+        //          extrapolated to its two faces through the cell's interpolant
+        //          (nodalKappaOverH). It adds no point set to the plan.
+        //   Face   evaluated at the face itself, from the trace (u = lambda, or the
+        //          Dirichlet datum) and the cell's own one-sided q, sigma and aux:
+        //          one more batched call, on the 2 nCells face points.
         //
         // Diffusive tau is a function of the state, and TauUpdate says when it is
         // re-evaluated:
         //
         //   Residual          at every residual, at that residual's state. The
         //                     Jacobian carries d tau / dy, finite-differenced per
-        //                     component of the face state -- one batched face
-        //                     derivative call per component per Jacobian build.
-        //                     Omitted: its dependence on the scalars and the field
-        //                     unknowns, and the floor's through the grid maximum.
-        //   ContinuationStep  once per pseudo-transient continuation step, from
-        //                     the state the step starts at, and frozen through its
-        //                     Newton solve; the Jacobian is then exact for the
-        //                     frozen system with no extra terms. Steady solves
-        //                     only: initialize() refuses it for a time march,
-        //                     which would freeze tau at the initial condition.
+        //                     component of the state kappa is read from -- one
+        //                     batched derivative call per component per Jacobian
+        //                     build. Omitted: its dependence on the scalars and the
+        //                     field unknowns, and the floor's through the grid
+        //                     maximum.
+        //   ContinuationStep  once per pseudo-transient continuation step, and
+        //                     frozen through its Newton solve; the Jacobian is then
+        //                     exact for the frozen system with no extra terms. Under
+        //                     Face, from the state the step starts at; under Nodal,
+        //                     from the derivatives the most recent Jacobian build
+        //                     took, which costs no evaluation at all. Steady solves
+        //                     only: initialize() refuses it for a time march, which
+        //                     would freeze tau at the initial condition.
         //   JacobianBuild     as ContinuationStep, and also at every Jacobian
         //                     build, from the state it is built at: tau is fixed
         //                     across the Newton iterations that share a Jacobian
@@ -683,15 +695,19 @@ class SystemSolver
         // on the state is not in it, and the gradient would be silently wrong.
         enum class TauScaling { Constant, Diffusive };
         enum class TauUpdate { Residual, ContinuationStep, JacobianBuild };
+        enum class TauKappa { Nodal, Face };
         void setTauScaling(TauScaling mode, double floorFraction,
-                           TauUpdate update = TauUpdate::Residual)
+                           TauUpdate update = TauUpdate::Residual,
+                           TauKappa kappa = TauKappa::Nodal)
         {
             tauScaling = mode;
             tauFloorFraction = floorFraction;
             tauUpdate = update;
+            tauKappa = kappa;
         }
         TauScaling getTauScaling() const { return tauScaling; }
         TauUpdate getTauUpdate() const { return tauUpdate; }
+        TauKappa getTauKappa() const { return tauKappa; }
 
         void setInputFile(std::string const &fn) { inputFilePath = fn; };
 
@@ -1764,8 +1780,17 @@ class SystemSolver
         double tauc;
         TauScaling tauScaling = TauScaling::Constant;
         TauUpdate tauUpdate = TauUpdate::Residual;
+        TauKappa tauKappa = TauKappa::Nodal;
         double tauFloorFraction = 1e-3;
         Matrix tauRes, tauJac;
+
+        // kappa/h on every face from the derivatives the last Jacobian build
+        // took, for a tau held fixed under TauKappa::Nodal. Cleared in the
+        // unconditional part of initialize(), so a run never starts from the
+        // previous run's; until the first build of a run, freezeTauAt evaluates
+        // it at the state it is given instead.
+        Matrix jacobianKappaOverH;
+        bool haveJacobianKappa = false;
 
         // Whether tau is re-evaluated inside residual() and the Jacobian build,
         // as opposed to being set from outside -- by the continuation loop, under
@@ -1784,11 +1809,19 @@ class SystemSolver
         {
             return tauScaling == TauScaling::Diffusive && tauUpdate == TauUpdate::JacobianBuild;
         }
-        // Whether tau evaluates the physics on the faces (faceStates) at all.
-        // The one predicate the evaluation plan keys the TauFaces sites off, so a
-        // tau that stops evaluating on the faces changes this line and the plan
-        // follows; EvaluationPlanTests.cpp fails if the two ever disagree.
-        bool tauEvaluatesFaces() const { return tauScaling == TauScaling::Diffusive; }
+        // Whether tau evaluates the physics on the faces (faceStates), or reads
+        // kappa off the physics nodes. The two predicates the evaluation plan
+        // keys the TauFaces and TauNodes sites off, so a change to where tau
+        // evaluates changes these lines and the plan follows;
+        // EvaluationPlanTests.cpp fails if the two ever disagree.
+        bool tauEvaluatesFaces() const
+        {
+            return tauScaling == TauScaling::Diffusive && tauKappa == TauKappa::Face;
+        }
+        bool tauEvaluatesNodes() const
+        {
+            return tauScaling == TauScaling::Diffusive && tauKappa == TauKappa::Nodal;
+        }
 
         // The state on each of the 2 nCells faces as its cell sees it; see
         // faceTau.
@@ -1801,6 +1834,27 @@ class SystemSolver
         // |d sigma_hat_v / d q_v| / h_I on each face, (nVars x 2 nCells): one
         // batched ComputePhysicsDerivatives on the face points.
         Matrix faceKappaOverH(FaceStates const &faces, Time tEval);
+
+        // kappa/h on each face, (nVars x 2 nCells), from d sigma_hat_v / d q_v at
+        // the physics nodes `points` -- cell-major, the same number per cell --
+        // as dSigma_vals holds them. Each cell's interpolant through its nodal
+        // values is evaluated at its two faces. Where that comes out negative
+        // and every nodal value is positive, the interpolant of log kappa is
+        // used instead, which cannot reach zero; where some nodal value is not
+        // positive -- a Newton iterate, say -- the face gets 0 and the floor in
+        // tauFromKappa keeps its tau positive.
+        //
+        // With dkh, also d kh(v, p) / d (d sigma_hat_v / d q_v at node m of p's
+        // cell), as dkh(v, p * perCell + m): what the Jacobian chains d tau / dy
+        // through.
+        Matrix nodalKappaOverH(std::vector<Position> const &points,
+                               GlobalStateMatrix &dSigma_vals, Matrix *dkh = nullptr) const;
+        // nodalKappaOverH at the state Y: one batched ComputePhysicsDerivatives on
+        // the physics nodes.
+        Matrix nodalKappaOverHAt(DGSoln const &Y, Time tEval);
+        // A boundary face carrying a flux condition takes the larger of its own
+        // kappa and its cell's other face; with dkh, the derivative follows.
+        void applyFluxBoundaryKappa(Matrix &kh, Matrix *dkh = nullptr, Index perCell = 0) const;
         // tau from kappa/h: tauc * (kh + floor * max kh), per variable.
         Matrix tauFromKappa(Matrix const &kh) const;
 
@@ -1810,18 +1864,35 @@ class SystemSolver
 
         // What the Jacobian needs for d tau / dy. tau enters the residual only as
         // tau_f (u_face - lambda_f), in the u rows and the trace rows, so its
-        // derivative contributes jump_f * d tau_f / d s_c for each component c of
-        // the face state s: the u of each variable (reached through lambda), and
-        // the q, sigma and aux values (reached through the cell's coefficients).
+        // derivative contributes jump_f * d tau_f / dy.
+        //
+        // Under TauKappa::Face that runs through each component c of the face
+        // state s: the u of each variable (reached through lambda), and the q,
+        // sigma and aux values (reached through the cell's coefficients), so
+        // dTau holds d tau_f / d s_c. Under TauKappa::Nodal tau_f depends only on
+        // its own cell's coefficients, so dTauCell holds the whole derivative
+        // directly: per face p, (nVars x the cell's local columns), in MBlocks'
+        // column layout.
         struct TauJacobian
         {
-            Matrix jump;              // (nVars x 2 nCells): u_face - lambda (or g_D)
-            std::vector<Matrix> dTau; // per component, (nVars x 2 nCells)
+            Matrix jump;                  // (nVars x 2 nCells): u_face - lambda (or g_D)
+            std::vector<Matrix> dTau;     // Face: per component, (nVars x 2 nCells)
+            std::vector<Matrix> dTauCell; // Nodal: per face
         };
+        // u_face - lambda on every face, with the Dirichlet datum for lambda
+        // where the trace row is not solved.
+        Matrix faceJumps(DGSoln const &Y, Time tEval) const;
         TauJacobian faceTauJacobian(DGSoln const &Y, FaceStates const &faces,
                                     Matrix const &kh, Time tEval);
+        // The nodal counterpart, from the derivatives the Jacobian build has just
+        // taken at `nodes`: kappa/h into kh, and d tau / dy by a forward
+        // difference in each component of the nodal state -- every node at once,
+        // since kappa at a node depends only on that node's state.
+        TauJacobian nodalTauJacobian(DGSoln const &Y, PhysicsNodes const &nodes,
+                                     GlobalStateMatrix &dSigma_vals, Matrix &kh, Time tEval);
 
-        // Set both copies of tau from Y, for a frozen tau.
+        // Set both copies of tau from Y, for a frozen tau. Under TauKappa::Nodal,
+        // from the last Jacobian build's kappa when there is one.
         void freezeTauAt(DGSoln const &Y, Time tEval);
 
         // Write tau into every block that carries it. The residual's set is

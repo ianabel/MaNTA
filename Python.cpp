@@ -347,6 +347,7 @@ PYBIND11_MODULE(_manta, m) {
       .value("Jacobian", EvaluationKind::Jacobian)
       .value("InitialCondition", EvaluationKind::InitialCondition)
       .value("TauFaces", EvaluationKind::TauFaces)
+      .value("TauNodes", EvaluationKind::TauNodes)
       .value("ScalarConstraint", EvaluationKind::ScalarConstraint)
       .value("ScalarJacobian", EvaluationKind::ScalarJacobian)
       .value("ScalarCoupling", EvaluationKind::ScalarCoupling)

@@ -316,13 +316,119 @@ def test_a_degree_below_three_is_refused(tmp_path):
         runner.configure(mesh_config(tmp_path, PolynomialDegree=2))
 
 
-def test_deciding_the_mesh_twice_is_refused(tmp_path):
-    runner = MaNTA.Runner(SineSource())
-    with pytest.raises(RuntimeError, match="GradedGridBoundary"):
-        runner.configure(mesh_config(tmp_path, GradedGridBoundary=True))
+GRADED_LOWER = dict(GradedGridBoundary=True, GradingEnd="Lower", GradingCells=4,
+                    LowerBoundaryFraction=0.2)
+GIVEN_POINTS = [0.0, 0.08, 0.17, 0.3, 0.45, 0.5, 0.62, 0.8, 0.9, 1.0]
 
-    with pytest.raises(RuntimeError, match="GridPoints"):
-        runner.configure(mesh_config(tmp_path, GridPoints=[0.0, 0.5, 1.0]))
+
+def adapted(case, tmp_path, **extra):
+    runner = MaNTA.Runner(case())
+    runner.configure(mesh_config(tmp_path, **extra))
+    runner.run_ss()
+    x = np.linspace(0.0, 1.0, 201)
+    u = np.asarray(runner.getSolution(0, list(x))).reshape(-1)
+    exact = case.exact(x)
+    error = np.sum(np.abs(u - exact)) / np.sum(np.abs(exact))
+    return np.asarray(runner.getCellBoundaries()), error
+
+
+def configured_mesh(tmp_path, **extra):
+    """The mesh a configuration builds, read off a run that does not adapt it."""
+    runner = MaNTA.Runner(SineSource())
+    runner.configure(mesh_config(tmp_path, MeshAdaptation=False, **extra))
+    return np.asarray(runner.getCellBoundaries())
+
+
+def test_a_graded_start_is_graded_harder_at_a_singular_end(tmp_path):
+    """A GradedGridBoundary mesh is a starting point, and keeps every face it has.
+
+    The graded lower end reads rough against its wider neighbour -- a singular
+    cell reads equally rough at every width, so grading never makes it look
+    resolved -- and its wall cell is split into a layer of the configured size,
+    4 cells at ratio 0.3. That is exactly the wall cell squaring the ratio would
+    give, without moving the faces squaring moves: on Shestakov those were the
+    ones around the source edge, and moving them cost 15-19x. The count grows by 3.
+    """
+    start = configured_mesh(tmp_path, **GRADED_LOWER)
+    points, error = adapted(AxisSingular, tmp_path, **GRADED_LOWER)
+
+    assert len(points) == len(start) + 3
+    for face in start:
+        assert np.any(points == face), f"the configured face at {face} moved"
+    assert points[1] - points[0] == pytest.approx((start[1] - start[0]) * 0.3**3)
+    assert error < 1e-4, f"relative L1 {error:.3e}"
+
+
+def test_a_graded_start_on_a_smooth_problem_is_kept(tmp_path):
+    """The negative control: the narrow cells of a graded end read *smoother*
+    than their wider neighbour on a smooth solution, so nothing is regraded."""
+    start = configured_mesh(tmp_path, **GRADED_LOWER)
+    points, error = adapted(SineSource, tmp_path, **GRADED_LOWER)
+    assert np.array_equal(points, start), f"a smooth problem's mesh moved: {points}"
+    assert error < 1e-7
+
+
+def test_a_rough_ungraded_end_is_added_to_a_graded_start(tmp_path):
+    """Graded at the wrong end: the singular lower end cell is split into a layer
+    of the configured size -- with the default GradingCells, half of 10 -- and the
+    graded upper end, which reads smooth, keeps every face it had."""
+    upper = dict(GradedGridBoundary=True, GradingEnd="Upper", UpperBoundaryFraction=0.2)
+    start = configured_mesh(tmp_path, **upper)
+    points, _ = adapted(AxisSingular, tmp_path, **upper)
+    assert len(points) == len(start) + 4
+    for face in start:
+        assert np.any(points == face), f"the configured face at {face} moved"
+    assert points[1] - points[0] == pytest.approx((start[1] - start[0]) * 0.3**4)
+
+
+def test_a_second_pass_from_a_deeply_graded_mesh_leaves_the_end_alone(tmp_path):
+    """A restart from a previous adaptation's output is an explicit start whose
+    wall cell may already be past the 1e-5 floor. That end is left as given,
+    where the floor's ratio used to come out above 1 and end the run."""
+    first, _ = adapted(AxisSingular, tmp_path)
+    assert np.diff(first)[0] < 1e-5, "the fixture's first pass did not grade that deep"
+    second, error = adapted(AxisSingular, tmp_path, GridPoints=list(first))
+    assert np.array_equal(second, first)
+    assert error < 1e-4
+
+
+def test_a_wall_cell_near_the_floor_is_split_shallower_or_left(tmp_path):
+    """The 1e-5 floor on a wall cell, at its two edges.
+
+    A wall cell twice the floor can only be split into 2 cells at ratio 1/2:
+    a deeper split would need a ratio above 1/2, which makes the cells beside the
+    wall narrower than it and below the floor. A wall cell already at the floor
+    is left as it is; it used to be split at "ratio 1", into coincident faces.
+    """
+    deep = dict(GradedGridBoundary=True, GradingEnd="Lower", GradingCells=5,
+                GradingRatio=0.1)
+    start = configured_mesh(tmp_path, LowerBoundaryFraction=0.2, **deep)
+    points, _ = adapted(AxisSingular, tmp_path, LowerBoundaryFraction=0.2, **deep)
+    assert len(points) == len(start) + 1
+    assert np.diff(points).min() >= 1e-5 * (1 - 1e-9)
+
+    at_floor = configured_mesh(tmp_path, LowerBoundaryFraction=0.1, **deep)
+    assert at_floor[1] == pytest.approx(1e-5)
+    points, _ = adapted(AxisSingular, tmp_path, LowerBoundaryFraction=0.1, **deep)
+    assert np.array_equal(points, at_floor)
+
+
+def test_an_explicit_start_keeps_every_boundary_and_splits_the_rough_end(tmp_path):
+    """GridPoints say where faces are and not why, so none of them moves: the
+    singular end cell is split into GradingCells (default 4) cells at GradingRatio
+    (default 0.3), and the count grows by three."""
+    points, error = adapted(AxisSingular, tmp_path, GridPoints=GIVEN_POINTS)
+    assert len(points) == len(GIVEN_POINTS) + 3
+    for b in GIVEN_POINTS:
+        assert np.any(points == b), f"given boundary {b} was moved or dropped"
+    assert points[1] - points[0] == pytest.approx(0.08 * 0.3**3)
+    assert error < 1e-3, f"relative L1 {error:.3e}"
+
+
+def test_an_explicit_start_on_a_smooth_problem_is_kept(tmp_path):
+    points, error = adapted(SineSource, tmp_path, GridPoints=GIVEN_POINTS)
+    assert np.array_equal(points, np.asarray(GIVEN_POINTS))
+    assert error < 1e-7
 
 
 def test_mesh_adaptation_is_refused_by_run(tmp_path):

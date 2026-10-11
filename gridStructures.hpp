@@ -302,3 +302,104 @@ inline std::vector<Grid::Position> gradedMeshPoints(
 
 #include "Basis.hpp"
 
+
+// The same mesh at another cell count, by the map rule: read the boundaries of
+// `mesh` as a piecewise-linear map x(xi) with x(i / N) = x_i, and sample it at
+// xi = j / nCells. It is what a GridLadder rung uses for a mesh that is a list of
+// boundaries rather than a recipe -- GridPoints, or a restart file's mesh -- and
+// only when the configuration opts in, because a list does not say which of its
+// properties matter and this keeps some and not others:
+//
+//  * When nCells divides N the result is every (N / nCells)-th boundary, exactly,
+//    so the coarse mesh is nested in the fine one and a warm start passes up the
+//    ladder without projection error. The position index is computed in integer
+//    arithmetic for that reason: j N / nCells is exact, so a nested sample lands
+//    on the stored double rather than near it.
+//  * Otherwise it keeps the *density* -- each cell covers the same share of xi --
+//    and moves every interior boundary. A boundary placed on a coefficient jump
+//    or a source edge is not kept, and a rung that puts the jump inside a cell
+//    converges more slowly. The final rung is the configured mesh, so that costs
+//    Newton iterations, never accuracy.
+//  * It does not keep the width of the wall cell of a graded layer: merging cells
+//    widens it, which a GradedGridBoundary recipe asked for fewer cells does too,
+//    though by a different amount.
+//
+// Monotone by construction, and both ends are the mesh's own.
+inline std::vector<Grid::Position> mappedMeshPoints(Grid const &mesh, Grid::Index nCells)
+{
+	if (nCells == 0)
+		throw std::invalid_argument("A mapped mesh needs at least one cell.");
+
+	const Grid::Index N = mesh.getNCells();
+	auto boundary = [&](Grid::Index i)
+	{ return i < N ? mesh[i].x_l : mesh[N - 1].x_u; };
+
+	std::vector<Grid::Position> points;
+	points.reserve(nCells + 1);
+	for (Grid::Index j = 0; j <= nCells; ++j)
+	{
+		const Grid::Index whole = (j * N) / nCells;
+		const Grid::Index rest = (j * N) % nCells;
+		if (rest == 0)
+			points.push_back(boundary(whole));
+		else
+		{
+			const double t = static_cast<double>(rest) / static_cast<double>(nCells);
+			points.push_back(boundary(whole) + t * (boundary(whole + 1) - boundary(whole)));
+		}
+	}
+	return points;
+}
+
+// A mesh with its end cell split into a geometric layer of `cells` cells, every
+// other boundary kept bit for bit. This is how MeshAdaptation refines a mesh
+// given as boundaries -- GridPoints, or a restart file's mesh -- where moving a
+// boundary is not allowed: the list does not say why its faces are where they
+// are, and moving the one at Shestakov's source edge (x = 0.1) raised the error
+// from 1.34e-6 to 1.58e-2 (MESH-REFINEMENT.md section 13). So the count grows by
+// cells - 1 instead of being redistributed.
+//
+// The layer is gradedMeshPoints's inside the end cell of width H: boundaries at
+// H * ratio^j from the end for j = cells-1 .. 1, so the cell touching the end is
+// H * ratio^(cells-1) wide, which is what sets the error. Splitting the end
+// cell of a mesh that was already split this way nests, so repeating it is the
+// "split, repeat" of section 8.
+inline std::vector<Grid::Position> subdividedEndPoints(Grid const &mesh, GradedEnd end,
+                                                       Grid::Index cells, double ratio)
+{
+	if (!(ratio > 0.0) || !(ratio < 1.0))
+		throw std::invalid_argument(std::format(
+			"Splitting an end cell needs a ratio strictly between 0 and 1; got {}.", ratio));
+	if (cells < 2)
+		throw std::invalid_argument(std::format(
+			"Splitting an end cell needs at least 2 cells in its place; got {}.", cells));
+
+	const Grid::Index N = mesh.getNCells();
+	std::vector<Grid::Position> points;
+	points.reserve(N + 1 + 2 * (cells - 1));
+
+	const bool lower = end != GradedEnd::Upper;
+	const bool upper = end != GradedEnd::Lower;
+	if (N == 1 && lower && upper)
+		throw std::invalid_argument(
+			"A one-cell mesh has a single end cell, so it cannot be split towards both ends.");
+
+	points.push_back(mesh[0].x_l);
+	if (lower)
+	{
+		const double x0 = mesh[0].x_l, H = mesh[0].h();
+		for (Grid::Index j = cells - 1; j >= 1; --j)
+			points.push_back(x0 + H * std::pow(ratio, static_cast<double>(j)));
+	}
+	for (Grid::Index i = 0; i + 1 < N; ++i)
+		points.push_back(mesh[i].x_u);
+	if (upper)
+	{
+		const double x1 = mesh[N - 1].x_u, H = mesh[N - 1].h();
+		for (Grid::Index j = 1; j < cells; ++j)
+			points.push_back(x1 - H * std::pow(ratio, static_cast<double>(j)));
+	}
+	points.push_back(mesh[N - 1].x_u);
+	return points;
+}
+

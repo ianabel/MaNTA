@@ -483,6 +483,32 @@ EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kP
         }
     }
 
+    // nodalKappaOverH(): on the physics nodes, so a nodal tau adds sites but no
+    // point set. Wherever a Jacobian build has just evaluated the derivatives
+    // there, kappa is read off them and costs nothing.
+    if (tauEvaluatesNodes())
+    {
+        if (tauFollowsResidual())
+        {
+            add(Kind::TauNodes, Entry::ComputePhysicsDerivatives, Cadence::PerResidual, 1,
+                physicsPerCell, physicsNodes);
+            // nodalTauJacobian's forward differences, once per component of the
+            // nodal state.
+            add(Kind::TauNodes, Entry::ComputePhysicsDerivatives, Cadence::PerJacobianBuild,
+                3 * nVars + nAux, physicsPerCell, physicsNodes);
+            // setInitialConditions(), for the initial du/dt solve, which a
+            // steady solve skips.
+            if (!plan.steady)
+                add(Kind::TauNodes, Entry::ComputePhysicsDerivatives, Cadence::OncePerRun, 1,
+                    physicsPerCell, physicsNodes);
+        }
+        else
+            // freezeTauAt() before the run's first Jacobian build; every tau
+            // after that comes off a build's own derivatives.
+            add(Kind::TauNodes, Entry::ComputePhysicsDerivatives, Cadence::OncePerRun, 1,
+                physicsPerCell, physicsNodes);
+    }
+
     // setInitialConditions(): assignSigmaFromFlux's ComputePhysics, and the du/dt
     // solve's unless the run is a steady solve. Listed whether or not a restart
     // will skip the first -- a plan says nothing about the run, so that a restart
@@ -1347,6 +1373,19 @@ void SystemSolver::applyJacobianTau(Matrix const &tau, TauJacobian const *dTau)
                 const Index uRowV = uRow + v * (k + 1);
                 const Index traceV = 2 * v + side;
 
+                // Nodal kappa: tau on this face is a function of this cell's
+                // coefficients alone, and dTauCell already holds its derivative
+                // in MBlocks' column layout. The jump's own phi is the u row's
+                // test function at the face, as for D.
+                if (!dTau->dTauCell.empty())
+                {
+                    const Eigen::Matrix<double, 1, Eigen::Dynamic> g = jump * dTau->dTauCell[p].row(v);
+                    MBlocks[i].middleRows(uRowV, k + 1) += phi * g;
+                    if (traceRow)
+                        CG_cellwise[i].row(traceV) += g;
+                    continue;
+                }
+
                 // Component c: u of variable w, through lambda_w on this face.
                 for (Index w = 0; w < nVars; w++)
                 {
@@ -1448,6 +1487,12 @@ Matrix SystemSolver::faceKappaOverH(FaceStates const &faces, Time tEval)
             kh(v, p) = std::abs(dSigma_vals[v].Derivative()(v, p)) / (I.x_u - I.x_l);
         }
 
+    applyFluxBoundaryKappa(kh);
+    return kh;
+}
+
+void SystemSolver::applyFluxBoundaryKappa(Matrix &kh, Matrix *dkh, Index perCell) const
+{
     // A boundary face carrying a flux condition takes the larger of its own
     // kappa and its cell's other face. There tau has no Dirichlet mismatch to
     // weigh against the flux -- it is only what ties the trace to the cell --
@@ -1456,15 +1501,135 @@ Matrix SystemSolver::faceKappaOverH(FaceStates const &faces, Time tEval)
     // cell is. Measured on a wall-layer case graded towards x = 1, where the
     // axis cell is the coarsest: the axis face's own kappa left that cell at
     // 3.4x a constant tau's error, and this halves the excess.
+    //
+    // Both faces of a cell read the same nodes, so under nodal kappa the face
+    // that wins carries its derivative across with it.
     const Index last = 2 * nCells - 1;
+    auto take = [&](Index v, Index to, Index from)
+    {
+        if (!(kh(v, to) < kh(v, from)))
+            return;
+        kh(v, to) = kh(v, from);
+        if (dkh != nullptr)
+            dkh->block(v, to * perCell, 1, perCell) = dkh->block(v, from * perCell, 1, perCell);
+    };
     for (Index v = 0; v < nVars; v++)
     {
         if (!problem->isLowerBoundaryDirichlet(v))
-            kh(v, 0) = std::max(kh(v, 0), kh(v, 1));
+            take(v, 0, 1);
         if (!problem->isUpperBoundaryDirichlet(v))
-            kh(v, last) = std::max(kh(v, last), kh(v, last - 1));
+            take(v, last, last - 1);
     }
+}
+
+namespace
+{
+// d sigma_hat / d (everything) at `states`, through the one batched derivative
+// entry point every case implements. The source and aux derivatives come with
+// it and are not wanted.
+GlobalStateMatrix sigmaDerivativesAt(TransportSystem *problem, GlobalState const &states,
+                                     std::vector<Position> const &points, Index nCells,
+                                     Index nVars, Index nScalars, Index nAux, Time tEval)
+{
+    // GlobalState's second argument is a per-cell point count minus one.
+    const Index perCellK = static_cast<Index>(points.size()) / nCells - 1;
+    GlobalStateMatrix dSigma_vals(nVars), dSource_vals(nVars), dAux_vals(nAux);
+    for (Index v = 0; v < nVars; v++)
+    {
+        dSigma_vals.add(nCells, perCellK, nVars, nScalars, nAux);
+        dSource_vals.add(nCells, perCellK, nVars, nScalars, nAux);
+    }
+    for (Index a = 0; a < nAux; a++)
+        dAux_vals.add(nCells, perCellK, nVars, nScalars, nAux);
+    problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points,
+                                       tEval);
+    return dSigma_vals;
+}
+} // namespace
+
+Matrix SystemSolver::nodalKappaOverH(std::vector<Position> const &points,
+                                     GlobalStateMatrix &dSigma_vals, Matrix *dkh) const
+{
+    const Index perCell = static_cast<Index>(points.size()) / nCells;
+    Matrix kh(nVars, 2 * nCells);
+    if (dkh != nullptr)
+        dkh->setZero(nVars, 2 * nCells * perCell);
+
+    // The cell's interpolant through its nodes, at each face, in barycentric
+    // form. The physics nodes are Chebyshev points of the first kind, strictly
+    // inside the cell, so no face coincides with a node.
+    Vector w(perCell), ell(perCell);
+    for (Index i = 0; i < nCells; i++)
+    {
+        Interval const &I(grid[i]);
+        const double h = I.x_u - I.x_l;
+        const Position *x = &points[i * perCell];
+        for (Index j = 0; j < perCell; j++)
+        {
+            w(j) = 1.0;
+            for (Index m = 0; m < perCell; m++)
+                if (m != j)
+                    w(j) /= (x[j] - x[m]);
+        }
+
+        for (Index side = 0; side < 2; side++)
+        {
+            const Index p = 2 * i + side;
+            const Position xf = side == 0 ? I.x_l : I.x_u;
+            for (Index j = 0; j < perCell; j++)
+                ell(j) = w(j) / (xf - x[j]);
+            ell /= ell.sum();
+
+            for (Index v = 0; v < nVars; v++)
+            {
+                // Diffusion has d sigma_hat / d q > 0, and tau has to stay
+                // positive. The linear extrapolation is used where it stays
+                // positive; where it does not and every node is positive, log
+                // kappa is extrapolated instead, which cannot reach zero; where
+                // some node is not positive, the face gets 0 and the floor in
+                // tauFromKappa keeps its tau positive. Measured on a wall layer
+                // and on Shestakov's degenerate flux, the log branch takes 2-9%
+                // of faces and the last none.
+                double lowest = std::numeric_limits<double>::infinity();
+                double linear = 0.0, logarithmic = 0.0;
+                for (Index j = 0; j < perCell; j++)
+                {
+                    const double d = dSigma_vals[v].Derivative()(v, i * perCell + j);
+                    lowest = std::min(lowest, d);
+                    linear += ell(j) * d;
+                    if (d > 0.0)
+                        logarithmic += ell(j) * std::log(d);
+                }
+
+                double kappa = 0.0;
+                if (linear > 0.0)
+                {
+                    kappa = linear;
+                    if (dkh != nullptr)
+                        dkh->block(v, p * perCell, 1, perCell) = ell.transpose() / h;
+                }
+                else if (lowest > 0.0)
+                {
+                    kappa = std::exp(logarithmic);
+                    if (dkh != nullptr)
+                        for (Index j = 0; j < perCell; j++)
+                            (*dkh)(v, p * perCell + j) =
+                                kappa * ell(j) / dSigma_vals[v].Derivative()(v, i * perCell + j) / h;
+                }
+                kh(v, p) = kappa / h;
+            }
+        }
+    }
+    applyFluxBoundaryKappa(kh, dkh, perCell);
     return kh;
+}
+
+Matrix SystemSolver::nodalKappaOverHAt(DGSoln const &Y, Time tEval)
+{
+    const PhysicsNodes nodes = physicsNodesAt(Y, tEval);
+    GlobalStateMatrix dSigma_vals =
+        sigmaDerivativesAt(problem, nodes.states, nodes.points, nCells, nVars, nScalars, nAux, tEval);
+    return nodalKappaOverH(nodes.points, dSigma_vals);
 }
 
 Matrix SystemSolver::tauFromKappa(Matrix const &kh) const
@@ -1486,14 +1651,14 @@ Matrix SystemSolver::faceTau(DGSoln const &Y, Time tEval)
 {
     if (tauScaling == TauScaling::Constant)
         return Matrix::Constant(nVars, 2 * nCells, tauc);
+    if (tauKappa == TauKappa::Nodal)
+        return tauFromKappa(nodalKappaOverHAt(Y, tEval));
     return tauFromKappa(faceKappaOverH(faceStates(Y, tEval), tEval));
 }
 
-SystemSolver::TauJacobian SystemSolver::faceTauJacobian(DGSoln const &Y, FaceStates const &faces,
-                                                        Matrix const &kh, Time tEval)
+Matrix SystemSolver::faceJumps(DGSoln const &Y, Time tEval) const
 {
-    TauJacobian out;
-    out.jump = Matrix::Zero(nVars, 2 * nCells);
+    Matrix jump(nVars, 2 * nCells);
     for (Index i = 0; i < nCells; i++)
     {
         Interval const &I(grid[i]);
@@ -1507,11 +1672,24 @@ SystemSolver::TauJacobian SystemSolver::faceTauJacobian(DGSoln const &Y, FaceSta
                 auto const &coeffs = Y.u(v).getCoeff(i).second;
                 for (Index j = 0; j < k + 1; j++)
                     uFace += coeffs(j) * y.getBasis().Evaluate(I, j, x);
-                // faces.states carries lambda, or g_D at a Dirichlet end.
-                out.jump(v, p) = uFace - faces.states.Variable()(v, p);
+                const bool dirichlet =
+                    (side == 0 && I.x_l == grid.lowerBoundary() && problem->isLowerBoundaryDirichlet(v)) ||
+                    (side == 1 && I.x_u == grid.upperBoundary() && problem->isUpperBoundaryDirichlet(v));
+                const double trace = !dirichlet       ? Y.lambda(v)[i + side]
+                                     : side == 0      ? problem->LowerBoundary(v, tEval)
+                                                      : problem->UpperBoundary(v, tEval);
+                jump(v, p) = uFace - trace;
             }
         }
     }
+    return jump;
+}
+
+SystemSolver::TauJacobian SystemSolver::faceTauJacobian(DGSoln const &Y, FaceStates const &faces,
+                                                        Matrix const &kh, Time tEval)
+{
+    TauJacobian out;
+    out.jump = faceJumps(Y, tEval);
 
     // A variable that fell back to the constant (no diffusion anywhere) has a
     // tau that does not move.
@@ -1583,9 +1761,135 @@ SystemSolver::TauJacobian SystemSolver::faceTauJacobian(DGSoln const &Y, FaceSta
     return out;
 }
 
+SystemSolver::TauJacobian SystemSolver::nodalTauJacobian(DGSoln const &Y, PhysicsNodes const &nodes,
+                                                         GlobalStateMatrix &dSigma_vals, Matrix &kh,
+                                                         Time tEval)
+{
+    const Index perCell = static_cast<Index>(nodes.points.size()) / nCells;
+    const Index nPoints = nCells * perCell;
+    Matrix dkh;
+    kh = nodalKappaOverH(nodes.points, dSigma_vals, &dkh);
+
+    TauJacobian out;
+    out.jump = faceJumps(Y, tEval);
+
+    // A variable that fell back to the constant (no diffusion anywhere) has a
+    // tau that does not move.
+    std::vector<bool> scaled(nVars);
+    for (Index v = 0; v < nVars; v++)
+        scaled[v] = kh.row(v).maxCoeff() > 0.0;
+
+    // d (d sigma_hat_v / d q_v) / d s_c at every node, by a forward difference
+    // in each component c of the nodal state -- u, q and sigma of each variable,
+    // then each aux -- with every node perturbed at once: the value at a node
+    // depends only on that node's state, so one batched call per component
+    // covers them all. The scalars and the field unknowns are left out, as is
+    // the floor's dependence on the grid maximum.
+    const Index nComponents = 3 * nVars + nAux;
+    std::vector<Matrix> dd(nComponents, Matrix::Zero(nVars, nPoints));
+    for (Index c = 0; c < nComponents; c++)
+    {
+        GlobalState perturbed = nodes.states;
+        Matrix *field;
+        Index row;
+        if (c < nVars)
+            field = &perturbed.Variable(), row = c;
+        else if (c < 2 * nVars)
+            field = &perturbed.Derivative(), row = c - nVars;
+        else if (c < 3 * nVars)
+            field = &perturbed.Flux(), row = c - 2 * nVars;
+        else
+            field = &perturbed.Aux(), row = c - 3 * nVars;
+
+        Vector delta(nPoints);
+        for (Index m = 0; m < nPoints; m++)
+        {
+            delta(m) = 1e-7 * (1.0 + std::abs((*field)(row, m)));
+            (*field)(row, m) += delta(m);
+        }
+        GlobalStateMatrix dPerturbed = sigmaDerivativesAt(problem, perturbed, nodes.points, nCells,
+                                                          nVars, nScalars, nAux, tEval);
+        for (Index v = 0; v < nVars; v++)
+            for (Index m = 0; m < nPoints; m++)
+                dd[c](v, m) = (dPerturbed[v].Derivative()(v, m) - dSigma_vals[v].Derivative()(v, m)) /
+                              delta(m);
+    }
+
+    // Chained onto the cell's coefficients, in MBlocks' column layout. A nodal
+    // value is the coefficient itself on the basis nodes; on the star nodes q,
+    // sigma and aux are V times theirs, and u* is B12 u + B11 q.
+    const Index blk = nVars * (k + 1);
+    const Index sigCol = 0, qCol = blk, uCol = 2 * blk, auxCol = 3 * blk;
+    const Index localCols = 3 * blk + nAux * (k + 1);
+    out.dTauCell.assign(2 * nCells, Matrix::Zero(nVars, localCols));
+    for (Index i = 0; i < nCells; i++)
+    {
+        for (Index side = 0; side < 2; side++)
+        {
+            const Index p = 2 * i + side;
+            Matrix &g = out.dTauCell[p];
+            for (Index v = 0; v < nVars; v++)
+            {
+                if (!scaled[v])
+                    continue;
+                for (Index m = 0; m < perCell; m++)
+                {
+                    const double dTau_dd = tauc * dkh(v, p * perCell + m);
+                    if (dTau_dd == 0.0)
+                        continue;
+                    const Index node = i * perCell + m;
+                    // T_c = d tau / d s_c at this node; then d s_c / d coefficients.
+                    auto chain = [&](Index c, Index col, bool isU)
+                    {
+                        const double T = dTau_dd * dd[c](v, node);
+                        if (T == 0.0)
+                            return;
+                        if (!superconvergent)
+                        {
+                            g(v, col + m) += T;
+                            return;
+                        }
+                        Postprocessor const &pp = *postprocessor;
+                        if (isU)
+                        {
+                            g.block(v, col, 1, k + 1) += T * pp.B12(i).row(m);
+                            g.block(v, col - blk, 1, k + 1) += T * pp.B11(i).row(m);
+                        }
+                        else
+                            g.block(v, col, 1, k + 1) += T * pp.V(i).row(m);
+                    };
+                    for (Index w = 0; w < nVars; w++)
+                    {
+                        chain(w, uCol + w * (k + 1), true); // u* reaches q at uCol - blk = qCol
+                        chain(nVars + w, qCol + w * (k + 1), false);
+                        chain(2 * nVars + w, sigCol + w * (k + 1), false);
+                    }
+                    for (Index a = 0; a < nAux; a++)
+                        chain(3 * nVars + a, auxCol + a * (k + 1), false);
+                }
+            }
+        }
+    }
+    return out;
+}
+
 void SystemSolver::freezeTauAt(DGSoln const &Y, Time tEval)
 {
-    const Matrix tau = faceTau(Y, tEval);
+    // Under nodal kappa a held tau takes kappa from the last Jacobian build,
+    // which has already evaluated the derivatives at the physics nodes. Before
+    // a run's first build there is none, and it is evaluated at Y once.
+    Matrix tau;
+    if (tauEvaluatesNodes())
+    {
+        if (!haveJacobianKappa)
+        {
+            jacobianKappaOverH = nodalKappaOverHAt(Y, tEval);
+            haveJacobianKappa = true;
+        }
+        tau = tauFromKappa(jacobianKappaOverH);
+    }
+    else
+        tau = faceTau(Y, tEval);
     applyResidualTau(tau);
     applyJacobianTau(tau);
 }
@@ -2150,15 +2454,32 @@ void SystemSolver::updateMatricesForJacSolve()
     // tau at the state the Jacobian is built from, and d tau / dy, into MBlocks
     // and the trace blocks before either is read. Under a frozen tau the blocks
     // already hold the step's tau and there is no derivative to add.
-    if (tauFollowsResidual())
+    if (tauFollowsResidual() && tauEvaluatesNodes())
+    {
+        Matrix kh;
+        const TauJacobian dTau = nodalTauJacobian(yJac, nodes, dSigma_vals, kh, jt);
+        applyJacobianTau(tauFromKappa(kh), &dTau);
+    }
+    else if (tauFollowsResidual())
     {
         const FaceStates faces = faceStates(yJac, jt);
         const Matrix kh = faceKappaOverH(faces, jt);
         const TauJacobian dTau = faceTauJacobian(yJac, faces, kh, jt);
         applyJacobianTau(tauFromKappa(kh), &dTau);
     }
-    else if (tauRefreshedPerJacobian())
-        freezeTauAt(yJac, jt);
+    else
+    {
+        // A held tau under nodal kappa reads it off the derivatives just taken,
+        // for this build if it refreshes tau and for the next continuation step
+        // either way.
+        if (tauEvaluatesNodes())
+        {
+            jacobianKappaOverH = nodalKappaOverH(nodes.points, dSigma_vals);
+            haveJacobianKappa = true;
+        }
+        if (tauRefreshedPerJacobian())
+            freezeTauAt(yJac, jt);
+    }
 
     // Cell-independent: iteration i reads MBlocks[i] and grid[i] and writes only
     // MXSolvers[i]. The quadrature `assembleCellMatrix` reaches through

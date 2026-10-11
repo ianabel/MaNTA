@@ -192,37 +192,70 @@ where :math:`\kappa/h` is large degrades the interior instead.
           + \texttt{tauFloor} \max_{f'} \frac{\kappa(f')}{h_{I'}} \right),
       \qquad \kappa = \left| \frac{\partial \hat\sigma}{\partial q} \right|,
 
-   with :math:`\kappa` evaluated at the face from the trace (the datum at a
-   Dirichlet end) and the cell's own one-sided :math:`q`. ``tau`` is then a
-   dimensionless multiplier and the floor a fraction of the largest
-   :math:`\kappa/h` on the grid, so neither depends on units. The floor is not
-   optional: where :math:`\kappa` vanishes on a face — a degenerate axis, say —
-   and nothing else in its trace row involves :math:`\lambda`, :math:`\tau` is
-   what determines :math:`\lambda` there. It assumes a layer is not much narrower
-   than a cell, so that :math:`\kappa` at the face is representative of it.
+   ``tau`` is then a dimensionless multiplier and the floor a fraction of the
+   largest :math:`\kappa/h` on the grid, so neither depends on units. The floor is
+   not optional: where :math:`\kappa` vanishes on a face — a degenerate axis, say
+   — and nothing else in its trace row involves :math:`\lambda`, :math:`\tau` is
+   what determines :math:`\lambda` there.
 
-   ``tauUpdate`` says when :math:`\tau` is re-evaluated. Both converge to the
+   ``TauKappa`` says where :math:`\kappa(f)` comes from.
+
+   ``"Nodal"`` (the default)
+      The cell's own :math:`\partial\hat\sigma/\partial q` at the nodes the
+      residual and the Jacobian already evaluate the physics at, extrapolated to
+      its two faces through the cell's interpolant of those values. Where that
+      extrapolation comes out non-positive and every nodal value is positive, the
+      interpolant of :math:`\log\kappa` is extrapolated instead, which cannot
+      reach zero; where some nodal value is not positive — a Newton iterate, say —
+      the face is left to the floor. The case is evaluated nowhere it is not
+      evaluated already, so the evaluation plan gains no batch shape, and
+      wherever a Jacobian build has just taken the derivatives, :math:`\kappa`
+      costs nothing at all.
+
+      Read from the cell's interior, it cannot see the trace. At a Dirichlet wall
+      whose layer is narrower than the cell, where :math:`\kappa` at the face is
+      set by the datum, the nodes see the cell instead. That is the one place the
+      two sources differ by more than a few per cent; see below.
+
+   ``"Face"``
+      Evaluated at the face, from the trace (the datum at a Dirichlet end) and the
+      cell's own one-sided :math:`q`: one more batched
+      ``ComputePhysicsDerivatives`` on the :math:`2N` face points each time
+      :math:`\tau` is evaluated. A flux that is singular at the Dirichlet datum —
+      Shestakov's :math:`D_0 q^3/u^2` at :math:`u_b = 0` — is evaluated there and
+      fails, where ``"Nodal"`` never reads it.
+
+   Both assume a layer is not much narrower than a cell, so that one value of
+   :math:`\kappa` per face is representative of it.
+
+   ``tauUpdate`` says when :math:`\tau` is re-evaluated. All three converge to the
    same discrete solution; they differ in cost and robustness on the way.
 
    ``"Residual"`` (the default)
       On every residual, at that residual's state: one batched
-      ``ComputePhysicsDerivatives`` on the :math:`2 N` face points each time. The
-      Jacobian carries :math:`\partial\tau/\partial y` -- which multiplies the
-      jumps :math:`u_h - \lambda` -- by a finite difference over each component of
-      the face state, one more face-point call per component per Jacobian build.
-      Left out are its dependence on global scalars and field unknowns, and the
-      floor's through the grid maximum.
+      ``ComputePhysicsDerivatives`` each time, on the physics nodes or the face
+      points. The Jacobian carries :math:`\partial\tau/\partial y` -- which
+      multiplies the jumps :math:`u_h - \lambda` -- by a finite difference over
+      each component of the state :math:`\kappa` is read from, one more call per
+      component per Jacobian build. Under ``"Nodal"`` that is the nodal state, and
+      the derivative is chained onto the cell's coefficients — through
+      :math:`u^*`'s dependence on :math:`q` as well as :math:`u` with
+      ``Superconvergent``. Left out are its dependence on global scalars and field
+      unknowns, and the floor's through the grid maximum.
 
    ``"ContinuationStep"``
-      Once per pseudo-transient continuation step, from the state the step starts
-      at, and frozen through that step's Newton solve, whose Jacobian is then
-      exact with no extra terms. Convergence is still judged with :math:`\tau` at
-      the current state. Steady solves only: a time march would freeze
-      :math:`\tau` at the initial condition, and is refused.
+      Once per pseudo-transient continuation step, and frozen through that step's
+      Newton solve, whose Jacobian is then exact with no extra terms. Under
+      ``"Face"`` it is evaluated at the state the step starts at; under
+      ``"Nodal"`` it is read off the derivatives the most recent Jacobian build
+      took — from an iterate at most a few Newton iterations old, and at no cost.
+      Convergence is judged with :math:`\tau` refreshed in the same way. Steady
+      solves only: a time march would freeze :math:`\tau` at the initial
+      condition, and is refused.
 
       This is a fixed-point iteration on :math:`\tau`, and pseudo-time does not
-      damp it: :math:`\tau` depends on :math:`\lambda` and :math:`q`, which are
-      algebraic, so even a vanishing step lets the Newton solve move them onto the
+      damp it: :math:`\tau` depends on :math:`q`, and under ``"Face"`` on
+      :math:`\lambda`, which are algebraic, so even a vanishing step lets the Newton solve move them onto the
       frozen-:math:`\tau` equations. From a state where :math:`\tau` is sensitive
       to them, the re-evaluated residual can exceed the one the step started from
       on every step, and the continuation stalls. That was seen once, with
@@ -237,31 +270,49 @@ where :math:`\kappa/h` is large degrades the interior instead.
       other two. Steady solves only.
 
    Measured on a steady wall-layer problem (5 and 20 cells, uniform and graded,
-   :math:`k = 4`, ten flux exponents), as flux plus derivative point evaluations
-   relative to a constant :math:`\tau` at the same ``NewtonJacobianReuse``:
+   :math:`k = 4`, flux exponents 1, 1.75 and 2.5), as flux plus derivative point
+   evaluations relative to a constant :math:`\tau`:
 
    .. list-table::
       :header-rows: 1
 
-      * - ``NewtonJacobianReuse``
+      * - ``TauKappa``
         - ``"Residual"``
         - ``"ContinuationStep"``
         - ``"JacobianBuild"``
-      * - 10 (default)
-        - 1.58-1.61x
-        - 1.06-1.09x
-        - 1.14-1.16x
-      * - 1
-        - 1.77-1.78x
-        - 1.07-1.10x
-        - 1.33-1.47x
+      * - ``"Nodal"``
+        - 2.56-2.77x
+        - 1.01-1.13x
+        - 1.04-1.31x
+      * - ``"Face"``
+        - 1.61-1.73x
+        - 1.06-1.15x
+        - 1.27-1.49x
+
+   The two sources give the same answers to within 2% in :math:`u`, and the wall
+   flux to within the same order: the nodal one is 40% worse on the coarsest
+   uniform mesh at the steepest wall and up to 36% better on the finer ones.
+   ``"Nodal"`` is the cheaper whenever :math:`\tau` is held, because it reads
+   :math:`\kappa` off derivatives a Jacobian build has already taken. Under
+   ``"Residual"`` it is the dearer by its point count — :math:`N(k+1)` per
+   residual against :math:`2N` — though for a case whose cost is per *call*
+   rather than per point, a JAX one say, the two make the same number of calls
+   and ``"Nodal"`` adds no batch shape to compile. Park's and Jardin's benchmarks
+   order the options the same way.
+
+   On Shestakov's degenerate flux ``"Nodal"`` is also the more robust. Under
+   ``"Residual"``, ``"Face"`` converged to a visibly wrong steady state in three
+   of twelve runs — L1 errors of 0.97, 0.14 and 0.036 against a constant
+   :math:`\tau`'s 0.016, 0.011 and 0.0055 — and ``"Nodal"`` in none; under
+   ``"JacobianBuild"`` the face source failed in five of twelve, the nodal one
+   in one. With a zero Dirichlet value the face source cannot run at all.
 
    Newton iterations are within 1% of a constant :math:`\tau`'s for
    ``"Residual"`` and ``"ContinuationStep"``; the overhead of ``"Residual"`` is
-   almost all the face-point call in every residual. On this problem
-   ``NewtonJacobianReuse = 1`` was cheaper outright -- about 25% fewer point
-   evaluations than the default for every option -- and was the only setting at
-   which every run converged, constant :math:`\tau` included.
+   almost all the extra call in every residual. ``NewtonJacobianReuse = 1``, the
+   default, is cheaper outright on the wall layer than reusing a Jacobian ten
+   times -- about 25% fewer point evaluations for every option -- and is the only
+   setting at which every run converged, constant :math:`\tau` included.
 
    The choice of :math:`\tau` does not change which cells the estimator
    :math:`\|u^* - u_h\|_K` ranks worst, but it does change how well that

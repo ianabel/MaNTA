@@ -83,6 +83,7 @@ class MirrorPlasmaState(eqx.Module):
     domegadpsi: Float[ArrayLike, "..."]
     dTidpsi: Float[ArrayLike, "..."]
     dTedpsi: Float[ArrayLike, "..."]
+    dndt: Float[ArrayLike, "..."]
     gamma: Float[ArrayLike, "..."]  # Particle flux
     Pi: Float[ArrayLike, "..."]  # Viscous stress
     qi: Float[ArrayLike, "..."]  # Ion heat flux
@@ -110,6 +111,7 @@ class MirrorPlasmaState(eqx.Module):
         domegadpsi: Float[ArrayLike, "..."],
         dTidpsi: Float[ArrayLike, "..."],
         dTedpsi: Float[ArrayLike, "..."],
+        dndt: Float[ArrayLike, "..."],
         gamma: Float[ArrayLike, "..."],
         Pi: Float[ArrayLike, "..."],
         qi: Float[ArrayLike, "..."],
@@ -135,6 +137,7 @@ class MirrorPlasmaState(eqx.Module):
         self.domegadpsi = domegadpsi
         self.dTidpsi = dTidpsi
         self.dTedpsi = dTedpsi
+        self.dndt = dndt
         self.gamma = gamma
         self.Pi = Pi
         self.qi = qi
@@ -169,6 +172,19 @@ class MirrorPlasmaState(eqx.Module):
         dpidpsi = 2.0 / 3.0 * state.Derivative[Channel.IonEnergy] * VPrime
         dpedpsi = 2.0 / 3.0 * state.Derivative[Channel.ElectronEnergy] * VPrime
 
+        # dndt is only populated when passed to the sources
+        dndt = (
+            state.VariableDot[Channel.Density] if state.VariableDot is not None else 0.0
+        )
+        # if state.VariableDot is not None:
+        #
+        #
+        # dndt = jax.lax.cond(
+        #     state.VariableDot.size == 0,
+        #     lambda _: 0.0,
+        #     lambda arr: arr[Channel.Density],
+        #     state.VariableDot,
+        # )
         dTidpsi = (dpidpsi - dndpsi * Ti) / n
         dTedpsi = (dpedpsi - dndpsi * Te) / n
 
@@ -197,6 +213,7 @@ class MirrorPlasmaState(eqx.Module):
             domegadpsi=domegadpsi,
             dTidpsi=dTidpsi,
             dTedpsi=dTedpsi,
+            dndt=dndt,
             gamma=state.Flux[Channel.Density],
             Pi=state.Flux[Channel.AngularMomentum],
             qi=state.Flux[Channel.IonEnergy],
@@ -240,6 +257,7 @@ class MirrorPlasmaState(eqx.Module):
             dTidpsi=0,
             dTedpsi=0,
             gamma=0,
+            dndt=0,
             Pi=0,
             qi=0,
             qe=0,

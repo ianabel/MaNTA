@@ -297,6 +297,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(tauScaling, std::string);
     READ(tauUpdate, std::string);
     READ(tauFloor, double);
+    READ(TauKappa, std::string);
     READ(delta_t, double);
     READ(t_initial, double);
     READ(Relative_tolerance, double);
@@ -330,6 +331,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MaxRejectedSteps, unsigned);
     READ(DegreeLadder, std::vector<unsigned>);
     READ(GridLadder, std::vector<unsigned>);
+    READ(GridLadderRescaling, std::string);
     READ(DegreeAdaptation, bool);
     READ(DegreeTolerance, double);
     READ(MaxPolynomialDegree, unsigned);
@@ -337,6 +339,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(DegreeAdaptationBase, double);
     READ(MeshAdaptation, bool);
     READ(MeshAdaptationThreshold, double);
+    READ(MeshAdaptationNeighbourMargin, double);
     READ(MeshAdaptationAttempts, unsigned);
     READ(RebuildPhysicsOnRegrid, bool);
     READ(PhysicsParallelism, unsigned);
@@ -359,6 +362,24 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         c.Superconvergent = std::get<bool>(source.get(*s, Type::Bool));
     c.LowerBoundaryFractionGiven = spelling("LowerBoundaryFraction").has_value();
     c.UpperBoundaryFractionGiven = spelling("UpperBoundaryFraction").has_value();
+    c.CellsGiven = spelling("GridSize").has_value() || spelling("GridPoints").has_value();
+    c.LowerBoundaryGiven = spelling("LowerBoundary").has_value();
+    c.UpperBoundaryGiven = spelling("UpperBoundary").has_value();
+
+    // A restart whose configuration gives no cell count keeps the file's mesh
+    // (restartRunGrid), so a key that shapes a mesh without saying how many
+    // cells it has would be read and then ignored. Refused by name instead,
+    // since the two readings -- "remesh" and "keep the file's" -- give
+    // different answers and the config does not say which it meant.
+    if (c.restart && !c.CellsGiven)
+        for (const char *key : {"LowerBoundary", "UpperBoundary", "GradedGridBoundary"})
+            if (auto s = spelling(key))
+                throw std::invalid_argument(std::format(
+                    "This restart gives {} but neither GridSize nor GridPoints. Without "
+                    "a cell count the run keeps the restart file's mesh as it stands, "
+                    "and {} would be ignored. Give GridSize to remesh, or remove {} to "
+                    "resume on the file's mesh.",
+                    *s, *s, *s));
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
@@ -384,33 +405,25 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "GradingEnd must be \"Both\", \"Lower\" or \"Upper\"; got \"" +
                 c.GradingEnd + "\".");
 
-        // Defaulted from GridSize rather than in the schema, because a schema
-        // default cannot see another key. A third per layer when grading both ends
-        // is what High_Grid_Boundary did, so a config that only ever said
-        // High_Grid_Boundary = true gets the same *split* it always had -- the
-        // spacing within each layer is what has changed. Half for a single layer.
-        //
-        // Both are conservative rather than optimal: MESH-REFINEMENT.md §9 measures
-        // more graded cells as better on the one problem where this was studied,
-        // 9 of 10 beating 5 of 10 by 48x.
-        if (c.GradingCells == 0)
-            c.GradingCells = (c.GradingEnd == "Both") ? c.GridSize / 3 : c.GridSize / 2;
-
-        // The geometry proper is validated inside gradedMeshPoints, which is where
-        // it can be tested without building a configuration. Only what involves
-        // *other* keys is checked here.
-        const int layers = (c.GradingEnd == "Both") ? 2 : 1;
-        const int least = 2 * layers + 1;
-        if (c.GridSize < least)
-            throw std::invalid_argument(std::format(
-                "GradedGridBoundary with GradingEnd = \"{}\" needs at least {} cells "
-                "-- two per graded layer and one outside them -- but GridSize is {}.",
-                c.GradingEnd, least, c.GridSize));
-
         if (!c.GridPoints.empty())
             logmsg<LOG_LEVEL::WARNING>(
                 "GradedGridBoundary is set but GridPoints was given too; the "
                 "explicit boundaries win and the grading is ignored.");
+        else
+        {
+            // The geometry proper is validated inside gradedMeshPoints, which is
+            // where it can be tested without building a configuration. Only what
+            // involves *other* keys is checked here. GradingCells is left at 0
+            // when absent and resolved by gradingCellsFor, at whatever GridSize
+            // the mesh is being built for.
+            const int layers = (c.GradingEnd == "Both") ? 2 : 1;
+            const int least = 2 * layers + 1;
+            if (c.GridSize < least)
+                throw std::invalid_argument(std::format(
+                    "GradedGridBoundary with GradingEnd = \"{}\" needs at least {} cells "
+                    "-- two per graded layer and one outside them -- but GridSize is {}.",
+                    c.GradingEnd, least, c.GridSize));
+        }
     }
 
     // Only the dict surface has no file to fall back on. A TomlConfigSource
@@ -455,6 +468,50 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 throw std::invalid_argument(
                     "GridLadder entries must be at least 1 cell.");
 
+        // A rung at another cell count is built by configuredGrid from the same
+        // keys as the final mesh, so the keys have to be a rule that can be
+        // asked for any count. GridSize with or without GradedGridBoundary is
+        // one; a list of boundaries is not, and nor is a restart file's mesh
+        // kept as it stands. For those the map rule is available, but only by
+        // asking: it keeps the cell density and moves every boundary, and a list
+        // does not say whether its boundaries were placed for the density or for
+        // where they are.
+        if (!c.GridLadder.empty() && meshIsExplicit(c) && c.GridLadderRescaling != "Map")
+            throw std::invalid_argument(std::format(
+                "GridLadder needs a mesh at each of its cell counts, but {} is one "
+                "mesh at one count and no rule for any other. Set GridLadderRescaling "
+                "= \"Map\" to sample it as a map from a uniform mesh -- nested when a "
+                "rung's count divides the final one, and otherwise moving every "
+                "boundary -- or give GridSize instead, or use DegreeLadder alone, "
+                "which keeps the mesh and steps the degree.",
+                c.GridPoints.empty() ? "a restart file's mesh, kept because this "
+                                       "restart gives no GridSize,"
+                                     : "GridPoints"));
+
+        // Every rung's graded mesh, checked now rather than when the ladder
+        // reaches it after solving the rungs before. The fill can only add
+        // cells to a rung, so the configured counts are the ones to check.
+        if (c.GradedGridBoundary && c.GridPoints.empty())
+        {
+            const unsigned layers = (c.GradingEnd == "Both") ? 2u : 1u;
+            for (unsigned n : c.GridLadder)
+            {
+                SolverConfig rung = c;
+                rung.GridSize = static_cast<int>(n);
+                const unsigned cells = static_cast<unsigned>(gradingCellsFor(rung));
+                if (layers * cells >= n)
+                    throw std::invalid_argument(std::format(
+                        "GridLadder rung of {} cells cannot hold the graded mesh: "
+                        "GradingEnd = \"{}\" needs {} x {} graded cells and one outside "
+                        "them.{}",
+                        n, c.GradingEnd, layers, cells,
+                        c.GradingCells != 0 ? " GradingCells is fixed for every rung; "
+                                              "leave it unset to scale it with each "
+                                              "rung's GridSize."
+                                            : ""));
+            }
+        }
+
         // Both choose the discretisation a run is solved at, from different
         // information -- a ladder from what the user wrote, adaptation from an
         // error estimate -- so combining them means one silently loses.
@@ -478,6 +535,18 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "steady-state termination is never armed and every rung "
                 "time-marches the same interval again.");
     }
+
+    if (c.GridLadderRescaling != "None" && c.GridLadderRescaling != "Map")
+        throw std::invalid_argument(
+            "GridLadderRescaling must be \"None\" or \"Map\"; got \"" +
+            c.GridLadderRescaling + "\".");
+
+    // Asked for and then never read is worth saying, since it most likely means
+    // the config expected the mesh to be explicit when it is not.
+    if (c.GridLadderRescaling == "Map" && !c.GridLadder.empty() && !meshIsExplicit(c))
+        logmsg<LOG_LEVEL::WARNING>(
+            "GridLadderRescaling = \"Map\" is ignored: the mesh is described by GridSize, "
+            "and each GridLadder rung is built by that rule at its own count.");
 
     // A machine that evaluates no points at a time has no rounds to count.
     if (c.PhysicsParallelism < 1)
@@ -521,18 +590,17 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "meshes may be tried, and zero would decide to grade and then never "
                 "attempt it.");
 
-        if (!c.GridPoints.empty())
-            throw std::invalid_argument(
-                "MeshAdaptation builds the mesh itself, at the cell count GridSize "
-                "gives, so it cannot be combined with explicit GridPoints. Drop one "
-                "of the two.");
+        // The margin is the graded-end test's bar, ratio > 1 + margin, and the
+        // mildest singular graded end measured reads 1.36 there.
+        if (!(c.MeshAdaptationNeighbourMargin > 0.0))
+            throw std::invalid_argument(std::format(
+                "MeshAdaptationNeighbourMargin must be positive; got {}. At zero a "
+                "graded end whose neighbour reads a hair rougher would be graded "
+                "again.", c.MeshAdaptationNeighbourMargin));
 
-        if (c.GradedGridBoundary)
-            throw std::invalid_argument(
-                "MeshAdaptation decides whether to grade and at which end, so "
-                "GradedGridBoundary would be deciding the same thing twice and only "
-                "one of them can win. Set GradedGridBoundary to grade a mesh by "
-                "hand, or MeshAdaptation to have it chosen.");
+        // GridPoints and GradedGridBoundary are starting meshes, not rivals:
+        // either keeps every face and has its rough end cells split. See
+        // runAdaptiveMesh.
 
         // A ladder fixes the sequence of discretisations by hand; MeshAdaptation
         // chooses it. Both cannot win.
@@ -627,6 +695,29 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 // restart needs it as well: the file's mesh says how the stored state is laid
 // out, and this says what the run is to be solved on, exactly as fileOrder and
 // restartRunOrder split the two degrees.
+bool meshIsExplicit(SolverConfig const &config)
+{
+    return !config.GridPoints.empty() || (config.restart && !config.CellsGiven);
+}
+
+int gradingCellsFor(SolverConfig const &config)
+{
+    if (config.GradingCells != 0)
+        return config.GradingCells;
+
+    // A third per layer when grading both ends is what High_Grid_Boundary did, so
+    // a config that only ever said High_Grid_Boundary = true gets the same *split*
+    // it always had -- the spacing within each layer is what has changed. Half for
+    // a single layer. Both are conservative rather than optimal:
+    // MESH-REFINEMENT.md §9 measures more graded cells as better on the one
+    // problem where this was studied, 9 of 10 beating 5 of 10 by 48x.
+    //
+    // At least 2, the fewest a layer can have, so that every GridSize the
+    // validation admits -- 2 per layer plus one -- builds: a third of 5 is 1.
+    const int share = (config.GradingEnd == "Both") ? config.GridSize / 3 : config.GridSize / 2;
+    return std::max(share, 2);
+}
+
 std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
 {
     if (!config.GridPoints.empty())
@@ -641,7 +732,7 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
         auto points = gradedMeshPoints(
             config.LowerBoundary, config.UpperBoundary,
             static_cast<Grid::Index>(config.GridSize),
-            static_cast<Grid::Index>(config.GradingCells),
+            static_cast<Grid::Index>(gradingCellsFor(config)),
             config.LowerBoundaryFraction, config.UpperBoundaryFraction,
             config.GradingRatio, end);
 
@@ -699,12 +790,48 @@ std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
 
 // --- restartRunGrid ---------------------------------------------------------
 
+namespace
+{
+// "8 uniform cells over [0, 1]" or "9 graded cells over [0, 1], narrowest 0.0054":
+// enough to tell two meshes apart in a warning when they share a count and a
+// domain, which is exactly when a uniform remesh of a graded file looks like no
+// change at all.
+std::string describeMesh(Grid const &grid)
+{
+    const Grid::Index n = grid.getNCells();
+    double narrowest = grid[0].h(), widest = grid[0].h();
+    for (Grid::Index i = 1; i < n; ++i)
+    {
+        narrowest = std::min(narrowest, grid[i].h());
+        widest = std::max(widest, grid[i].h());
+    }
+    const bool uniform = widest - narrowest <= 1e-12 * (grid.upperBoundary() - grid.lowerBoundary());
+    return uniform ? std::format("{} uniform cells over [{:g}, {:g}]", n,
+                                 grid.lowerBoundary(), grid.upperBoundary())
+                   : std::format("{} non-uniform cells over [{:g}, {:g}], narrowest {:.2g}", n,
+                                 grid.lowerBoundary(), grid.upperBoundary(), narrowest);
+}
+} // namespace
+
 std::unique_ptr<Grid> restartRunGrid(SolverConfig const &config, Grid const &fileGrid)
 {
-    if (!config.restart)
+    // Not a restart, or a restart whose configuration describes no mesh: the
+    // file's, cell for cell. The second is what lets a run resume on a mesh no
+    // configuration rule produces -- one MeshAdaptation graded, or one written
+    // out by hand -- without copying its boundaries into GridPoints.
+    if (!config.restart || !config.CellsGiven)
         return std::make_unique<Grid>(fileGrid);
 
-    std::unique_ptr<Grid> wanted = configuredGrid(config);
+    // An end of the domain the configuration does not give is the file's, not
+    // the schema default: "GridSize = 20" on a restart means the file's domain
+    // at 20 cells, and a run over [-1, 1] should not be moved onto [0, 1] for
+    // want of two keys that nothing required.
+    SolverConfig asked = config;
+    if (!config.LowerBoundaryGiven)
+        asked.LowerBoundary = fileGrid.lowerBoundary();
+    if (!config.UpperBoundaryGiven)
+        asked.UpperBoundary = fileGrid.upperBoundary();
+    std::unique_ptr<Grid> wanted = configuredGrid(asked);
 
     // The common case, and it returns the file's own object rather than an
     // equal one so that a restart onto the same mesh is the path it always was,
@@ -719,11 +846,10 @@ std::unique_ptr<Grid> restartRunGrid(SolverConfig const &config, Grid const &fil
     // new nodes -- while coarsening is a genuine approximation, and either way
     // the trace is rebuilt, since lambda lives on faces that have moved.
     logmsg<LOG_LEVEL::WARNING>(
-        "Restart file was written on {} cells over [{:g}, {:g}], but the "
-        "configuration asks for {} over [{:g}, {:g}]. The state will be "
-        "projected onto the new mesh and the trace rebuilt{}.",
-        fileGrid.getNCells(), fileGrid.lowerBoundary(), fileGrid.upperBoundary(),
-        wanted->getNCells(), wanted->lowerBoundary(), wanted->upperBoundary(),
+        "Restart file was written on {}, but the configuration asks for {}. The "
+        "state will be projected onto the new mesh and the trace rebuilt{}. "
+        "Remove GridSize and GridPoints to resume on the file's mesh instead.",
+        describeMesh(fileGrid), describeMesh(*wanted),
         wanted->getNCells() < fileGrid.getNCells()
             ? ", which discards information at this resolution"
             : "");
@@ -778,6 +904,15 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
             "tauUpdate must be \"Residual\", \"ContinuationStep\" or \"JacobianBuild\"; got \"" +
             config.tauUpdate + "\".");
 
+    SystemSolver::TauKappa tauKappa;
+    if (config.TauKappa == "Nodal")
+        tauKappa = SystemSolver::TauKappa::Nodal;
+    else if (config.TauKappa == "Face")
+        tauKappa = SystemSolver::TauKappa::Face;
+    else
+        throw std::invalid_argument("TauKappa must be \"Nodal\" or \"Face\"; got \"" +
+                                    config.TauKappa + "\".");
+
     if (config.tauScaling == "Constant")
     {
         // A key that changes nothing is refused rather than ignored.
@@ -785,6 +920,10 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
             throw std::invalid_argument(
                 "tauUpdate only applies under tauScaling = \"Diffusive\"; a Constant tau "
                 "is never re-evaluated.");
+        if (tauKappa != SystemSolver::TauKappa::Nodal)
+            throw std::invalid_argument(
+                "TauKappa only applies under tauScaling = \"Diffusive\"; a Constant tau "
+                "reads no kappa.");
         system.setTauScaling(SystemSolver::TauScaling::Constant, config.tauFloor);
     }
     else if (config.tauScaling == "Diffusive")
@@ -802,7 +941,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
                 "tauScaling = \"Diffusive\" cannot be combined with solveAdjoint: tau "
                 "depends on the state and the adjoint does not carry d tau / dy, so the "
                 "gradients would be silently wrong. Use tauScaling = \"Constant\".");
-        system.setTauScaling(SystemSolver::TauScaling::Diffusive, config.tauFloor, tauUpdate);
+        system.setTauScaling(SystemSolver::TauScaling::Diffusive, config.tauFloor, tauUpdate,
+                             tauKappa);
     }
     else
         throw std::invalid_argument(

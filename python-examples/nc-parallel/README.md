@@ -54,15 +54,15 @@ a Diffusive tau, `MeshAdaptation` and `DegreeTolerance = 1e-6`:
 
 | N | MaNTA told | levels (cells, k) | rounds | occupied | relative L_inf |
 |---|---|---|---|---|---|
-| 64 | nothing | (5,4) (5,4) (5,7) (5,9) (5,10) | 193 | 46% | 1.69e-5 |
-| 64 | N = 64 | (5,4) (10,4) (10,10) | 180 | 51% | 1.69e-5 |
-| 16 | nothing | (5,4) (5,4) (5,7) (5,9) (5,10) | 391 | 90% | 1.69e-5 |
-| 16 | N = 16 | (5,4) (5,4) (5,7) (5,10) | 365 | 91% | 1.69e-5 |
+| 64 | nothing | (5,4) (5,4) (5,7) (5,9) (5,10) | 171 | 52% | 1.69e-5 |
+| 64 | N = 64 | (5,4) (10,4) (10,10) | 162 | 57% | 1.69e-5 |
+| 16 | nothing | (5,4) (5,4) (5,7) (5,9) (5,10) | 383 | 93% | 1.69e-5 |
+| 16 | N = 16 | (5,4) (5,4) (5,7) (5,10) | 355 | 94% | 1.69e-5 |
 
 The first level of each row is the uniform sample, the second the graded mesh.
 At 64, MaNTA warns that the configured 30 points fill 47% of a round, grades 10
 cells instead of 5 for the same round, and then raises k straight to 10 where the
-error rule asked for 6: two degree levels instead of four, 7% fewer rounds. At 16
+error rule asked for 6: two degree levels instead of four, 5% fewer rounds. At 16
 the sample's 30 points already fill two rounds, so the mesh is not filled, but
 the last raise is, which saves one level. At 8 nothing fills at all: 30 points
 fill four rounds of 8 almost exactly, and so does every level after.
