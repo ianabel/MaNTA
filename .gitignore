@@ -7,7 +7,7 @@ Tests/UnitTests/UnitTests
 !*.ref.dat
 *.nc
 !*.ref.nc
-Makefile.local
+CMakeUserPresets.json
 *.o
 *.so
 sundials/
@@ -18,10 +18,74 @@ runs/
 .vscode/
 python/__pycache__/
 build/
+build-*/
 python/Tests/__pycache__/
 python/Tests/.pytest_cache/
-python/.ipynb_checkpoints/
-python/random
-
+python/.ipynb_checkpoints/*
+python-examples/.ipynb_checkpoints/
+python-examples/*/.ipynb_checkpoints/
+python-physics/.ipynb_checkpoints/
+python-physics/*/.ipynb_checkpoints/
+python/random/
+.clangd
+.clang-format
+compile_commands.json
+*.png
+*.eps
+tags
+*.h5
 venv
+.venv/
+# The `docs` target builds this from docs/requirements.txt.
+.venv-docs/
 gmon.out
+*.sh
+slurm-*.out
+
+*.out
+
+# Compiler-generated header dependency files (-MMD -MP)
+*.d
+
+# Editor swap files
+*.swp
+
+# Coverage (the `coverage` target)
+*.gcda
+*.gcno
+*.gcov
+coverage/
+
+# Sphinx (docs/), built locally with the `docs` target.
+docs/_build/
+
+# Local scratch / run output. Anchored with a leading slash because these are
+# root-level scratch directories, and an unanchored pattern matches at every
+# depth: `toy-model/` was quietly swallowing python-examples/toy-model/, so the
+# example was ignored rather than committed and nothing said so.
+/Plots/
+/runs-for-bhavin/
+/scalar-tests/
+/toy-model/
+__pycache__/
+.pytest_cache/
+
+# Cached polynomial fits, pickled by python-physics/mirror-plasma/landremann.py
+# for its constants.py to read back: build output, not input.
+*.pkl
+
+# Build artefacts of `cmake --install` / `pip install .`
+libmanta.so
+manta.pc
+python/*.egg-info/
+python/manta/_manta*.so
+python/manta/_manta*.d
+docs/_build/
+
+# Reference papers. refs/Refs.md is the tracked index -- it lists each paper with
+# its doi and the filename it is expected under -- but the PDFs themselves are
+# copyrighted publisher material and several MB each, so they stay out of the
+# repository. Fetch them from the dois in Refs.md.
+refs/*.pdf
+
+python-physics/stellarator/figs/

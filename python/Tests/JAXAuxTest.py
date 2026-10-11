@@ -1,10 +1,7 @@
 from typing import NamedTuple
-import sys
-sys.path.insert(0, '../')  # To find MaNTA module
 
-import MaNTA
-from JAXTransportSystem import JAXTransportSystem
-from JAXAdjointProblem import JAXAdjointProblem
+import manta as MaNTA
+from manta.jax import JAXTransportSystem, JAXAdjointProblem
 import jax.numpy as jnp
 
 class NonlinearDiffusionParams(NamedTuple):
@@ -27,34 +24,30 @@ class NonlinearDiffusionParams(NamedTuple):
 
 class JAXAuxTest(JAXTransportSystem):
     def __init__(self, config: MaNTA.TomlValue, grid: MaNTA.Grid):
-        super().__init__()
-        self.nVars = 1
-        self.nAux = 1
-        self.isUpperDirichlet  = True
-        self.isLowerDirichlet  = False
+        super().__init__(MaNTA.numbered_spec(1, nAux=1, lower=MaNTA.Neumann))
 
         # This object will be passed to sigma and source functions
         self.params = NonlinearDiffusionParams.make(config)
 
     def g(self, state, x, params: NonlinearDiffusionParams):
-        u = state["Variable"][0]
+        u = state.Variable[0]
         return 0.5 * u * u
-    
+
     def sigma( self, index, state, x, t, params: NonlinearDiffusionParams ):
-        
-        u = state["Variable"][0]
-        q = state["Derivative"][0]
+
+        u = state.Variable[0]
+        q = state.Derivative[0]
         return params.D*(u ** params.a) * q
-    
+
     def aux( self, index ,state, x, t, params):
-        a = state["Aux"][0]
-        u = state["Variable"][0]
+        a = state.Aux[0]
+        u = state.Variable[0]
         return a - params.D*u*u
 
     def source( self, index, state, x, t, params: NonlinearDiffusionParams ):
         y = x - params.SourceCentre
-        u = state["Variable"][0]
-        a = state["Aux"][0]
+        u = state.Variable[0]
+        a = state.Aux[0]
         return params.T_s*jnp.exp(-y*y/params.SourceWidth) + a - params.D*u*u
 
     def LowerBoundary(self, index, t):

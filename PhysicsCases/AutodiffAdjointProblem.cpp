@@ -5,10 +5,10 @@ Value AutodiffAdjointProblem::GFn(Index i, DGSoln &y) const
     auto g_wrapper = [this, i](const DGSoln &y, Position x)
     {
         State s = y.eval(x);
-        RealVector u(s.Variable);
-        RealVector q(s.Derivative);
-        RealVector sigma(s.Flux);
-        RealVector phi(s.Aux);
+        RealVector u(s.u());
+        RealVector q(s.q());
+        RealVector sigma(s.sigma());
+        RealVector phi(s.phi());
         return g[i](x, u, q, sigma, phi).val;
     };
 
@@ -19,15 +19,26 @@ Value AutodiffAdjointProblem::dGFndp(Index i, Index pIndex, DGSoln &y) const
 {
     Real p = PhysicsProblem->getPval(pIndex);
 
+    // setPval takes the *parameter* index. `i` selects the objective, and writing
+    // through it would differentiate with respect to whichever parameter happens
+    // to share the objective's number -- and, because setPval assigns the whole
+    // Real, would leave that parameter holding another one's value once the
+    // integral finished. The physics case would then evaluate a different problem
+    // for the rest of the run.
+    //
+    // Writing pIndex is also what restores it: p is a copy of that parameter's own
+    // value with only its gradient seeded, so the last assignment puts the value
+    // back. clearGradients() below removes the seed. AutodiffTransportSystem's
+    // dSigmaFn_dp and dSources_dp rely on the same property.
     auto g_wrapper = [&](Real p, Position x)
     {
         State s = y.eval(x);
-        RealVector u(s.Variable);
-        RealVector q(s.Derivative);
-        RealVector sigma(s.Flux);
-        RealVector phi(s.Aux);
+        RealVector u(s.u());
+        RealVector q(s.q());
+        RealVector sigma(s.sigma());
+        RealVector phi(s.phi());
 
-        PhysicsProblem->setPval(i, p);
+        PhysicsProblem->setPval(pIndex, p);
         return g[i](x, u, q, sigma, phi);
     };
     auto I = integrator::integrate([&](Position x)
@@ -39,19 +50,19 @@ Value AutodiffAdjointProblem::dGFndp(Index i, Index pIndex, DGSoln &y) const
 Value AutodiffAdjointProblem::gFn(Index i, const State &s, Position x) const
 {
     // Real p = PhysicsProblem->getPval(i);
-    RealVector u(s.Variable);
-    RealVector q(s.Derivative);
-    RealVector sigma(s.Flux);
-    RealVector phi(s.Aux);
+    RealVector u(s.u());
+    RealVector q(s.q());
+    RealVector sigma(s.sigma());
+    RealVector phi(s.phi());
     return g[i](x, u, q, sigma, phi).val;
 }
 
 void AutodiffAdjointProblem::dgFn_du(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.Variable);
-    RealVector q(s.Derivative);
-    RealVector sigma(s.Flux);
-    RealVector phi(s.Aux);
+    RealVector u(s.u());
+    RealVector q(s.q());
+    RealVector sigma(s.sigma());
+    RealVector phi(s.phi());
 
     Real uout;
     // Real p = PhysicsProblem->getPval(i);
@@ -62,10 +73,10 @@ void AutodiffAdjointProblem::dgFn_du(Index i, VectorRef grad, const State &s, Po
 
 void AutodiffAdjointProblem::dgFn_dq(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.Variable);
-    RealVector q(s.Derivative);
-    RealVector sigma(s.Flux);
-    RealVector phi(s.Aux);
+    RealVector u(s.u());
+    RealVector q(s.q());
+    RealVector sigma(s.sigma());
+    RealVector phi(s.phi());
 
     // Real p = PhysicsProblem->getPval(i);
     Real uout;
@@ -75,10 +86,10 @@ void AutodiffAdjointProblem::dgFn_dq(Index i, VectorRef grad, const State &s, Po
 
 void AutodiffAdjointProblem::dgFn_dsigma(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.Variable);
-    RealVector q(s.Derivative);
-    RealVector sigma(s.Flux);
-    RealVector phi(s.Aux);
+    RealVector u(s.u());
+    RealVector q(s.q());
+    RealVector sigma(s.sigma());
+    RealVector phi(s.phi());
 
     // Real p = PhysicsProblem->getPval(i);
 
@@ -90,10 +101,10 @@ void AutodiffAdjointProblem::dgFn_dsigma(Index i, VectorRef grad, const State &s
 
 void AutodiffAdjointProblem::dgFn_dphi(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.Variable);
-    RealVector q(s.Derivative);
-    RealVector sigma(s.Flux);
-    RealVector phi(s.Aux);
+    RealVector u(s.u());
+    RealVector q(s.q());
+    RealVector sigma(s.sigma());
+    RealVector phi(s.phi());
 
     // Real p = PhysicsProblem->getPval(i);
 

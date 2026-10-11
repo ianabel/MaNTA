@@ -11,7 +11,12 @@ import scipy
 import tomlkit
 import csv
 
-manta_file = "../../MaNTA"
+# $SOLVER if set, else the out-of-source build's binary. Resolved against this
+# script's location rather than the caller's cwd, and relative to it the repo
+# root is two levels up.
+_here = os.path.dirname(os.path.abspath(__file__))
+manta_file = os.environ.get(
+    "SOLVER", os.path.join(_here, "..", "..", "build", "MaNTA"))
 
 def run_manta( config_file ):
     code = os.system( manta_file + " " + config_file + " 2>/dev/null >/dev/null" )

@@ -19,9 +19,6 @@ class AuxVarTest : public TransportSystem {
 		Value LowerBoundary( Index, Time ) const override;
 		Value UpperBoundary( Index, Time ) const override;
 
-		bool isLowerBoundaryDirichlet( Index ) const override;
-		bool isUpperBoundaryDirichlet( Index ) const override;
-
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations
 		// for future calls)
@@ -42,6 +39,8 @@ class AuxVarTest : public TransportSystem {
         Value AuxG( Index, const State &, Position, Time ) override;
         void AuxGPrime( Index, State &, const State &, Position, Time ) override;
         void dSources_dPhi( Index, VectorRef, const State &, Position, Time ) override;
+        
+        void dSigma_dPhi( Index, VectorRef, const State &, Position, Time ) override;
         Value InitialAuxValue( Index, Position ) const override;
 
 private:

@@ -9,12 +9,14 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL( LD2 );
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 LD2::LD2( toml::value const& config, Grid const& )
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
+					   .regrid = RegridPolicy::InPlace})
 {
-	// Always set nVars in a derived constructor
-	nVars = 1;
-
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -34,7 +36,7 @@ LD2::LD2( toml::value const& config, Grid const& )
     nDerivCalls = 0;
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value LD2::LowerBoundary( Index, Time t ) const
 {
 	return ExactSolution( 0.0, t );
@@ -45,14 +47,11 @@ Value LD2::UpperBoundary( Index, Time t ) const
 	return ExactSolution( 1.0, t );
 }
 
-bool LD2::isLowerBoundaryDirichlet( Index ) const { return true; };
-bool LD2::isUpperBoundaryDirichlet( Index ) const { return true; };
-
 
 Value LD2::SigmaFn( Index, const State &s, Position, Time )
 {
     ++nSigmaCalls;
-	return kappa * s.Derivative[ 0 ];
+	return kappa * s.q(0);
 }
 
 Value LD2::Sources( Index, const State &, Position, Time )

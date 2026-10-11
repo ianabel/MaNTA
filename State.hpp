@@ -1,279 +1,589 @@
 #ifndef STATE_HPP
 #define STATE_HPP
 
+#include "Logging.hpp"
 #include "Types.hpp"
 
-class State
-{
+#include <stdexcept>
+#include <string>
+
+#ifdef DEBUG
+// Eigen error messages are very unhelpful so we make our own
+// Mainly for debugging, but also to make sure we don't accidentally mess up
+// shapes when copying from python
+template <typename A, typename B>
+inline void checkShapeAndSet(A &&lhs, const B &rhs,
+                             std::optional<std::string> varname) {
+  static_assert(std::is_base_of<Eigen::MatrixBase<typename std::decay<A>::type>,
+                                typename std::decay<A>::type>::value,
+                "Input lhs must be an Eigen Matrix or Matrix Expression");
+  static_assert(std::is_base_of<Eigen::MatrixBase<typename std::decay<B>::type>,
+                                typename std::decay<B>::type>::value,
+                "Input rhs must be an Eigen Matrix or Matrix Expression");
+  if ((lhs.rows() == rhs.cols()) && (lhs.cols() == rhs.rows())) {
+    logmsg<LOG_LEVEL::WARNING>("Transposing when copying {}; this will lead to "
+                               "an error if compiled with DEBUG=off",
+                               varname.value_or("variable"));
+    lhs = rhs.transpose();
+  } else {
+    const auto lhs_rows = lhs.rows();
+    const auto rhs_rows = rhs.rows();
+
+    const auto lhs_cols = lhs.cols();
+    const auto rhs_cols = rhs.cols();
+
+    if (lhs_rows != rhs_rows || lhs_cols != rhs_cols) {
+      const std::string msg =
+          "Shape mismatch when attempting to set " +
+          varname.value_or("variable") + " during assignment. Input shape: (" +
+          std::to_string(rhs_rows) + ", " + std::to_string(rhs_cols) +
+          "). Required shape: (" + std::to_string(lhs_rows) + ", " +
+          std::to_string(lhs_cols) + ")";
+      throw std::runtime_error(msg);
+    }
+    lhs = rhs;
+  }
+}
+#else
+template <typename A, typename B>
+inline void checkShapeAndSet(A &&lhs, const B &rhs,
+                             std::optional<std::string> varname) {
+  lhs = rhs;
+}
+#endif
+
+class State {
 public:
-    State() = default;
-    explicit State(Index nv, Index ns = 0, Index naux = 0)
-    {
-        Variable.resize(nv);
-        Derivative.resize(nv);
-        Flux.resize(nv);
-        Scalars.resize(ns);
-        Aux.resize(naux);
-    }
+  State() = default;
 
-    void clone(const State &other)
-    {
-        Variable.resize(other.Variable.size());
-        Derivative.resize(other.Derivative.size());
-        Flux.resize(other.Flux.size());
-        Scalars.resize(other.Scalars.size());
-        Aux.resize(other.Aux.size());
-    }
+  /// Born zeroed, not merely sized.
+  ///
+  /// These are handed to the derivative hooks as out-parameters, and Eigen's
+  /// resize() leaves the memory indeterminate. That put the burden of an
+  /// opening setZero() on every physics case, and a case that assigned only its
+  /// nonzero entries -- which is the natural way to write one -- got whatever
+  /// was in the buffer for the rest. That is not hypothetical: it is defect (2)
+  /// in the ScalarTestLD3 post-mortem in Tests/README.md, where a missing v[2]
+  /// put a garbage column into the scalar coupling matrix. The hooks may still
+  /// call zero() and several do; it is redundant now rather than load-bearing.
+  explicit State(Index nv, Index ns = 0, Index naux = 0, Index ngeom = 0) {
+    m_Variable.setZero(nv);
+    m_Derivative.setZero(nv);
+    m_Flux.setZero(nv);
+    m_VariableDot.setZero(nv);
+    m_Scalars.setZero(ns);
+    m_Aux.setZero(naux);
+    m_Geometry.setZero(ngeom);
+  }
 
-    void zero()
-    {
-        Variable.setZero();
-        Derivative.setZero();
-        Flux.setZero();
-        Scalars.setZero();
-        Aux.setZero();
-    }
+  void clone(const State &other) {
+    m_Variable.setZero(other.m_Variable.size());
+    m_Derivative.setZero(other.m_Derivative.size());
+    m_Flux.setZero(other.m_Flux.size());
+    m_VariableDot.setZero(other.m_VariableDot.size());
+    m_Scalars.setZero(other.m_Scalars.size());
+    m_Aux.setZero(other.m_Aux.size());
+    m_Geometry.setZero(other.m_Geometry.size());
+  }
 
-    Vector Variable, Derivative, Flux, Aux;
-    Vector Scalars;
-};
-
-class GlobalState
-{
-public:
-    GlobalState() = default;
-
-    explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0, Index naux = 0) : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux)
-    {
-        _Variable.resize(nVars, nCells * (k + 1));
-        _Derivative.resize(nVars, nCells * (k + 1));
-        _Flux.resize(nVars, nCells * (k + 1));
-        _Aux.resize(nAux, nCells * (k + 1));
-        _Scalars.resize(nScalars);
-    }
-
-    void setWithState(Index i, const State &s)
-    {
-        _Variable.col(i) = s.Variable;
-        _Derivative.col(i) = s.Derivative;
-        _Flux.col(i) = s.Flux;
-        _Aux.col(i) = s.Aux;
-        _Scalars = s.Scalars;
-    }
-
-    // Return state at point i
-    State operator[](Index i) const
-    {
-        State out(nVars, nScalars, nAux);
-
-        out.Variable = _Variable.col(i);
-        out.Derivative = _Derivative.col(i);
-        out.Flux = _Flux.col(i);
-        out.Aux = _Aux.col(i);
-        out.Scalars = _Scalars;
-
-        return out;
-    }
-
-    // Need to do it like this because jax likes to transpose things
-    GlobalState &operator=(const GlobalState &other)
-    {
-        Index rowCount = other.Variable().rows();
-        Index colCount = other.Variable().cols();
-        Index sz = nCells * (k + 1);
-        if (rowCount == nVars && sz == colCount)
-        {
-            _Variable = other.Variable();
-            _Derivative = other.Derivative();
-            _Flux = other.Flux();
-            _Aux = other.Aux();
-            _Scalars = other.Scalars();
-        }
-        else if (rowCount == sz && colCount == nVars)
-        {
-            _Variable = other.Variable().transpose();
-            _Derivative = other.Derivative().transpose();
-            _Flux = other.Flux().transpose();
-            _Aux = other.Aux().transpose();
-            _Scalars = other.Scalars().transpose();
-        }
-        else
-        {
-            throw std::runtime_error("Global states must be the same size when copying.");
-        }
-        return *this;
-    }
-
-    /*
-        Variable
-    */
-    // Accessor methods for translating between python and C++
-    Matrix &Variable()
-    {
-        return _Variable;
-    }
-    const Matrix &Variable() const
-    {
-        return _Variable;
-    }
-    // Accessor methods for getting elements at a point or in a cell
-    VectorRef Variable(Index i)
-    {
-        return _Variable.col(i);
-    }
-    // Grabs data on a whole cell for Jacobian computation, **implicitly assumes we're doing interpolation (read only)
-    Eigen::Ref<Matrix> cellwiseVariable(Index cell)
-    {
-        return _Variable(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
-    }
-
-    /*
-        Derivative
-    */
-    Matrix &Derivative()
-    {
-        return _Derivative;
-    }
-    const Matrix &Derivative() const
-    {
-        return _Derivative;
-    }
-    VectorRef Derivative(Index i)
-    {
-        return _Derivative.col(i);
-    }
-    Eigen::Ref<Matrix> cellwiseDerivative(Index cell)
-    {
-        return _Derivative(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
-    }
-
-    /*
-        Flux
-    */
-    Matrix &Flux()
-    {
-        return _Flux;
-    }
-    const Matrix &Flux() const
-    {
-        return _Flux;
-    }
-    VectorRef Flux(Index i)
-    {
-        return _Flux.col(i);
-    }
-    Eigen::Ref<Matrix> cellwiseFlux(Index cell)
-    {
-        return _Flux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
-    }
-
-    /*
-        Aux
-    */
-    Matrix &Aux()
-    {
-        return _Aux;
-    }
-    const Matrix &Aux() const
-    {
-        return _Aux;
-    }
-    VectorRef Aux(Index i)
-    {
-        return _Aux.col(i);
-    }
-    Eigen::Ref<Matrix> cellwiseAux(Index cell)
-    {
-        return _Aux(Eigen::all, Eigen::seq(cell * (k + 1), (cell + 1) * (k + 1) - 1));
-    }
-
-    /*
-        Scalars
-    */
-    Vector &Scalars()
-    {
-        return _Scalars;
-    }
-    const Vector &Scalars() const
-    {
-        return _Scalars;
-    }
-
-    size_t size() const { return static_cast<size_t>(nCells * (k + 1)); }
+  void zero() {
+    m_Variable.setZero();
+    m_Derivative.setZero();
+    m_Flux.setZero();
+    m_VariableDot.setZero();
+    m_Scalars.setZero();
+    m_Aux.setZero();
+    m_Geometry.setZero();
+  }
 
 private:
-    // We hold global state data in matrices that are (nVars x nPoints)
-    Matrix _Variable, _Derivative, _Flux, _Aux;
+  // Defined before the accessors that call it: a deduced return type has to be
+  // known at the point of use.
+  template <typename V>
+  static auto &checked(V &v, Index i, const char *what) {
+#ifdef DEBUG
+    if (i < 0 || i >= v.size())
+      throw std::out_of_range(std::string("State: no ") + what + " " +
+                              std::to_string(i) + " (there are " +
+                              std::to_string(v.size()) + ")");
+#else
+    (void)what;
+#endif
+    return v[i];
+  }
 
-    // Scalars are global so this is just a vector
-    Vector _Scalars;
+public:
+  /*
+      Named access.
 
-    // Hold sizes internally for checking & preallocating memory
-    Index nCells, k, nVars, nScalars, nAux;
+      `s.Variable[0]` said where a number lived; `s.u(0)` says what it is. The
+      vectors themselves are private, so that is the only spelling.
+
+      Two things this buys beyond readability:
+
+      * bounds checking under DEBUG. Anything indexed per auxiliary variable is
+        sized nAux, not nVars, and those coincide in nearly every case here --
+        which is how dGdaux_Vec carried two confusions between them unnoticed.
+
+      * an honest name for the flux. `Flux` holds the solver's *stored* sigma,
+        which is -sigma_hat: the negative of what SigmaFn returned. sigma()
+        gives that stored value, sigmaHat() gives the physical flux. See the
+        header comment in TransportSystem.hpp.
+  */
+  double &u(Index i) { return checked(m_Variable, i, "variable"); }
+  double u(Index i) const { return checked(m_Variable, i, "variable"); }
+
+  double &q(Index i) { return checked(m_Derivative, i, "variable"); }
+  double q(Index i) const { return checked(m_Derivative, i, "variable"); }
+
+  /// The stored flux, sigma = -sigma_hat.
+  double &sigma(Index i) { return checked(m_Flux, i, "variable"); }
+  double sigma(Index i) const { return checked(m_Flux, i, "variable"); }
+
+  /// The physical flux -- the quantity SigmaFn returns. Read-only: it is a
+  /// negation of the stored value, so there is nothing to take a reference to.
+  double sigmaHat(Index i) const { return -checked(m_Flux, i, "variable"); }
+
+  double &phi(Index i) { return checked(m_Aux, i, "auxiliary variable"); }
+  double phi(Index i) const { return checked(m_Aux, i, "auxiliary variable"); }
+
+  /*
+      d(variable)/dt at this point.
+
+      Filled by the solver from the dYdt vector before a physics hook is called;
+      a case only reads it, exactly as for geom() above. It is **zero unless
+      some variable declares `sourceReadsTimeDerivatives`** in the spec, which
+      is what keeps a case that never asked for it identical to what it was.
+
+      Two things to know before reading it.
+
+      It is meaningful in `Sources` and nowhere else. `SigmaFn` and `AuxG` are
+      handed the same State, so the value is there, but the Jacobian carries no
+      d(sigma_hat)/d(udot) or dG/d(udot) term -- a flux or a constraint that
+      read it would be differentiated wrongly, and the symptom would be slow
+      Newton convergence and nothing else.
+
+      There is deliberately no qdot, sigmadot or phidot. Those rows are
+      algebraic: the residual carries no d/dt for them, `id` marks them zero for
+      IDASetId, and SuppressAlgebraicError may take them out of the local error
+      test altogether, so their dYdt entries are whatever makes the constraints
+      hold rather than quantities with a physical meaning. A source reading one
+      would make an algebraic row differential without saying so.
+  */
+  double &udot(Index i) { return checked(m_VariableDot, i, "variable"); }
+  double udot(Index i) const { return checked(m_VariableDot, i, "variable"); }
+
+  /// A derived metric field, not an unknown: geometry is a function of the
+  /// field model's psi and of x, evaluated at the physics nodes and cached per
+  /// residual, in the same standing as sigmaHat. Read-write because the solver
+  /// fills it before handing the State to a physics hook; a case only reads it.
+  double &geom(Index i) { return checked(m_Geometry, i, "geometry slot"); }
+  double geom(Index i) const { return checked(m_Geometry, i, "geometry slot"); }
+
+  double &scalar(Index i) { return checked(m_Scalars, i, "scalar"); }
+  double scalar(Index i) const { return checked(m_Scalars, i, "scalar"); }
+
+  /*
+      The same fields whole, for the callers that need a vector rather than an
+      element -- the autodiff layer builds a RealVector from each of these, and
+      the type casters assign them.
+
+      Overloaded on arity against the element accessors above: `s.u()` is the
+      vector, `s.u(i)` the entry. The underlying vectors are private, so
+      `s.Variable[0]` no longer compiles; that spelling said where a number
+      lived rather than what it was, and left the sign of the flux for the
+      reader to remember.
+  */
+  Vector &u() { return m_Variable; }
+  Vector const &u() const { return m_Variable; }
+
+  Vector &q() { return m_Derivative; }
+  Vector const &q() const { return m_Derivative; }
+
+  Vector &sigma() { return m_Flux; }
+  Vector const &sigma() const { return m_Flux; }
+
+  /// By value: a negation of the stored vector, so there is nothing to
+  /// reference. Use sigma() when assigning.
+  Vector sigmaHat() const { return -m_Flux; }
+
+  Vector &udot() { return m_VariableDot; }
+  Vector const &udot() const { return m_VariableDot; }
+
+  Vector &phi() { return m_Aux; }
+  Vector const &phi() const { return m_Aux; }
+
+  Vector &geom() { return m_Geometry; }
+  Vector const &geom() const { return m_Geometry; }
+
+  Vector &scalars() { return m_Scalars; }
+  Vector const &scalars() const { return m_Scalars; }
+
+private:
+  Vector m_Variable, m_Derivative, m_Flux, m_VariableDot, m_Aux, m_Geometry;
+  Vector m_Scalars;
 };
+
+class GlobalState {
+public:
+  GlobalState() = default;
+
+  /// Zeroed for the same reason State is: SystemSolver builds a fresh
+  /// GlobalStateMatrix for every Jacobian evaluation and hands its columns
+  /// straight to dSigmaFn_du and friends as out-parameters.
+  explicit GlobalState(Index nCells, Index k, Index nv, Index ns = 0,
+                       Index naux = 0, Index ngeom = 0) noexcept
+      : nCells(nCells), k(k), nVars(nv), nScalars(ns), nAux(naux), nGeom(ngeom) {
+    m_Variable.setZero(nVars, nCells * (k + 1));
+    m_Derivative.setZero(nVars, nCells * (k + 1));
+    m_Flux.setZero(nVars, nCells * (k + 1));
+    m_Aux.setZero(nAux, nCells * (k + 1));
+    m_Geometry.setZero(nGeom, nCells * (k + 1));
+    m_Scalars.setZero(nScalars);
+  }
+
+  void setWithState(Index i, const State &s) {
+    m_Variable.col(i) = s.u();
+    m_Derivative.col(i) = s.q();
+    m_Flux.col(i) = s.sigma();
+    if (m_VariableDot.rows() > 0)
+      m_VariableDot.col(i) = s.udot();
+    m_Aux.col(i) = s.phi();
+    m_Geometry.col(i) = s.geom();
+    m_Scalars = s.scalars();
+  }
+
+  // Return state at point i
+  State operator[](Index i) const {
+    State out(nVars, nScalars, nAux, nGeom);
+
+    out.u() = m_Variable.col(i);
+    out.q() = m_Derivative.col(i);
+    out.sigma() = m_Flux.col(i);
+    // Left at the zero State's constructor put there when no time derivatives
+    // were supplied. That is the right value rather than a fallback: it is what
+    // every case that does not declare `sourceReadsTimeDerivatives` sees, and it
+    // is also what the *steady* adjoint linearisation wants, since the adjoint
+    // is taken about a state at which du/dt vanishes.
+    if (m_VariableDot.rows() > 0)
+      out.udot() = m_VariableDot.col(i);
+    out.phi() = m_Aux.col(i);
+    out.geom() = m_Geometry.col(i);
+    out.scalars() = m_Scalars;
+
+    return out;
+  }
+
+  Vector Geometry(Index node) const { return m_Geometry.col(node); }
+  void setGeometry(Index node, Vector const &g) { m_Geometry.col(node) = g; }
+
+  /*
+      Give this state the time derivatives of the variables.
+
+      Zero rows until this is called, which is the state every run is in unless
+      some variable declares `sourceReadsTimeDerivatives`: operator[] then hands
+      out States whose udot() is the zero vector its constructor made, and
+      nothing allocates or copies an extra (nVars x nPoints) matrix per residual.
+
+      `dot` is an (nVars x nPoints) matrix on the same nodes as this state --
+      DGSoln::evalOnNodes().Variable() of the dYdt vector, or, with the
+      superconvergent scheme, Postprocessor::interpolateVariableOnStarNodes.
+      Note *interpolate*: u* is reconstructed from (u, q), so d(u*)/dt would
+      need qdot, which by the note in State::udot has no meaning here.
+  */
+  void setVariableDot(Matrix const &dot) { m_VariableDot = dot; }
+
+  Matrix &VariableDot() { return m_VariableDot; }
+  const Matrix &VariableDot() const { return m_VariableDot; }
+  bool hasVariableDot() const { return m_VariableDot.rows() > 0; }
+
+  /// Give this state geometry rows after construction.
+  ///
+  /// The GlobalStates the physics is evaluated on come from
+  /// DGSoln::evalOnNodes and Postprocessor::evalOnStarNodes, and neither knows
+  /// how many geometry slots a field model declares: geometry is a function of
+  /// (psi, x), not part of the DOF layout, so a DGSoln has no business knowing
+  /// about it. SystemSolver::evaluateGeometry sizes the rows here and then
+  /// fills them.
+  ///
+  /// nGeom, not just the matrix. operator[] builds its State with nGeom, so
+  /// resizing the storage alone would hand out States with nowhere to copy the
+  /// values to -- and State::geom(i) on an empty vector is an out-of-range read
+  /// in any build without DEBUG.
+  void setGeometrySlots(Index ngeom) {
+    nGeom = ngeom;
+    m_Geometry.setZero(ngeom, m_Variable.cols());
+  }
+
+  Matrix &GeometryMatrix() { return m_Geometry; }
+  Matrix const &GeometryMatrix() const { return m_Geometry; }
+
+  // This is mainly for copying from python
+  GlobalState &operator=(const GlobalState &other) {
+    checkShapeAndSet(m_Variable, other.Variable(), "Variable");
+    checkShapeAndSet(m_Derivative, other.Derivative(), "Derivative");
+    checkShapeAndSet(m_Flux, other.Flux(), "Flux");
+    if (nAux > 0) // Don't bother with Aux if nAux = 0
+      checkShapeAndSet(m_Aux, other.Aux(), "Aux");
+    if (nGeom > 0) // Don't bother with Geometry if nGeom = 0
+      checkShapeAndSet(m_Geometry, other.GeometryMatrix(), "Geometry");
+    // Guarded on the *source* having them, not on this object: a Python case
+    // returns a GlobalState built by the type caster, which never sets them, and
+    // assigning an empty matrix over the rows the solver just filled would drop
+    // them silently.
+    if (other.hasVariableDot())
+      m_VariableDot = other.VariableDot();
+    // Guard-clause form, and braced. The `else` used to hang off the inner `if`
+    // -- which is what was meant, so the behaviour here is unchanged -- but with
+    // two unbraced nested ifs that is only true by the standard's
+    // nearest-enclosing rule, not by anything the reader can see. gcc's
+    // -Wdangling-else lives inside -Wparentheses, which the build used to
+    // disable globally, so at the time only clang reported it. It was the sole
+    // thing standing between this codebase and a clean clang build. That blanket
+    // suppression is long gone, and -Wall now catches this on either compiler.
+    if (nScalars > 0)
+    {
+      if (m_Scalars.size() != other.Scalars().size())
+        throw std::runtime_error("Shape of input scalar array must match "
+                                 "nScalars (length of input = " +
+                                 std::to_string(other.Scalars().size()) + ")");
+      m_Scalars = other.Scalars();
+    }
+    return *this;
+  }
+
+  /*
+      Variable
+  */
+  // Accessor methods for translating between python and C++
+  Matrix &Variable() { return m_Variable; }
+  const Matrix &Variable() const { return m_Variable; }
+  // Accessor methods for getting elements at a point or in a cell
+  VectorRef Variable(Index i) { return m_Variable.col(i); }
+  // Grabs data on a whole cell for Jacobian computation, **implicitly assumes
+  // we're doing interpolation
+  Eigen::Ref<Matrix> cellwiseVariable(Index cell) {
+    return m_Variable.middleCols(cell * (k + 1), k + 1);
+  }
+
+  /*
+      Derivative
+  */
+  Matrix &Derivative() { return m_Derivative; }
+  const Matrix &Derivative() const { return m_Derivative; }
+  VectorRef Derivative(Index i) { return m_Derivative.col(i); }
+  Eigen::Ref<Matrix> cellwiseDerivative(Index cell) {
+    return m_Derivative.middleCols(cell * (k + 1), k + 1);
+  }
+
+  /*
+      Flux
+  */
+  Matrix &Flux() { return m_Flux; }
+  const Matrix &Flux() const { return m_Flux; }
+  VectorRef Flux(Index i) { return m_Flux.col(i); }
+  Eigen::Ref<Matrix> cellwiseFlux(Index cell) {
+    return m_Flux.middleCols(cell * (k + 1), k + 1);
+  }
+
+  /*
+      Aux
+  */
+  Matrix &Aux() { return m_Aux; }
+  const Matrix &Aux() const { return m_Aux; }
+  VectorRef Aux(Index i) { return m_Aux.col(i); }
+  Eigen::Ref<Matrix> cellwiseAux(Index cell) {
+    return m_Aux.middleCols(cell * (k + 1), k + 1);
+  }
+
+  /*
+      Geometry -- see Geometry(Index)/setGeometry/GeometryMatrix() above,
+      beside the constructor. Unlike Variable/Derivative/Flux/Aux, geometry is
+      derived rather than solved for, so there is no cellwise accessor: nothing
+      assembles a Jacobian block against it yet.
+  */
+
+  /*
+      Scalars
+  */
+  Vector &Scalars() { return m_Scalars; }
+  const Vector &Scalars() const { return m_Scalars; }
+
+  size_t size() const { return static_cast<size_t>(nCells * (k + 1)); }
+
+  Index cellDOF() const { return k; };
+  Index getNCells() const { return nCells; };
+
+  /// Recover the shape from the arrays themselves.
+  ///
+  /// Only for the pybind11 type_caster<GlobalState>: PYBIND11_TYPE_CASTER
+  /// default-constructs the value and `load` then assigns the matrices, so
+  /// without this the size members stay indeterminate and size()/operator[]
+  /// read uninitialised memory. The solver never noticed because it only ever
+  /// *assigns* a Python-loaded GlobalState into one it built itself, and
+  /// operator= copies the arrays and not the sizes.
+  ///
+  /// A dict of (nPoints, nVars) arrays does not say how the points are shared
+  /// out between cells, so this records nCells = nPoints and k = 0: size() is
+  /// then correct and operator[] works, but cellwise* is meaningless on such an
+  /// object.
+  void setShapeFromData()
+  {
+    nVars = m_Variable.rows();
+    nAux = m_Aux.rows();
+    nGeom = m_Geometry.rows();
+    nScalars = m_Scalars.size();
+    nCells = m_Variable.cols();
+    k = 0;
+  }
+
+  friend class GlobalStateMatrix;
+
+private:
+  // We hold global state data in matrices that are (nVars x nPoints).
+  //
+  // m_VariableDot is the exception and is left empty by the constructor, in the
+  // way m_Geometry is sized only by setGeometrySlots: it is filled on demand by
+  // setVariableDot, so a run whose spec declares no time-derivative source
+  // carries no extra storage and copies no extra matrix.
+  Matrix m_Variable, m_Derivative, m_Flux, m_Aux, m_Geometry;
+  Matrix m_VariableDot;
+
+  // Scalars are global so this is just a vector
+  Vector m_Scalars;
+
+  // Hold sizes internally for checking & preallocating memory.
+  // Initialised here because the default constructor is used by the pybind11
+  // type caster; leaving them indeterminate made size() unpredictable.
+  Index nCells = 0, k = 0, nVars = 0, nScalars = 0, nAux = 0, nGeom = 0;
+};
+
+/*
+    Helpers for the scalar constraint hooks.
+
+    A scalar constraint is a functional of the whole solution, so writing one
+    means contracting nodal values with either the quadrature weights or the
+    boundary basis values. These put that arithmetic in one place: getting the
+    cell/node flattening wrong is silent, because a wrong scalar Jacobian only
+    slows Newton down.
+
+    Each takes a single field's nodal values -- a row of GlobalState's
+    (nVars x nPoints) matrices, e.g. `y.Variable().row(var)`.
+*/
+namespace ScalarHooks {
+
+/// Int over the whole domain of one field. weights has one entry per node.
+template <typename Row>
+inline double integrate(Row const &nodalValues, Vector const &weights) {
+  return (nodalValues.transpose().array() * weights.array()).sum();
+}
+
+/// The field's value at an end of the domain: 0 for the lower, 1 for the upper.
+///
+/// The nodes are interior, so this is a contraction of the first (or last)
+/// cell's degrees of freedom with the basis functions evaluated there.
+template <typename Row>
+inline double boundaryValue(Row const &nodalValues, Matrix const &phiBoundary,
+                            Index end) {
+  const Index cellDoF = phiBoundary.rows(); // k + 1
+  const Index offset = (end == 0) ? 0 : nodalValues.size() - cellDoF;
+  double out = 0.0;
+  for (Index j = 0; j < cellDoF; ++j)
+    out += phiBoundary(j, end) * nodalValues[offset + j];
+  return out;
+}
+
+/// d(boundaryValue)/d(nodal DOF), accumulated into a derivative row with the
+/// given scale. The counterpart of boundaryValue for the ScalarGPrime side.
+template <typename Row>
+inline void addBoundaryDerivative(Row &&dRow, Matrix const &phiBoundary, Index end,
+                                  double scale) {
+  const Index cellDoF = phiBoundary.rows();
+  const Index offset = (end == 0) ? 0 : dRow.size() - cellDoF;
+  for (Index j = 0; j < cellDoF; ++j)
+    dRow[offset + j] += scale * phiBoundary(j, end);
+}
+
+constexpr Index Lower = 0;
+constexpr Index Upper = 1;
+
+} // namespace ScalarHooks
 
 // Wrapper class to make Jacobian computation cleaner
 // In general, this class will be holding derivative data and not state data
-class GlobalStateMatrix
-{
+class GlobalStateMatrix {
 public:
-    GlobalStateMatrix(Index nVars) : nVars(nVars) { data.reserve(nVars); };
+  GlobalStateMatrix(Index nVars) noexcept : nVars(nVars) {
+    m_data.reserve(nVars);
+  };
 
-    void add(Index nCells, Index k, Index nVars, Index nScalars, Index nAux)
-    {
-        data.emplace_back(nCells, k, nVars, nScalars, nAux);
+  GlobalStateMatrix(const GlobalStateMatrix &other) {
+    nVars = other.nVars;
+    m_data = other.m_data;
+  }
+
+  GlobalStateMatrix(GlobalStateMatrix &&other) noexcept {
+    nVars = other.nVars;
+    m_data = std::move(other.m_data);
+  }
+
+  void add(Index nCells, Index k, Index nVars, Index nScalars, Index nAux) {
+    m_data.emplace_back(nCells, k, nVars, nScalars, nAux);
+  }
+
+  GlobalStateMatrix &operator=(const std::vector<GlobalState> &other) {
+    nVars = other.size();
+    m_data = other;
+    return *this;
+  }
+
+  void add(const GlobalState &g_in) { m_data.push_back(g_in); }
+  /*
+      Returns vector of Matrix for per-cell operations, index like
+     Variable[Var1](Var2, i), where i is within-cell index
+  */
+  std::vector<Eigen::Ref<Matrix>> Variable(Index cell) {
+    std::vector<Eigen::Ref<Matrix>> out;
+
+    for (Index var = 0; var < nVars; var++) {
+      out.emplace_back(m_data[var].cellwiseVariable(cell));
     }
+    return out;
+  }
 
-    void add(GlobalState &g_in)
-    {
-        data.push_back(g_in);
+  std::vector<Eigen::Ref<Matrix>> Derivative(Index cell) {
+    std::vector<Eigen::Ref<Matrix>> out;
+
+    for (Index var = 0; var < nVars; var++) {
+      out.emplace_back(m_data[var].cellwiseDerivative(cell));
     }
-    /*
-        Returns vector of Matrix for per-cell operations, index like Variable[Var1](Var2, i),
-        where i is within-cell index
-    */
-    std::vector<Eigen::Ref<Matrix>> Variable(Index cell)
-    {
-        std::vector<Eigen::Ref<Matrix>> out;
+    return out;
+  }
+  std::vector<Eigen::Ref<Matrix>> Flux(Index cell) {
+    std::vector<Eigen::Ref<Matrix>> out;
 
-        for (Index var = 0; var < nVars; var++)
-        {
-            out.emplace_back(data[var].cellwiseVariable(cell));
-        }
-        return out;
+    for (Index var = 0; var < nVars; var++) {
+      out.emplace_back(m_data[var].cellwiseFlux(cell));
     }
+    return out;
+  }
 
-    std::vector<Eigen::Ref<Matrix>> Derivative(Index cell)
-    {
-        std::vector<Eigen::Ref<Matrix>> out;
+  std::vector<Eigen::Ref<Matrix>> Aux(Index cell) {
+    std::vector<Eigen::Ref<Matrix>> out;
 
-        for (Index var = 0; var < nVars; var++)
-        {
-            out.emplace_back(data[var].cellwiseDerivative(cell));
-        }
-        return out;
+    for (Index var = 0; var < nVars; var++) {
+      out.emplace_back(m_data[var].cellwiseAux(cell));
     }
+    return out;
+  }
+  GlobalState &operator[](Index var) { return m_data[var]; }
 
-    std::vector<Eigen::Ref<Matrix>> Flux(Index cell)
-    {
-        std::vector<Eigen::Ref<Matrix>> out;
-
-        for (Index var = 0; var < nVars; var++)
-        {
-            out.emplace_back(data[var].cellwiseFlux(cell));
-        }
-        return out;
-    }
-
-    GlobalState &operator[](Index var)
-    {
-        return data[var];
-    }
+  const Index size() const { return nVars; }
 
 private:
-    std::vector<GlobalState> data;
+  std::vector<GlobalState> m_data;
 
-    Index nVars;
+  Index nVars;
 };
 
 #endif

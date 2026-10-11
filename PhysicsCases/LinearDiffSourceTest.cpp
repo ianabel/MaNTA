@@ -3,18 +3,39 @@
 
 REGISTER_PHYSICS_IMPL(LinearDiffSourceTest);
 
+SystemSpec LinearDiffSourceTest::buildSpec(toml::value const &config)
+{
+    if (config.count("LinearDiffSourceTest") != 1)
+        return {.variables = numberedFields(1), .regrid = RegridPolicy::InPlace};
+
+    auto const &InternalConfig = config.at("LinearDiffSourceTest");
+    const Index nVars = toml::find_or(InternalConfig, "nVars", 1);
+
+    // Per-variable, unlike the single-flag [AutodiffTransportSystem] keys.
+    const auto lower = toml::find_or(InternalConfig, "LowerBoundaryConditions", std::vector<bool>(nVars, true));
+    const auto upper = toml::find_or(InternalConfig, "UpperBoundaryConditions", std::vector<bool>(nVars, true));
+
+    auto spec = SystemSpec{.variables = numberedFields(nVars), .regrid = RegridPolicy::InPlace};
+    for (Index i = 0; i < nVars; ++i)
+    {
+        spec.variables[i].lower = lower[i] ? BoundaryKind::Dirichlet : BoundaryKind::Neumann;
+        spec.variables[i].upper = upper[i] ? BoundaryKind::Dirichlet : BoundaryKind::Neumann;
+    }
+    return spec;
+}
+
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
 LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const &grid)
+    : AutodiffTransportSystem(config, grid, buildSpec(config))
 {
     xL = grid.lowerBoundary();
     xR = grid.upperBoundary();
 
-    nScalars = 0;
-    nAux = 0;
-
     if (config.count("LinearDiffSourceTest") == 1)
     {
         auto const &InternalConfig = config.at("LinearDiffSourceTest");
-        nVars = toml::find_or(InternalConfig, "nVars", 1);
         if (InternalConfig.count("Kappa") != 1)
             Kappa = Matrix::Identity(nVars, nVars);
         else
@@ -26,10 +47,6 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
         uR = toml::find_or(InternalConfig, "uR", std::vector<double>(nVars, 0.0));
 
         nSources = toml::find_or(InternalConfig, "nSources", nVars);
-
-        useMMS = toml::find_or(InternalConfig, "useMMS", false);
-        growth = toml::find_or(InternalConfig, "growth", 1.0);
-        growth_rate = toml::find_or(InternalConfig, "growth_rate", 0.5);
 
         SourceWidth.resize(nSources);
         SourceStrength.resize(nSources);
@@ -89,8 +106,6 @@ LinearDiffSourceTest::LinearDiffSourceTest(toml::value const &config, Grid const
 
         InitialWidth = toml::find_or(InternalConfig, "InitialWidth", std::vector<double>(nVars, 0.1));
         InitialHeight = toml::find_or(InternalConfig, "InitialHeight", std::vector<double>(nVars, 1.0));
-        lowerBoundaryConditions = toml::find_or(InternalConfig, "LowerBoundaryConditions", std::vector<bool>(nVars, true));
-        upperBoundaryConditions = toml::find_or(InternalConfig, "UpperBoundaryConditions", std::vector<bool>(nVars, true));
     }
     else
     {
@@ -104,11 +119,6 @@ Real2nd LinearDiffSourceTest::InitialFunction(Index i, Real2nd x, Real2nd t) con
 
     return InitialHeight[i] * exp(-shape * (x - center) * (x - center));
 };
-
-Real2nd LinearDiffSourceTest::MMS_Solution(Index i, Real2nd x, Real2nd t)
-{
-    return (1 + growth * tanh(growth_rate * t)) * InitialFunction(i, x, t);
-}
 
 Real LinearDiffSourceTest::Flux(Index i, RealVector u, RealVector q, Real x, Time t)
 {
@@ -154,27 +164,17 @@ Value LinearDiffSourceTest::UpperBoundary(Index i, Time t) const
     return uR[i];
 }
 
-bool LinearDiffSourceTest::isLowerBoundaryDirichlet(Index i) const
-{
-    return lowerBoundaryConditions[i];
-}
-
-bool LinearDiffSourceTest::isUpperBoundaryDirichlet(Index i) const
-{
-    return upperBoundaryConditions[i];
-}
-
 void LinearDiffSourceTest::initialiseDiagnostics(NetCDFIO &nc)
 {
-    nc.AddGroup("MMS", "Manufactured solutions");
+    nc.AddGroup("InitialProfile", "Initial profile, for reference");
     for (int j = 0; j < nVars; ++j)
-        nc.AddVariable("MMS", "Var" + std::to_string(j), "Manufactured solution", "-", [this, j](double V)
+        nc.AddVariable("InitialProfile", "Var" + std::to_string(j), "Initial profile", "-", [this, j](double V)
                        { return this->InitialFunction(j, V, 0.0).val.val; });
 }
 
 void LinearDiffSourceTest::writeDiagnostics(DGSoln const &y, DGSoln const&, Time t, NetCDFIO &nc, size_t tIndex)
 {
     for (Index j = 0; j < nVars; ++j)
-        nc.AppendToGroup("MMS", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
-                         { return this->MMS_Solution(j, x, t).val.val; });
+        nc.AppendToGroup("InitialProfile", tIndex, "Var" + std::to_string(j), [this, j, t](double x)
+                         { return this->InitialFunction(j, x, t).val.val; });
 }

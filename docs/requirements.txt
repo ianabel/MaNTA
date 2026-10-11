@@ -1,0 +1,11 @@
+# Documentation build dependencies. Read the Docs installs these via the
+# python.install block in .readthedocs.yaml -- without that block RTD installs
+# nothing here and the build fails on `html_theme = "sphinx_material"`.
+#
+# sphinx-material has been unmaintained since 2023 (0.0.36). It is pinned
+# exactly, and Sphinx is capped, because the theme predates Sphinx 8 and is only
+# known to work below it. Its sole Sphinx import is
+# `from sphinx.util import console, logging`, so it is templates rather than
+# removed APIs that would break on a newer Sphinx.
+sphinx>=7,<8
+sphinx-material==0.0.36

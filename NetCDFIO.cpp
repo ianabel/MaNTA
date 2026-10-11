@@ -3,6 +3,9 @@
 
 #include "NetCDFIO.hpp"
 #include "SystemSolver.hpp"
+// SystemSolver.hpp only forward-declares FieldModel; the field group below needs
+// the spec that names its variables.
+#include "FieldModel.hpp"
 
 // Code for NetCDF interface
 //
@@ -167,12 +170,26 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 
 	nc_output.AddScalarVariable("nVariables", "Number of independent variables", "", static_cast<double>(nVars));
 
+	// u_star is the element-local postprocessed value: superconvergent where the
+	// theory applies, and in any case a strictly better representation of u than
+	// u itself. Absent when k = 0, where there is no reconstruction to do.
+	if (postprocessor)
+		postprocessor->computeUStar(y);
+
 	for (Index i = 0; i < nVars; ++i)
 	{
 		nc_output.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
 		nc_output.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
-		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
-		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+		// No units on q or sigma: the case declares units for u alone, and neither
+		// derived field shares them -- q is u per unit x, and x carries no units
+		// to divide by. An absent attribute says "not recorded"; a copy of u's
+		// would say something false.
+		nc_output.AddVariable(problem->getVariableName(i), "q", "Derivative", "", y.q(i));
+		nc_output.AddVariable(problem->getVariableName(i), "sigma", "Flux", "", y.sigma(i));
+		if (postprocessor)
+			nc_output.AddVariable(problem->getVariableName(i), "u_star",
+								  "Postprocessed value", problem->getVariableUnits(i),
+								  postprocessor->uStar(i));
 	}
 
 	for (Index i = 0; i < nScalars; ++i)
@@ -185,16 +202,83 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 		nc_output.AddVariable(problem->getAuxVarName(i), problem->getAuxDescription(i), problem->getAuxUnits(i), y.Aux(i));
 	}
 
+	// `t` rather than t0 spelled out: setInitialConditions sets it to t0 and
+	// nothing in the time loop moves it, so the two are the same here -- but t is
+	// what the rest of this function's state was built at.
+	initialiseFieldOutput(nc_output, t);
+
 	problem->initialiseDiagnostics(nc_output);
+}
+
+// See the declaration. Creates the group and writes its t0 slice; the geometry
+// slots go in as spatial variables because that is what they are, and the field
+// DOFs as time series because psi has no x dependence -- the same split the
+// transport variables and the global scalars already get.
+void SystemSolver::initialiseFieldOutput(NetCDFIO &file, Time tEval)
+{
+	if (!fieldModel)
+		return;
+
+	FieldModelSpec const &fspec = fieldModel->getSpec();
+
+	NcGroup group = file.CreateGroup(fspec.name, "Self-consistent magnetic field model");
+	// What the model's x means. MaNTA does not interpret it -- the provider
+	// declares its own coordinate and supplies the metric on it -- so recording
+	// it is the only way a reader can tell what the geometry is a function of.
+	group.putAtt("label", fspec.label);
+
+	for (Index f = 0; f < nField; ++f)
+		file.AddTimeSeries(fspec.name, fspec.dofs[f].name, fspec.dofs[f].description,
+						   fspec.dofs[f].units, y.Field(f));
+
+	// A copy, not the map: the lambda outlives the statement that builds it, and
+	// `y` is a view over memory SUNDIALS owns.
+	const Vector psi = y.getField();
+	for (Index g = 0; g < nGeom; ++g)
+		file.AddVariable(fspec.name, fspec.geometry[g].name, fspec.geometry[g].description,
+						 fspec.geometry[g].units,
+						 [this, &psi, g, tEval](Position x)
+						 {
+							 Vector slots = Vector::Zero(nGeom);
+							 fieldModel->Geometry(slots, psi, x, tEval);
+							 return slots(g);
+						 });
+}
+
+void SystemSolver::writeFieldTimeslice(NetCDFIO &file, size_t tIndex, Time tEval)
+{
+	if (!fieldModel)
+		return;
+
+	FieldModelSpec const &fspec = fieldModel->getSpec();
+
+	for (Index f = 0; f < nField; ++f)
+		file.AppendToTimeSeries(fspec.name, fspec.dofs[f].name, y.Field(f), tIndex);
+
+	const Vector psi = y.getField();
+	for (Index g = 0; g < nGeom; ++g)
+		file.AppendToGroup(fspec.name, tIndex, fspec.geometry[g].name,
+						   [this, &psi, g, tEval](Position x)
+						   {
+							   Vector slots = Vector::Zero(nGeom);
+							   fieldModel->Geometry(slots, psi, x, tEval);
+							   return slots(g);
+						   });
 }
 
 void SystemSolver::WriteTimeslice(double tNew)
 {
 	size_t tIndex = nc_output.AddTimeSlice(tNew);
 
+	if (postprocessor)
+		postprocessor->computeUStar(y);
+
 	for (Index i = 0; i < nVars; ++i)
 	{
 		nc_output.AppendToGroup<DGSoln::DGApprox>(problem->getVariableName(i), tIndex, {{"u", y.u(i)}, {"q", y.q(i)}, {"sigma", y.sigma(i)}});
+		if (postprocessor)
+			nc_output.AppendToGroup<DGSoln::DGApprox>(problem->getVariableName(i), tIndex,
+													  "u_star", postprocessor->uStar(i));
 	}
 
 	for (Index i = 0; i < nAux; ++i)
@@ -205,12 +289,14 @@ void SystemSolver::WriteTimeslice(double tNew)
 	for (Index i = 0; i < nScalars; ++i)
 		nc_output.AppendToTimeSeries(problem->getScalarName(i), y.Scalar(i), tIndex);
 
+	writeFieldTimeslice(nc_output, tIndex, tNew);
+
 	problem->writeDiagnostics(y, dydt, tNew, nc_output, tIndex);
 }
 
 void SystemSolver::WriteAdjoints()
 {
-	
+
 	nc_output.AddScalarVariable("ng", "", "", adjointProblem->getNg());
 	nc_output.AddScalarVariable("np", "", "", adjointProblem->getNp());
 	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
@@ -221,7 +307,14 @@ void SystemSolver::WriteAdjoints()
 		nc_output.AddGroup("G" + std::to_string(i) + "_boundary", "Gradients of G on boundary using adjoint state method");
 		for (Index j = 0; j < adjointProblem->getNpInternal(); ++j)
 		{
+			// if (adjointProblem->areParametersSpatial())
+			// {
+			// 	nc_output.AddVariable("G" + std::to_string(i) + "_p", "p" + std::to_string(j), "Gradient of G with respect to p" + std::to_string(j), "", G_p.block(i * nCells, j, nCells, 1));
+			// }
+			// else
+			// {
 			nc_output.AddScalarVariable("G" + std::to_string(i) + "_p", adjointProblem->getName(j), "", "", G_p(i, j));
+			// }
 		}
 		for (Index j = 0; j < adjointProblem->getNpBoundary(); ++j)
 		{
@@ -245,12 +338,20 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 
 	restart_file.AddScalarVariable("nVariables", "Number of independent variables", "", static_cast<double>(nVars));
 
+	if (postprocessor)
+		postprocessor->computeUStar(y);
+
 	for (Index i = 0; i < nVars; ++i)
 	{
 		restart_file.AddGroup(problem->getVariableName(i), problem->getVariableDescription(i));
 		restart_file.AddVariable(problem->getVariableName(i), "u", "Value", problem->getVariableUnits(i), y.u(i));
-		restart_file.AddVariable(problem->getVariableName(i), "q", "Derivative", problem->getVariableUnits(i), y.q(i));
-		restart_file.AddVariable(problem->getVariableName(i), "sigma", "Flux", problem->getVariableUnits(i), y.sigma(i));
+		// No units on q or sigma, for the reason given in initialiseNetCDF.
+		restart_file.AddVariable(problem->getVariableName(i), "q", "Derivative", "", y.q(i));
+		restart_file.AddVariable(problem->getVariableName(i), "sigma", "Flux", "", y.sigma(i));
+		if (postprocessor)
+			restart_file.AddVariable(problem->getVariableName(i), "u_star",
+									 "Postprocessed value", problem->getVariableUnits(i),
+									 postprocessor->uStar(i));
 	}
 
 	for (Index i = 0; i < nScalars; ++i)
@@ -263,14 +364,42 @@ void SystemSolver::WriteRestartFile(std::string const &fname, N_Vector const &Y,
 		restart_file.AddVariable(problem->getAuxVarName(i), problem->getAuxDescription(i), problem->getAuxUnits(i), y.Aux(i));
 	}
 
+	// `tret`, not the member `t`: t is set to t0 by setInitialConditions and
+	// nothing in the time loop moves it, whereas the state being written here is
+	// the one the run *ended* at. Geometry is a function of (psi, x, t), so the
+	// two choices differ for any model with explicit time dependence. tret is
+	// initialised to t0 in initialize(), so the steady-state path -- which never
+	// enters the time loop and freezes time-dependent data at t_initial -- gets
+	// the time it means.
+	initialiseFieldOutput(restart_file, tret);
+
 	// Save N_Vector directly
 	NcGroup RestartGroup = restart_file.CreateGroup("RestartData", "Restart group");
 
-	const size_t nDOF = nVars * 3 * nCells * (k + 1) + nVars * (nCells + 1) + nScalars + nAux * nCells * (k + 1);
+	// Asked of the DGSoln rather than open-coded, which is what this line used to
+	// be. There were three copies of this formula -- here, the N_VNew_Serial in
+	// Solver.cpp and the read-side consistency check in MaNTA.cpp -- and a field
+	// model lengthens the vector, so a copy that did not know about nField wrote
+	// a *short* file: psi dropped, and an nDOF recorded that matches the
+	// uncoupled formula, so the truncated file would read back as consistent.
+	// Under-writing rather than overrunning is what makes that silent. The
+	// solver's own `y` maps the vector being written, so it is the authority on
+	// how long it is; there is now one fewer place for the two to disagree.
+	const size_t nDOF = y.getDoF();
 	NcDim yDim = RestartGroup.addDim("nDOF", nDOF);
 	RestartGroup.addVar("nVars", netCDF::NcInt()).putVar(&nVars);
 	RestartGroup.addVar("nAux", netCDF::NcInt()).putVar(&nAux);
 	RestartGroup.addVar("nScalars", netCDF::NcInt()).putVar(&nScalars);
+
+	// psi has been *in* Y since the DoF accounting above stopped being open-coded
+	// -- what was missing was any record of how much of Y it is. Without this the
+	// reader has to infer nField by subtracting the uncoupled formula from nDOF,
+	// which is exactly the arithmetic that was wrong in three places; and a file
+	// written with a field model would read back into a solver configured without
+	// one as a length mismatch blamed on nVars/nAux/nScalars. Written
+	// unconditionally, so an uncoupled restart file says nField = 0 rather than
+	// leaving a reader to distinguish "no field" from "old file".
+	RestartGroup.addVar("nField", netCDF::NcInt()).putVar(&nField);
 
 	RestartGroup.addVar("Y", netCDF::NcDouble(), yDim).putVar({0}, {nDOF}, N_VGetArrayPointer(Y));
 	RestartGroup.addVar("dYdt", netCDF::NcDouble(), yDim).putVar({0}, {nDOF}, N_VGetArrayPointer(dYdt));

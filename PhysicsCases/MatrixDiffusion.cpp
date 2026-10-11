@@ -7,10 +7,22 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(MatrixDiffusion);
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
+SystemSpec MatrixDiffusion::buildSpec(toml::value const &config)
+{
+	Index nVars = 1;
+	if (config.count("DiffusionProblem") == 1)
+		nVars = toml::find_or(config.at("DiffusionProblem"), "nVars", 1);
+	return {.variables = numberedFields(nVars), .regrid = RegridPolicy::InPlace};
+}
+
 MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
+	: TransportSystem(buildSpec(config))
 {
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -19,7 +31,6 @@ MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
-	nVars = toml::find_or(DiffConfig, "nVars", 1);
 	InitialWidth = toml::find_or(DiffConfig, "InitialWidth", 0.2);
 	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 
@@ -40,7 +51,7 @@ MatrixDiffusion::MatrixDiffusion(toml::value const &config, Grid const &)
 	//	Kappa = Matrix::Identity(nVars, nVars);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value MatrixDiffusion::LowerBoundary(Index, Time) const
 {
 	return 0.0;
@@ -51,12 +62,9 @@ Value MatrixDiffusion::UpperBoundary(Index, Time) const
 	return 0.0;
 }
 
-bool MatrixDiffusion::isLowerBoundaryDirichlet(Index) const { return true; };
-bool MatrixDiffusion::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Value MatrixDiffusion::SigmaFn(Index i, const State &s, Position, Time)
 {
-	auto sigma = Kappa * s.Derivative;
+	auto sigma = Kappa * s.q();
 
 	return sigma(i);
 }

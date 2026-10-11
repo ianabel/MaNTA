@@ -20,9 +20,6 @@ public:
 	Value LowerBoundary(Index, Time) const override;
 	Value UpperBoundary(Index, Time) const override;
 
-	bool isLowerBoundaryDirichlet(Index) const override;
-	bool isUpperBoundaryDirichlet(Index) const override;
-
 	// The guts of the physics problem (these are non-const as they
 	// are allowed to alter internal state such as to store computations
 	// for future calls)
@@ -41,19 +38,24 @@ public:
 	Value InitialDerivative(Index, Position) const override;
 
 private:
+	static SystemSpec buildSpec(toml::value const &config);
+
 	// Put class-specific data here
 	double kappa, InitialWidth, InitialHeight, Centre;
-	bool lowerNeumann;
+	double SourceStrength;
 
-	// MMS
-	bool useMMS;
-	double growth, growth_rate, SourceStrength;
-	double MMS_Solution(Index, Position, Time);
-
-	double MMS_Source(Index, Position, Time);
-
-	void initialiseDiagnostics(NetCDFIO &nc) override;
-	void writeDiagnostics(DGSoln const &y, Time t, NetCDFIO &nc, size_t tIndex) override;
+	// The UseMMS option, its growth/growth_rate parameters, MMS_Solution,
+	// MMS_Source and the "MMS" diagnostics group are all gone. The manufactured
+	// solution was (1 + growth tanh(rate t)) times the initial Gaussian while
+	// LowerBoundary/UpperBoundary return 0, so it did not satisfy the boundary
+	// conditions -- with the defaults it is about 0.29 at the domain edges -- and
+	// an order-of-accuracy study against it could not show k+1. Nothing set the
+	// option: every config that mentioned it set it false, and no regression case
+	// uses this physics case at all (Tests/RegressionTests/LinearDiffusion.conf
+	// asks for LDTest).
+	//
+	// Order of accuracy is measured by Tests/UnitTests/MMSConvergenceTests.cpp,
+	// which builds its own manufactured problems and never used any of this.
 
 	// Without this (and the implementation line in LinearDiffusion.cpp)
 	// ManTA won't know how to relate the string 'LinearDiffusion' to the class.

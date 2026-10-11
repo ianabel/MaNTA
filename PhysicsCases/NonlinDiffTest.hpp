@@ -27,9 +27,6 @@ public:
 	Value LowerBoundary(Index, Time) const override;
 	Value UpperBoundary(Index, Time) const override;
 
-	bool isLowerBoundaryDirichlet(Index) const override;
-	bool isUpperBoundaryDirichlet(Index) const override;
-
 	// The guts of the physics problem (these are non-const as they
 	// are allowed to alter internal state such as to store computations
 	// for future calls)
@@ -46,6 +43,8 @@ public:
 	// Finally one has to provide initial conditions for u & q
 	Value InitialValue(Index, Position) const override;
 	Value InitialDerivative(Index, Position) const override;
+
+	void prepareEvaluation(EvaluationPlan const &plan) override { xR = plan.grid.upperBoundary(); }
 
 private:
 	// Put class-specific data here

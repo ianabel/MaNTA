@@ -1,0 +1,235 @@
+"""Named accessors for a multi-channel stellarator state.
+
+Used by `stellarator_multichannel.py`, which evolves density, ion energy and
+electron energy together with an ambipolar Er -- not by `stellarator2.py`, which
+is the single-channel case and has a `StellaratorParams` of its own.
+
+The two parameter classes are deliberately different: this one splits
+`stellarator2.py`'s single `SourceCenter`/`SourceHeight`/`SourceWidth` into
+separate particle and heat sources and adds `evolveDensity`. A config written
+for one will not construct the other, which is why the drivers come in two sets.
+
+`StellaratorDecorator` assumes the hook signature
+`(self, state, x, t, field, vp, vpp, params)`, which is
+`stellarator_multichannel.py`'s, not `stellarator2.py`'s.
+
+`Channel` is the variable order, and `stellarator_multichannel.buildSpec` names
+its fields to match. The two have to agree: `from_state` indexes the solution by
+this enum.
+"""
+
+import jax
+import jax.numpy as jnp
+from jaxtyping import Float, ArrayLike
+import equinox as eqx
+import enum
+from manta.jax import State
+from config import StellaratorParams
+
+
+class Channel(enum.IntEnum):
+    Density = 0
+    IonEnergy = 1
+    ElectronEnergy = 2
+
+
+def StellaratorDecorator(func):
+    def wrapper(self, state, x, t, field, vp, vpp, params):
+        _state = StellaratorState.from_state(state, x, vp, vpp, params)
+        res = func(self, _state, x, t, field, vp, vpp, params)
+        return res
+
+    return wrapper
+
+
+"""
+Wrapper class for State to make accessing variables easier 
+"""
+
+
+class StellaratorState(eqx.Module):
+    n: Float[ArrayLike, "..."]  # Density
+    pi: Float[ArrayLike, "..."]  # Ion pressure
+    pe: Float[ArrayLike, "..."]  # Electron pressure
+    Ti: Float[ArrayLike, "..."]  # Ion temperature
+    Te: Float[ArrayLike, "..."]  # Electron temperature
+    dndrho: Float[ArrayLike, "..."]
+    dpidrho: Float[ArrayLike, "..."]
+    dpedrho: Float[ArrayLike, "..."]
+    dTidrho: Float[ArrayLike, "..."]
+    dTedrho: Float[ArrayLike, "..."]
+    gamma: Float[ArrayLike, "..."]
+    qi: Float[ArrayLike, "..."]
+    qe: Float[ArrayLike, "..."]
+    Er: Float[ArrayLike, "..."]  # Ambipolar potential correction
+    rho: Float[ArrayLike, "..."]
+    vp: Float[ArrayLike, "..."]
+    vpp: Float[ArrayLike, "..."]
+
+    def __init__(
+        self,
+        n: Float[ArrayLike, "..."],
+        pi: Float[ArrayLike, "..."],
+        pe: Float[ArrayLike, "..."],
+        Ti: Float[ArrayLike, "..."],
+        Te: Float[ArrayLike, "..."],
+        dndrho: Float[ArrayLike, "..."],
+        dpidrho: Float[ArrayLike, "..."],
+        dpedrho: Float[ArrayLike, "..."],
+        dTidrho: Float[ArrayLike, "..."],
+        dTedrho: Float[ArrayLike, "..."],
+        gamma: Float[ArrayLike, "..."],
+        qi: Float[ArrayLike, "..."],
+        qe: Float[ArrayLike, "..."],
+        Er: Float[ArrayLike, "..."],
+        rho: Float[ArrayLike, "..."],
+        vp: Float[ArrayLike, "..."],
+        vpp: Float[ArrayLike, "..."],
+    ):
+        self.n = n
+        self.pi = pi
+        self.pe = pe
+        self.Ti = Ti
+        self.Te = Te
+        self.dndrho = dndrho
+        self.dpidrho = dpidrho
+        self.dpedrho = dpedrho
+        self.dTidrho = dTidrho
+        self.dTedrho = dTedrho
+        self.gamma = gamma
+        self.qi = qi
+        self.qe = qe
+        self.Er = Er
+        self.rho = rho
+        self.vp = vp
+        self.vpp = vpp
+
+    @classmethod
+    def from_state(cls, state: State, x, vp, vpp, params: StellaratorParams):
+
+        def constant_density(state, x, vp, vpp, params: StellaratorParams):
+            n, dndrho = jax.value_and_grad(
+                lambda x: StellaratorState.initial_profile(
+                    x,
+                    params.config.EdgeDensity,
+                    params.config.n0,
+                    params.config.rhoUpper,
+                )
+            )(x)
+
+            pi = 2.0 / 3.0 * StellaratorState.Vp_u_to_u(0, state, x, vp, vpp)
+            dpidrho = 2.0 / 3.0 * StellaratorState.Vp_up_to_up(0, state, x, vp, vpp)
+
+            Ti = pi / n
+
+            dTidrho = (dpidrho - dndrho * Ti) / n
+            _zero = jnp.zeros(pi.shape)
+
+            return cls(
+                n=n,
+                pi=pi,
+                pe=pi,
+                Ti=Ti,
+                Te=Ti,
+                dndrho=dndrho,
+                dpidrho=dpidrho,
+                dpedrho=dpidrho,
+                dTidrho=dTidrho,
+                dTedrho=dTidrho,
+                gamma=_zero,
+                qi=state.Flux[0],
+                qe=_zero,
+                Er=state.Aux,
+                rho=x,
+                vp=vp,
+                vpp=vpp,
+            )
+
+        def ambipolar(state, x, vp, vpp, params: StellaratorParams):
+            n = StellaratorState.Vp_u_to_u(Channel.Density, state, x, vp, vpp)
+            dndrho = StellaratorState.Vp_up_to_up(Channel.Density, state, x, vp, vpp)
+
+            pi = (
+                2.0
+                / 3.0
+                * StellaratorState.Vp_u_to_u(Channel.IonEnergy, state, x, vp, vpp)
+            )
+            dpidrho = (
+                2.0
+                / 3.0
+                * StellaratorState.Vp_up_to_up(Channel.IonEnergy, state, x, vp, vpp)
+            )
+            pe = (
+                2.0
+                / 3.0
+                * StellaratorState.Vp_u_to_u(Channel.ElectronEnergy, state, x, vp, vpp)
+            )
+            dpedrho = (
+                2.0
+                / 3.0
+                * StellaratorState.Vp_up_to_up(
+                    Channel.ElectronEnergy, state, x, vp, vpp
+                )
+            )
+
+            Ti = pi / n
+            Te = pe / n
+
+            dTidrho = (dpidrho - dndrho * Ti) / n
+            dTedrho = (dpedrho - dndrho * Te) / n
+
+            return cls(
+                n=n,
+                pi=pi,
+                pe=pe,
+                Ti=Ti,
+                Te=Te,
+                dndrho=dndrho,
+                dpidrho=dpidrho,
+                dpedrho=dpedrho,
+                dTidrho=dTidrho,
+                dTedrho=dTedrho,
+                gamma=state.Flux[Channel.Density],
+                qi=state.Flux[Channel.IonEnergy],
+                qe=state.Flux[Channel.ElectronEnergy],
+                Er=state.Aux,
+                rho=x,
+                vp=vp,
+                vpp=vpp,
+            )
+
+        return jax.lax.cond(
+            params.config.evolveDensity,
+            ambipolar,
+            constant_density,
+            state,
+            x,
+            vp,
+            vpp,
+            params,
+        )
+
+    @staticmethod
+    def Vp_u_to_u(index, s, x, vp, vpp):
+        return jax.lax.cond(
+            jax.lax.eq(x, 0.0),
+            lambda state: state.Derivative[index] / vpp,
+            lambda state: state.Variable[index] / vp,
+            s,
+        )
+
+    @staticmethod
+    def Vp_up_to_up(index, s, x, vp, vpp):
+        return jax.lax.cond(
+            jax.lax.eq(x, 0.0),
+            lambda state: 0.0,
+            lambda state: (
+                (state.Derivative[index] * vp - vpp * state.Variable[index]) / vp**2
+            ),
+            s,
+        )
+
+    @staticmethod
+    def initial_profile(x, edge_value, peak_value, xr):
+        a = 1.0 / xr**2
+        return (peak_value - edge_value) * (1 - a * x**2) + edge_value

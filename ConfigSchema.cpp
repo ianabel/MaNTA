@@ -1,0 +1,369 @@
+#include "ConfigSchema.hpp"
+
+#include <algorithm>
+#include <cctype>
+
+namespace ConfigSchema
+{
+namespace
+{
+
+const std::vector<Entry> &table()
+{
+    static const std::vector<Entry> t = {
+        {"restart", {}, Type::Bool, Category::Solver, false, false, false,
+         "Resume from a restart file instead of building an initial condition."},
+        {"RestartFile", {}, Type::String, Category::Solver, false, false, std::string{},
+         "Restart file to resume from; defaults to <stem>.restart.nc."},
+        {"GradedGridBoundary", {"High_Grid_Boundary"}, Type::Bool, Category::Solver, false, false, false,
+         "Grade the mesh geometrically towards the ends of the domain: GradingCells cells "
+         "over each dense layer, each GradingRatio times the width of its inward neighbour, "
+         "then the rest uniform between them. For a solution that is singular at an end this "
+         "is worth orders of magnitude at a fixed cell count -- see docs/configuration.rst. "
+         "Replaces High_Grid_Boundary, which spaced those cells by a cosine rule instead; "
+         "that spelling still works and warns, but the mesh it now builds is the geometric one."},
+        {"GradingRatio", {}, Type::Double, Category::Solver, false, false, 0.3,
+         "Width ratio between neighbouring cells in a graded layer, strictly between 0 and 1. "
+         "Smaller grades harder: the cell touching a graded end has width "
+         "fraction * span * ratio^(GradingCells - 1), which is what sets the error."},
+        {"GradingCells", {}, Type::Int, Category::Solver, false, false, 0,
+         "Cells in each graded layer; at least 2, and few enough to leave one cell outside "
+         "them. 0 means a third of GridSize per layer when grading both ends, half when "
+         "grading one, and never fewer than 2 -- worked out at each GridLadder rung's own "
+         "count."},
+        {"GradingEnd", {}, Type::String, Category::Solver, false, false, std::string{"Both"},
+         "Which end GradedGridBoundary refines into: \"Both\" (default), \"Lower\" or "
+         "\"Upper\"."},
+        {"LowerBoundaryFraction", {"Lower_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
+         "Fraction of the domain in the dense lower region; read when GradedGridBoundary is "
+         "set and GradingEnd is \"Lower\" or \"Both\". MeshAdaptation reads it only when it is "
+         "given, and otherwise grades within the sampling mesh's first cell."},
+        {"UpperBoundaryFraction", {"Upper_Boundary_Fraction"}, Type::Double, Category::Solver, false, false, 0.2,
+         "Fraction of the domain in the dense upper region; read when GradedGridBoundary is "
+         "set and GradingEnd is \"Upper\" or \"Both\". MeshAdaptation reads it only when it is "
+         "given, and otherwise grades within the sampling mesh's last cell."},
+        {"PolynomialDegree", {"Polynomial_degree"}, Type::UInt, Category::Solver, true, true, 1u,
+         "Degree k of the nodal basis in each cell."},
+        {"GridSize", {"Grid_size"}, Type::Int, Category::Solver, false, false, 0,
+         "Number of cells; required unless GridPoints is given or the run is a restart. "
+         "On a restart, giving neither keeps the restart file's mesh as it stands, and "
+         "giving it remeshes, taking any end of the domain not given from the file."},
+        {"GridPoints", {"Grid_points"}, Type::DoubleList, Category::Solver, false, false, std::vector<double>{},
+         "Explicit cell boundaries, as an array. Supersedes LowerBoundary/UpperBoundary/"
+         "GridSize and every grading key, and is the way to supply a mesh no rule here "
+         "produces."},
+        {"LowerBoundary", {"Lower_boundary"}, Type::Double, Category::Solver, false, false, 0.0,
+         "Lower end of the domain; required unless GridPoints is given."},
+        {"UpperBoundary", {"Upper_boundary"}, Type::Double, Category::Solver, false, false, 1.0,
+         "Upper end of the domain; required unless GridPoints is given."},
+        {"tau", {}, Type::Double, Category::Solver, false, false, 1.0,
+         "HDG stabilisation parameter; under tauScaling = Diffusive, a dimensionless multiplier on kappa/h."},
+        {"tauScaling", {}, Type::String, Category::Solver, false, false, std::string{"Constant"},
+         "How tau is chosen per face: Constant (tau everywhere) or Diffusive "
+         "(tau * kappa/h, one-sided, from the state at each residual). See docs/formulation.rst."},
+        {"tauUpdate", {}, Type::String, Category::Solver, false, false, std::string{"Residual"},
+         "Under tauScaling = Diffusive, when tau is re-evaluated: Residual (every residual, with "
+         "d tau/dy in the Jacobian), JacobianBuild (each Jacobian build) or ContinuationStep "
+         "(once per steady continuation step); the last two are for steady solves."},
+        {"tauFloor", {}, Type::Double, Category::Solver, false, false, 1e-3,
+         "Under tauScaling = Diffusive, the floor on kappa/h as a fraction of its largest value on the grid."},
+        {"TauKappa", {}, Type::String, Category::Solver, false, false, std::string{"Nodal"},
+         "Under tauScaling = Diffusive, where kappa at a face comes from: Nodal (the cell's "
+         "d sigma_hat/d q at the physics nodes, extrapolated to the face) or Face (evaluated at "
+         "the face from the trace)."},
+        {"delta_t", {}, Type::Double, Category::Solver, true, true, 0.0,
+         "Interval between output timeslices."},
+        {"t_initial", {"tZero"}, Type::Double, Category::Solver, false, false, 0.0,
+         "Time the integration starts from."},
+        {"t_final", {}, Type::Double, Category::Solver, true, false, 0.0,
+         "Time the integration ends at; Runner.run(tFinal) overrides it."},
+        {"Relative_tolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
+         "IDA relative error tolerance."},
+        {"Absolute_tolerance", {}, Type::DoubleList, Category::Solver, false, false,
+         std::vector<double>{1e-3},
+         "IDA absolute error tolerance; one value, or one per variable."},
+        {"MinStepSize", {}, Type::Double, Category::Solver, false, false, 1e-7,
+         "Smallest timestep IDA may take before giving up."},
+        {"initialTimestep", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "First timestep to attempt; zero lets IDA choose."},
+        {"OutputPoints", {}, Type::Int, Category::Solver, false, false, 301,
+         "Number of spatial points written to the output files."},
+        {"OutputFilename", {}, Type::String, Category::Solver, false, true, std::string{},
+         "Base name for output files; defaults to the config file's stem."},
+        {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
+         "Build the adjoint problem and solve for dG/dp after the integration."},
+        {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
+         "Stop once the solution stops changing by this much; presence arms it. "
+         "Compared against dy/dt under TimeMarch, and against a mesh-independent "
+         "weighted norm of the steady residual otherwise."},
+        {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
+         "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
+         "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},
+        {"PseudoTransientInitialStep", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "First pseudo-time step for SteadyStateSolver = PseudoTransient; 0 means use delta_t."},
+        {"PseudoTransientMaxStep", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "Cap on the pseudo-time step; 0 means uncapped."},
+        {"PseudoTransientSERRate", {}, Type::Double, Category::Solver, false, false, 1.0,
+         "Exponent on the residual ratio in the SER schedule: dt *= max((|F_prev|/|F_now|)^rate, floor). "
+         "0 grows at the floor alone, 1 is plain SER. Must not be negative."},
+        {"PseudoTransientSERFloor", {}, Type::Double, Category::Solver, false, false, 2.0,
+         "Least the pseudo-time step may grow on a step that reduced the residual. "
+         "1 means no floor. Must not be below 1."},
+        {"EstimateObjectiveOnFinish", {}, Type::Bool, Category::Solver, false, false, true,
+         "Estimate the objective and its remaining error at the end of each steady solve. Costs "
+         "one residual, one Jacobian build and one solve, and needs solveAdjoint. Charged per "
+         "solve, so a solve driven in slices pays it per slice."},
+        {"MaxContinuationSteps", {}, Type::UInt, Category::Solver, false, false, 200u,
+         "KINSol calls one steady solve may make before giving up. Each is a full Newton solve, "
+         "so a healthy run uses ten or so and the default is a runaway backstop. Lower it to stop "
+         "a solve early enough to inspect, then resume it. Minimum 1."},
+        {"NewtonMaxIterations", {}, Type::UInt, Category::Solver, false, false, 20u,
+         "Newton iterations one KINSol call may take before handing back to the continuation "
+         "loop. Applies to PseudoTransient and Newton alike. KINSOL's own default is 200; 20 "
+         "is deliberate, because an inner solve only has to make progress. Minimum 1."},
+        {"NewtonJacobianReuse", {}, Type::UInt, Category::Solver, false, false, 1u,
+         "Newton iterations that may share one Jacobian factorisation (KINSOL's msbset). "
+         "1 (the default) is full Newton. Raising it trades assemblies for iterations, which "
+         "pays only when your case's Jacobian is expensive against its residual. Minimum 1."},
+        {"NewtonStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.0,
+         "KINSOL's scaled-step stopping test; a KINSol below it returns KIN_STEP_LT_STPTOL, "
+         "which the continuation loop answers by damping rather than treating as a failure. "
+         "Zero leaves KINSOL's machine-dependent default of uround^(2/3)."},
+        {"NewtonScaling", {}, Type::String, Category::Solver, false, false, std::string{"Unit"},
+         "KINSOL's scaling vectors: Unit (default, what this has always used) or ErrorWeights, "
+         "which fills them from the same 1/(rtol|y|+atol) weights IDA's WRMS norm uses. Unit "
+         "scaling makes the convergence test dimensional, so it favours the largest variable."},
+        {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
+         "Report the work a steady solve did: continuation steps, Newton iterations, "
+         "residual evaluations, Jacobian builds and solves. Printed on failure too."},
+        {"SteadyStateStepDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
+         "Report each KINSol invocation as it returns -- one row per continuation step, "
+         "with its Newton iterations, residual evaluations, Jacobian builds and solves. "
+         "Independent of SteadyStateDiagnostics, which reports only the total."},
+        {"SteadyStateSolve", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run to a steady state using the default tolerance. SteadyStateTolerance "
+         "does the same and names the tolerance; either arms it, and giving both "
+         "uses the tolerance."},
+        {"MaxRejectedSteps", {}, Type::UInt, Category::Solver, false, false, 100u,
+         "Rejected continuation steps a steady solve may take before it stops. It returns "
+         "the last accepted state, with outcome OutOfSteps -- a spent budget, not a "
+         "failure -- and the run carries on with it."},
+        {"DegreeLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
+         "Intermediate polynomial degrees to solve at before Polynomial_degree, each rung "
+         "warm-starting the next. A route to the configured resolution, not a change of it."},
+        {"GridLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
+         "Intermediate cell counts to go with DegreeLadder; same length if both are given. "
+         "Either alone holds the other at its configured value. Each rung's mesh is "
+         "GridSize's rule at that count, graded like the final one under "
+         "GradedGridBoundary. GridPoints and a restart file's mesh are not rules, so "
+         "they need GridLadderRescaling."},
+        {"GridLadderRescaling", {}, Type::String, Category::Solver, false, false, std::string{"None"},
+         "How a GridLadder rescales a mesh given as boundaries -- GridPoints, or a restart "
+         "file's mesh kept as it stands -- to another cell count. \"None\" refuses the "
+         "ladder. \"Map\" reads the boundaries as a piecewise-linear map from a uniform "
+         "mesh and samples it at the rung's count: nested when the count divides the "
+         "final one, and otherwise keeping the cell density but moving every boundary, "
+         "including any on a coefficient jump. Not read for a GridSize mesh, which "
+         "rescales by its own rule."},
+        {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
+         "Choose the global polynomial degree by solving, estimating the error from "
+         "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
+         "Superconvergent."},
+        {"DegreeTolerance", {}, Type::Double, Category::Solver, false, false, 1.0e-6,
+         "Target for DegreeAdaptation: the estimated L2 error relative to the "
+         "solution's own L2 norm, worst variable. Relative so that one number means "
+         "the same thing for variables in different units."},
+        {"MaxPolynomialDegree", {}, Type::UInt, Category::Solver, false, false, 10u,
+         "Ceiling on the degree DegreeAdaptation may reach. Reaching it warns and "
+         "returns the best result available rather than failing."},
+        {"MaxDegreeIncrement", {}, Type::UInt, Category::Solver, false, false, 3u,
+         "Most degrees DegreeAdaptation may add in a single step. Giorgiani's rule is "
+         "free to ask for a large jump from a coarse first solve; this keeps the loop "
+         "taking informative steps rather than clearing the ceiling in one. Minimum 1."},
+        {"DegreeAdaptationBase", {}, Type::Double, Category::Solver, false, false, 10.0,
+         "How much error one extra degree is assumed to buy, in Giorgiani's rule "
+         "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
+         "between 10 and 100."},
+        {"MeshAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run the p -> h -> p sequence: solve uniform at PolynomialDegree, decide from "
+         "the per-cell modal decay rate whether an end of the domain wants grading, "
+         "regrade at the same cell count if so, then adapt the degree to "
+         "DegreeTolerance. Needs PolynomialDegree >= 3, because at 2 the decision is "
+         "reversed rather than merely noisy. Steady solves only; implies "
+         "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
+        {"RebuildPhysicsOnRegrid", {}, Type::Bool, Category::Solver, false, false, false,
+         "Let an adaptation driver (MeshAdaptation, DegreeAdaptation, a ladder) destroy "
+         "the physics case and build a new instance from the registry for each new mesh "
+         "or degree, when the case does not declare that it follows a new evaluation "
+         "plan in place. For cases written before evaluation plans; needs a registered "
+         "case, so a Python case object handed to Runner is refused."},
+        {"PhysicsParallelism", {}, Type::UInt, Category::Solver, false, false, 1u,
+         "How many points the physics can evaluate at once: a batch of M points takes "
+         "ceil(M / PhysicsParallelism) rounds. The adaptation controllers fill each "
+         "level they choose to the largest that costs no more rounds, and a level that "
+         "leaves rounds part empty is warned about. 1 changes nothing. See "
+         "docs/adaptivity.rst."},
+        {"MaxPhysicsBatch", {}, Type::UInt, Category::Solver, false, false, 0u,
+         "Most points the physics is asked for in one batched call that recurs -- per "
+         "residual, per Jacobian build, per continuation step. The adaptation "
+         "controllers never choose or fill a level past it, and a configured level past "
+         "it is refused before its first evaluation. 0 sets no cap. See "
+         "docs/adaptivity.rst."},
+        {"MeshAdaptationThreshold", {}, Type::Double, Category::Solver, false, false, 2.0,
+         "How much rougher than the interior an end must look before MeshAdaptation "
+         "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "
+         "problems at k >= 3: 3.09-6.80 for the one that wants grading against "
+         "0.97-1.19 for the two that do not."},
+        {"MeshAdaptationNeighbourMargin", {}, Type::Double, Category::Solver, false, false, 0.2,
+         "How much rougher than its wider neighbour a graded end must read before "
+         "MeshAdaptation grades it further: neighbour / end > 1 + margin. A smooth end "
+         "reads smoother than a wider neighbour (ratio below 1) and a singular one rougher, "
+         "by a factor set by the grading ratio alone. Measured: at most 1.00 for smooth "
+         "ends and at least 1.36 for singular ones, so it must stay below 0.36. See "
+         "docs/adaptivity.rst."},
+        {"MeshAdaptationAttempts", {}, Type::UInt, Category::Solver, false, false, 4u,
+         "How many graded meshes MeshAdaptation may try before giving up and staying "
+         "uniform. A grading that fails to solve is a rejected step: the ratio is "
+         "softened towards 1 and retried, because the ceiling on grading is the time "
+         "integrator rather than the method. Minimum 1."},
+        {"WriteOutput", {}, Type::Bool, Category::Solver, false, false, true,
+         "Write <stem>.nc and <stem>.restart.nc."},
+        {"WriteDatFile", {}, Type::Bool, Category::Solver, false, false, false,
+         "Also write the plain-text gnuplot output <stem>.dat."},
+        {"WriteDebugDatFiles", {}, Type::Bool, Category::Solver, false, false, false,
+         "Also write <stem>.dydt.dat and <stem>.res.dat; needs a PHYSICS_DEBUG build."},
+        {"Superconvergent", {}, Type::Bool, Category::Solver, false, false, false,
+         "Use the superconvergent interpolatory scheme; needs k >= 1."},
+        {"zeroFlux", {}, Type::Bool, Category::Solver, false, false, false,
+         "Apply a Neumann boundary value to sigma rather than to q. Equivalent to "
+         "declaring those ends Mixed with d = 1; Dirichlet ends are unaffected."},
+        {"AggressiveTimesteps", {"aggressiveTimesteps"}, Type::Bool, Category::Solver, false, false, false,
+         "Let IDA grow the step by 10x rather than 2x between steps."},
+        {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
+         "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
+         "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
+        {"FieldSolve", {}, Type::String, Category::Solver, false, false, std::string{"iterative"},
+         "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default) "
+         "or exact (Schur complement onto the field block; a verification tool, see docs)."},
+        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
+         "Convergence tolerance for FieldSolve = iterative."},
+        {"FieldSolveMaxSweeps", {}, Type::Int, Category::Solver, false, false, 20,
+         "Sweep cap for FieldSolve = iterative."},
+        {"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,
+         "Sweep cap for the coupled adjoint solve. Separate from FieldSolveMaxSweeps, and "
+         "larger, because the adjoint always runs at cj = 0 where the coupling is stiffest. "
+         "Exceeding it falls back to the exact transposed solve, not to a wrong gradient."},
+        {"ForceConsistentIC", {}, Type::Bool, Category::Solver, false, false, false,
+         "Run IDACalcIC on a steady solve or a restart, which skip it by default -- the first "
+         "discards its answer, the second resumes from a state already on the constraint "
+         "manifold. A cold time-marching run always runs it and this cannot turn that off."},
+        {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
+         "Name of the registered physics case to run."},
+        // ProblemSelection, beside TransportSystem and for the same reason: it
+        // names a registered class that runManta instantiates with the parsed
+        // config and the grid. A dict has no equivalent -- a Runner is handed
+        // objects, not names -- so it is an *error* there rather than being
+        // accepted and ignored.
+        {"FieldModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
+         "Name of a registered magnetic-field model to couple to; absent means no coupling."},
+        {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,
+         std::vector<std::string>{},
+         "Shared objects to dlopen for their physics-case registrations."},
+        {"PythonModule", {}, Type::String, Category::Cli, false, false, std::string{},
+         "Read by the manta command: module to import for its registrations."},
+        {"PythonModuleFile", {}, Type::String, Category::Cli, false, false, std::string{},
+         "Read by the manta command: module file, resolved beside the config."},
+        {"PythonModuleName", {}, Type::String, Category::Cli, false, false, std::string{},
+         "Read by the manta command: name to register PythonModuleFile under."},
+    };
+    return t;
+}
+
+// Levenshtein, case-insensitive. Small inputs, so the simple O(nm) table is
+// fine and clearer than the banded version.
+std::size_t editDistance(std::string_view a, std::string_view b)
+{
+    auto lower = [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); };
+    std::vector<std::size_t> prev(b.size() + 1), curr(b.size() + 1);
+    for (std::size_t j = 0; j <= b.size(); ++j)
+        prev[j] = j;
+    for (std::size_t i = 1; i <= a.size(); ++i)
+    {
+        curr[0] = i;
+        for (std::size_t j = 1; j <= b.size(); ++j)
+            curr[j] = std::min({prev[j] + 1, curr[j - 1] + 1,
+                                prev[j - 1] + (lower(a[i - 1]) == lower(b[j - 1]) ? 0 : 1)});
+        std::swap(prev, curr);
+    }
+    return prev[b.size()];
+}
+
+} // namespace
+
+std::span<const Entry> schema() { return table(); }
+
+const Entry *findEntry(std::string_view key)
+{
+    for (auto const &e : table())
+    {
+        if (e.name == key)
+            return &e;
+        for (auto const &a : e.aliases)
+            if (a == key)
+                return &e;
+    }
+    return nullptr;
+}
+
+bool isRequired(Entry const &e, Reader r)
+{
+    return r == Reader::Toml ? e.requiredToml : e.requiredDict;
+}
+
+std::string_view nearestKey(std::string_view key)
+{
+    std::string_view best;
+    std::size_t bestDistance = std::string_view::npos;
+    for (auto const &e : table())
+    {
+        auto d = editDistance(key, e.name);
+
+        // Half the longer of the two names, and no more: past that the "did you
+        // mean" is noise, and pointing at an unrelated option is worse than
+        // saying nothing. The threshold has to scale with the *candidate* as
+        // well as with what was written -- `Poly_degree` for `Polynomial_degree`
+        // is six edits and is still obviously the key that was meant, while
+        // sixteen characters of nothing in particular is sixteen edits from
+        // every entry in the table and must suggest none of them. A flat cap
+        // cannot separate those two, because the first number is larger.
+        const std::size_t limit = std::max(key.size(), e.name.size()) / 2;
+
+        if (d <= limit && d < bestDistance)
+        {
+            bestDistance = d;
+            best = e.name;
+        }
+    }
+    return best;
+}
+
+const char *typeName(Type t)
+{
+    switch (t)
+    {
+    // The article is part of the name: the callers splice this straight into
+    // "Configuration key 'X' must be ...", and picking a/an at the call site
+    // got "a integer" wrong.
+    case Type::Bool:       return "a boolean";
+    case Type::Int:        return "an integer";
+    case Type::UInt:       return "a non-negative integer";
+    case Type::Double:     return "a number";
+    case Type::String:     return "a string";
+    case Type::DoubleList: return "a number, or an array of numbers";
+    case Type::UIntList: return "an array of non-negative whole numbers";
+    case Type::StringList: return "an array of strings";
+    }
+    return "of an unrecognised type";
+}
+
+} // namespace ConfigSchema

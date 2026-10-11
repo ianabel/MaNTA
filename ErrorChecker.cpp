@@ -1,5 +1,5 @@
 #include "ErrorChecker.hpp"
-#include <stdio.h>
+#include <print>
 
 /*
  * Check function return value...
@@ -16,24 +16,21 @@ int ErrorChecker::check_retval(void *returnvalue, const char *funcname, int opt)
 
   /* Check if SUNDIALS function returned NULL pointer - no memory allocated */
   if (opt == 0 && returnvalue == NULL) {
-    fprintf(stderr,
-            "\nSUNDIALS_ERROR: %s() failed - returned NULL pointer\n\n",
-            funcname);
+    std::print(stderr, "\nSUNDIALS_ERROR: {}() failed - returned NULL pointer\n\n",
+               funcname);
     return(1);
   } else if (opt == 1) {
     /* Check if retval < 0 */
     retval = (int *) returnvalue;
     if (*retval < 0) {
-      fprintf(stderr,
-              "\nSUNDIALS_ERROR: %s() failed with retval = %d\n\n",
-              funcname, *retval);
+      std::print(stderr, "\nSUNDIALS_ERROR: {}() failed with retval = {}\n\n",
+                 funcname, *retval);
       return(1);
     }
   } else if (opt == 2 && returnvalue == NULL) {
     /* Check if function returned NULL pointer - no memory allocated */
-    fprintf(stderr,
-            "\nMEMORY_ERROR: %s() failed - returned NULL pointer\n\n",
-            funcname);
+    std::print(stderr, "\nMEMORY_ERROR: {}() failed - returned NULL pointer\n\n",
+               funcname);
     return(1);
   }
 

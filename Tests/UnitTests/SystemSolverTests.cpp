@@ -1,6 +1,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include "TestPaths.hpp"
 #include "Types.hpp"
 #include <toml.hpp>
 #include "SystemSolver.hpp"
@@ -72,8 +73,8 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
         for (Eigen::Index j = 0; j < k + 1; j++)
         {
           ref(ii, j) +=
-            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
-            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+            system->tauc * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tauc * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
         }
       }
       BOOST_TEST((system->D_cellwise[i] - ref).norm() < 1e-9);
@@ -97,8 +98,8 @@ BOOST_AUTO_TEST_CASE(systemsolver_init_tests)
       ref.setZero();
       for(Eigen::Index j = 0; j < k + 1; j++)
       {
-        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tau(I.x_l));
-        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tau(I.x_u));
+        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tauc);
+        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tauc);
         if (i==0) {
           ref(j,0) = 0;
         }
@@ -183,11 +184,11 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
         for (Eigen::Index j = 0; j < k + 1; j++)
         {
           ref(ii, j) +=
-            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
-            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+            system->tauc * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tauc * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
           ref(ii + 2, j + 2 ) +=
-            system->tau(I.x_l) * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
-            system->tau(I.x_u) * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
+            system->tauc * basis.Evaluate(I, j, I.x_l) * basis.Evaluate(I, ii, I.x_l) +
+            system->tauc * basis.Evaluate(I, j, I.x_u) * basis.Evaluate(I, ii, I.x_u);
         }
       }
       BOOST_TEST((system->D_cellwise[i] - ref).norm() < 1e-9);
@@ -212,8 +213,8 @@ BOOST_AUTO_TEST_CASE(systemsolver_multichannel_init_tests)
       ref.setZero();
       for(Eigen::Index j = 0; j < k + 1; j++)
       {
-        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tau(I.x_l));
-        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tau(I.x_u));
+        ref(j,0) = basis.Evaluate(I, j, I.x_l) * (-system->tauc);
+        ref(j,1) = basis.Evaluate(I, j, I.x_u) * (-system->tauc);
         if (i==0) {
           ref(j,0) = 0;
         }
@@ -256,7 +257,17 @@ BOOST_AUTO_TEST_CASE(systemsolver_matrix_tests)
 
 	Matrix NLMat(k + 1, k + 1);
 
-    DGSoln::basis_type const & basis = system->y.getBasis();
+    // A copy, not a reference. DGSolnImpl holds `const BasisType Basis` by value
+    // (DGSoln.hpp:375), so getBasis() returns a reference into system->y -- and
+    // `system` is deleted partway through this test, after which the reference
+    // dangled and every MassMatrix() call below it read freed memory. It happened
+    // to give the right answer for as long as nothing reused the block; adding
+    // SolverLifecycleTests.cpp changed the allocation pattern enough to make it
+    // return garbage, failing the second half of this test by 0.21.
+    //
+    // The basis depends only on the polynomial degree, so one copy is valid for
+    // both systems here -- they share k.
+    const DGSoln::basis_type basis = system->y.getBasis();
 
 	for (Index i = 0; i < 4; ++i)
 	{
@@ -364,7 +375,7 @@ BOOST_AUTO_TEST_CASE(systemsolver_restart_tests)
 	netCDF::NcFile restart_file;
 
 	// Load grid from restart file
-	BOOST_CHECK_NO_THROW(restart_file.open("./Tests/UnitTests/MatrixDiffusion.restart.nc", netCDF::NcFile::FileMode::read));
+	BOOST_CHECK_NO_THROW(restart_file.open(testDataPath("MatrixDiffusion.restart.nc"), netCDF::NcFile::FileMode::read));
 
 	netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
 	auto nPoints = GridGroup.getDim("Index").getSize();

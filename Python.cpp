@@ -1,207 +1,750 @@
+#include <dlfcn.h> // physics plugins loaded by load_physics_plugin
+#include <pybind11/functional.h>
+#include <pybind11/native_enum.h>
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <pybind11/functional.h>
-#include <pybind11/numpy.h>
 #include <string>
 #include <toml.hpp>
 
+#include "AdjointProblem.hpp"
 #include "PhysicsCases.hpp"
-#include "PyTransportSystem.hpp"
 #include "PyAdjointProblem.hpp"
+#include "PyGrid.hpp"
+#include "PyIntegrator.hpp"
+#include "PyRunner.hpp"
+#include "PyState.hpp"
+// cast_toml lives here now, alongside the Python -> toml direction PyRunner
+// needs. TODO: check whether pytoml could replace both.
+#include "PyToml.hpp"
+#include "PyTransportSystem.hpp"
+#include "State.hpp"
+#include "TransportSystem.hpp"
 
 namespace py = pybind11;
 
-int runManta(std::string const &);
+#ifdef XLA_FFI
+#include "ffi.hpp"
 
+namespace ffi = xla::ffi;
+
+template <typename T> py::capsule EncapsulateFfiCall(T *fn) {
+  // This check is optional, but it can be helpful for avoiding invalid
+  // handlers.
+  static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
+                "Encapsulated function must be an XLA FFI handler");
+  return py::capsule(reinterpret_cast<void *>(fn));
+};
+#endif
+
+int runManta(std::string const &);
 // This allows one to use a python dict as a state variable,
 // if the python dict has the right keys in it
-namespace pybind11
-{
-	namespace detail
-	{
-		template <>
-		struct type_caster<State>
-		{
-		public:
-			PYBIND11_TYPE_CASTER(State, const_name("dict[Sequence[float]]"));
+namespace pybind11 {
+namespace detail {
+// State no longer crosses the boundary as a dict -- see PyState.hpp.
+// GlobalState still does: it is the vectorised/JAX path's currency, where a
+// dict of (nPoints, nVars) arrays is what the numpy and JAX code actually
+// wants.
+template <> struct type_caster<GlobalState> {
+public:
+  PYBIND11_TYPE_CASTER(GlobalState, const_name("dict[Sequence[float]]"));
 
-			bool load(handle src, bool)
-			{
-				py::dict d = py::cast<py::dict>(src);
-				value.Variable = py::cast<Vector>(d["Variable"]);
-				value.Derivative = py::cast<Vector>(d["Derivative"]);
-				value.Flux = py::cast<Vector>(d["Flux"]);
-				value.Aux = py::cast<Vector>(d["Aux"]);
-				value.Scalars = py::cast<Vector>(d["Scalars"]);
-				return true;
-			}
+  bool load(handle src, bool) {
+    py::dict d = py::cast<py::dict>(src);
+    value.Variable() = py::cast<Matrix>(d["Variable"]).transpose();
+    value.Derivative() = py::cast<Matrix>(d["Derivative"]).transpose();
+    value.Flux() = py::cast<Matrix>(d["Flux"]).transpose();
+    value.Aux() = py::cast<Matrix>(d["Aux"]).transpose();
+    // Geometry is optional on the way in: every physics case and test fixture
+    // that predates field models builds a dict with no "Geometry" key, and
+    // GlobalState defaults to zero geometry slots, so a missing key means the
+    // same thing an explicitly empty one would. Still size it to (0, nPoints)
+    // rather than leave it at PYBIND11_TYPE_CASTER's default-constructed 0x0:
+    // operator[] slices every field's column i unconditionally, and a matrix
+    // with zero *columns* fails that where zero *rows* would not.
+    if (d.contains("Geometry"))
+      value.GeometryMatrix() = py::cast<Matrix>(d["Geometry"]).transpose();
+    else
+      value.GeometryMatrix().setZero(0, value.Variable().cols());
 
-			static handle cast(const State &src, return_value_policy /* policy */, handle /* parent */)
-			{
-				py::dict d;
-				d["Variable"] = src.Variable;
-				d["Derivative"] = src.Derivative;
-				d["Flux"] = src.Flux;
-				d["Aux"] = src.Aux;
-				d["Scalars"] = src.Scalars;
-				return d.release();
-			}
-		};
-		template <>
-		struct type_caster<GlobalState>
-		{
-		public:
-			PYBIND11_TYPE_CASTER(GlobalState, const_name("dict[Sequence[float]]"));
+    // VariableDot is optional on the way in, and left *empty* when absent
+    // rather than sized like Geometry above. Empty is the state that means "no
+    // variable declares sourceReadsTimeDerivatives": GlobalState guards every
+    // read of it with hasVariableDot(), where the geometry rows are sliced
+    // unconditionally. A dict carrying no such key therefore says the same
+    // thing the solver says when it builds one itself.
+    if (d.contains("VariableDot"))
+      value.setVariableDot(py::cast<Matrix>(d["VariableDot"]).transpose());
 
-			bool load(handle src, bool)
-			{
-				py::dict d = py::cast<py::dict>(src);
+    auto scalars = py::cast<py::array_t<double>>(d["Scalars"]);
+    py::buffer_info info = scalars.request();
+    double *data = static_cast<double *>(info.ptr);
+    value.Scalars() = Eigen::Map<Vector>(data, info.size);
 
-				value.Variable() = py::cast<Matrix>(d["Variable"]);
-				value.Derivative() = py::cast<Matrix>(d["Derivative"]);
-				value.Flux() = py::cast<Matrix>(d["Flux"]);
-				value.Aux() = py::cast<Matrix>(d["Aux"]);
-				value.Scalars() = py::cast<Vector>(d["Scalars"]);
-				return true;
-			}
+    // PYBIND11_TYPE_CASTER default-constructs `value`, so its size members are
+    // whatever the default constructor left them. Derive them from the arrays
+    // just assigned; without this, size() and operator[] on a GlobalState that
+    // came from Python read uninitialised state.
+    value.setShapeFromData();
 
-			static handle cast(const GlobalState &src, return_value_policy /* policy */, handle /* parent */)
-			{
-				py::dict d;
-				d["Variable"] = src.Variable();
-				d["Derivative"] = src.Derivative();
-				d["Flux"] = src.Flux();
-				d["Aux"] = src.Aux();
-				d["Scalars"] = src.Scalars();
-				return d.release();
-			}
-		};
-	}
+    return true;
+  }
+
+  static handle cast(const GlobalState &src, return_value_policy /* policy */,
+                     handle /* parent */) {
+    py::dict d;
+    d["Variable"] = src.Variable().transpose();
+    d["Derivative"] = src.Derivative().transpose();
+    d["Flux"] = src.Flux().transpose();
+    d["Aux"] = src.Aux().transpose();
+    d["Geometry"] = src.GeometryMatrix().transpose();
+    // (nPoints, nVars) when some variable declares sourceReadsTimeDerivatives,
+    // and an empty array when none does -- which is what a case should test if
+    // it wants to know, rather than assuming the run it is in.
+    d["VariableDot"] = src.VariableDot().transpose();
+    d["Scalars"] = src.Scalars();
+    return d.release();
+  }
 };
-
-// TODO: Check if we can just use pytoml instead and
-// remove this extra cast
-py::object cast_toml(toml::value v)
-{
-	if (v.is_boolean())
-		return py::bool_(v.as_boolean());
-	else if (v.is_integer())
-		return py::int_(v.as_integer());
-	else if (v.is_floating())
-		return py::float_(v.as_floating());
-	else if (v.is_string())
-		return py::str(v.as_string());
-	else if (v.is_array())
-	{
-		py::list lst;
-		for (const auto &elem : v.as_array())
-		{
-			lst.append(cast_toml(elem));
-		}
-		return lst;
-	}
-	else if (v.is_table())
-	{
-		py::dict d;
-		for (const auto &[key, val] : v.as_table())
-		{
-			d[py::str(key)] = cast_toml(val);
-		}
-		return d;
-	}
-	else
-	{
-		return py::none();
-	}
-}
+} // namespace detail
+}; // namespace pybind11
 
 // Defines the MaNTA module and what can be called
-PYBIND11_MODULE(MaNTA, m, py::mod_gil_not_used())
-{
-	m.doc() = "Python bindings for MaNTA";
+// The extension is private to the `manta` package: python/manta/__init__.py
+// re-exports it and adds the parts that are more naturally written in Python
+// (the declarative class-attribute spec, chiefly). Users import `manta`.
+//
+// **No py::mod_gil_not_used(), deliberately, and please do not add it back
+// without doing the audit it stands for.** That tag asserts this module is safe
+// to run without the GIL. It was here, asserted rather than established, and the
+// assertion was false in at least two places:
+//
+//   * Basis.hpp's three `singletons` maps -- LegendreBasis, ChebyshevBasis and
+//     NodalBasis each cache their flyweight in a static std::map that getBasis(k)
+//     mutates on first touch. Concurrent insert, or a read racing one, is UB.
+//   * PhysicsCases::map, a lazily allocated static registry. Static-init
+//     population is single-threaded and fine; registerPhysicsCase is *bound to
+//     Python* (below), so it is also mutated at runtime.
+//
+// Neither can race today, and that is the point: PyRunner never releases the
+// GIL -- there is no gil_scoped_release or call_guard anywhere in this module --
+// so a Python thread calling run() holds it for the whole solve and the GIL is
+// silently doing all the synchronisation. Declaring the tag removes exactly that
+// and leaves the statics above unguarded.
+//
+// Without the tag, importing this on a free-threaded interpreter makes CPython
+// re-enable the GIL and say so. That is the conservative outcome and it
+// announces itself, where a false declaration does neither. The tag costs
+// nothing on an ordinary build either way -- measured, it is inert there.
+//
+// To make it true: mutexes on those two (about half a day), then a free-threaded
+// interpreter, its own ABI-tagged build and a CI leg to test against, plus a
+// stated contract for what a user's Python physics case must guarantee once the
+// trampolines' gil_scoped_acquire no longer serialises it. Worth doing when
+// something actually calls in from several threads -- the XLA FFI path is the
+// candidate -- and not before.
+PYBIND11_MODULE(_manta, m) {
+  m.doc() =
+      "Compiled core of the MaNTA Python package; import `manta` instead.";
 
-	m.def("run", runManta, py::return_value_policy::reference, "Runs the MaNTA suite using given configuration file");
-	m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase, py::return_value_policy::reference, "Register a Physics Case");
+  m.def("run", runManta, py::return_value_policy::reference,
+        "Runs the MaNTA suite using given configuration file");
+  m.def("getNodes",
+        py::overload_cast<const std::vector<double> &, unsigned int>(&getNodes),
+        py::return_value_policy::reference, "Get the points of a grid");
+  m.def("getNodes",
+        py::overload_cast<Position, Position, Index, unsigned int>(&getNodes),
+        py::return_value_policy::reference, "Get the points of a grid");
 
-	// List all interfaces of the main TransportSystem class which is what has to be derived from in python
-	py::class_<TransportSystem, PyTransportSystem, py::smart_holder>(m, "TransportSystem")
-		.def(py::init<>())
-		.def("LowerBoundary", &TransportSystem::LowerBoundary)
-		.def("UpperBoundary", &TransportSystem::UpperBoundary)
-		.def("isLowerBoundaryDirichlet", &TransportSystem::isLowerBoundaryDirichlet)
-		.def("isUpperBoundaryDirichlet", &TransportSystem::isUpperBoundaryDirichlet)
-		.def("SigmaFn", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::SigmaFn))
-		.def("SigmaFn_v", py::overload_cast<Index, GlobalState const &, std::vector<Position> const &, Time>(&TransportSystem::SigmaFn))
-		.def("Sources", py::overload_cast<Index, const State &, Position, Time>(&TransportSystem::Sources))
-		.def("Sources_v", py::overload_cast<Index, GlobalState const &, std::vector<Position> const &, Time>(&TransportSystem::Sources))
-		.def("dSigmaFn_du", &TransportSystem::dSigmaFn_du)
-		.def("dSigmaFn_dq", &TransportSystem::dSigmaFn_dq)
-		.def("dSources_du", &TransportSystem::dSources_du)
-		.def("dSources_dq", &TransportSystem::dSources_dq)
-		.def("dSources_dsigma", &TransportSystem::dSources_dsigma)
-		.def("dSigma", &TransportSystem::dSigma)
-		.def("dSources", &TransportSystem::dSources)
-		.def("InitialValue", &TransportSystem::InitialValue)
-		.def("InitialDerivative", &TransportSystem::InitialDerivative)
-		.def("InitialAuxValue", &TransportSystem::InitialAuxValue)
-		.def("AuxG", &TransportSystem::AuxG)
-		.def("AuxGPrime", &TransportSystem::AuxGPrime)
-		.def("dSources_dPhi", &TransportSystem::dSources_dPhi)
-		.def("dSigma_dPhi", &TransportSystem::dSigma_dPhi)
-		.def("createAdjointProblem", &TransportSystem::createAdjointProblem)
-		.def_readwrite("isUpperDirichlet", &PyTransportSystem::isUpperDirichlet)
-		.def_readwrite("isLowerDirichlet", &PyTransportSystem::isLowerDirichlet)
-		.def_readwrite("nVars", &PyTransportSystem::nVars)
-		.def_readwrite("nAux", &PyTransportSystem::nAux);
+  // A physics case describes itself as data, in Python exactly as in C++. This
+  // replaces setting self.nVars / self.isUpperDirichlet after construction,
+  // which could not be validated and left the boundary flags indeterminate if
+  // a case forgot them.
+  bindState(m);
 
-	py::class_<AdjointProblem, PyAdjointProblem, py::smart_holder>(m, "AdjointProblem")
-		.def(py::init<>())
-		.def("gFn", &AdjointProblem::gFn)
-		.def("dgFndp", &AdjointProblem::dgFndp)
-		.def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
-		.def("dg", &AdjointProblem::dg)
-		.def("dSigma", &AdjointProblem::dSigma)
-		.def("dSources", &AdjointProblem::dSources)
-		.def("dAux_dp", &AdjointProblem::dAux_dp)
-		.def("computeUpperBoundarySensitivity", &AdjointProblem::computeUpperBoundarySensitivity)
-		.def("computeLowerBoundarySensitivity", &AdjointProblem::computeLowerBoundarySensitivity)
-		.def("getName", &AdjointProblem::getName)
-		.def_readwrite("np", &PyAdjointProblem::np)
-		.def_readwrite("np_boundary", &PyAdjointProblem::np_boundary);
+  py::enum_<BoundaryKind>(m, "BoundaryKind")
+      .value("Dirichlet", BoundaryKind::Dirichlet)
+      .value("Neumann", BoundaryKind::Neumann)
+      .value("Mixed", BoundaryKind::Mixed);
+  // Also as bare module attributes, so a case reads `lower=manta.Neumann`.
+  m.attr("Dirichlet") = BoundaryKind::Dirichlet;
+  m.attr("Neumann") = BoundaryKind::Neumann;
 
-	py::class_<Grid>(m, "Grid")
-		.def(py::init<>(), py::return_value_policy::reference)
-		.def(py::init<Grid::Position, Grid::Position, Grid::Index, bool, double, double>(), py::return_value_policy::reference)
-		.def("getNCells", &Grid::getNCells);
+  // A whole boundary condition, which for a Mixed end carries the coefficients
+  // of `a u + b q + d sigma = c`. `manta.Mixed(...)` is the way to build one;
+  // manta.Dirichlet and manta.Neumann stay BoundaryKind values, and the
+  // implicitly_convertible registration below is what lets them go on being
+  // passed wherever a BoundaryCondition is now wanted -- `lower=manta.Neumann`,
+  // and `spec.variables[i].lower = manta.Neumann`, both unchanged.
+  py::class_<BoundaryCondition>(m, "BoundaryCondition")
+      // This constructor is what makes implicitly_convertible below work:
+      // pybind11 implements the conversion by *calling* it, so without a bound
+      // init from BoundaryKind every `lower=manta.Neumann` fails to match.
+      .def(py::init([](BoundaryKind k) { return BoundaryCondition(k); }),
+           py::arg("kind"))
+      .def_readonly("kind", &BoundaryCondition::kind)
+      .def_readonly("a", &BoundaryCondition::a)
+      .def_readonly("b", &BoundaryCondition::b)
+      .def_readonly("d", &BoundaryCondition::d)
+      // So `f.lower == manta.Dirichlet` keeps working; python-physics'
+      // mirror_plasma reads its boundary kinds back out that way.
+      .def("__eq__",
+           [](BoundaryCondition const &bc, BoundaryKind k) {
+             return bc.kind == k;
+           },
+           py::is_operator())
+      .def("__repr__", [](BoundaryCondition const &bc) {
+        switch (bc.kind)
+        {
+        case BoundaryKind::Dirichlet:
+          return std::string("BoundaryCondition(Dirichlet)");
+        case BoundaryKind::Neumann:
+          return std::string("BoundaryCondition(Neumann)");
+        case BoundaryKind::Mixed:
+          return "BoundaryCondition(Mixed, a=" + std::to_string(bc.a) +
+                 ", b=" + std::to_string(bc.b) + ", d=" + std::to_string(bc.d) +
+                 ")";
+        }
+        return std::string("BoundaryCondition(?)");
+      });
+  py::implicitly_convertible<BoundaryKind, BoundaryCondition>();
 
-	py::class_<toml::value>(m, "TomlValue")
-		.def(py::init<>())
-		.def("__getitem__",
-			 [](const toml::value &v, const std::string &key)
-			 {
-				 auto temp = v;
-				 py::object result = py::none();
-				 if (!v.contains(key))
-				 {
-					 for (auto &[k, val] : temp.as_table())
-					 {
-						 result = cast_toml(val[key]);
-						 if (!result.is_none())
-							 break;
-					 }
-				 }
-				 else
-				 {
-					 result = cast_toml(temp[key]);
-				 }
+  m.def("Mixed", &BoundaryCondition::mixed, py::arg("a") = 0.0,
+        py::arg("b") = 0.0, py::arg("d") = 0.0,
+        "A mixed/Robin boundary condition a u + b q + d sigma = c, where c is "
+        "what LowerBoundary/UpperBoundary returns. sigma is the stored flux, "
+        "which is -sigma_hat. At least one of b and d must be nonzero.");
 
-				 if (result.is_none())
-				 {
-					 throw std::out_of_range("Key " + key + " not found in TOML value.");
-				 }
-				 else
-				 {
-					 return result;
-				 }
-			 });
-}
+  py::class_<FieldSpec>(m, "Field")
+      .def(py::init([](std::string name, std::string description,
+                       std::string units, BoundaryCondition lower,
+                       BoundaryCondition upper,
+                       bool source_reads_time_derivatives) {
+             return FieldSpec{std::move(name),
+                              std::move(description),
+                              std::move(units),
+                              lower,
+                              upper,
+                              source_reads_time_derivatives};
+           }),
+           py::arg("name"), py::arg("description") = "", py::arg("units") = "",
+           py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
+           py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet),
+           py::arg("source_reads_time_derivatives") = false)
+      .def_readwrite("name", &FieldSpec::name)
+      .def_readwrite("description", &FieldSpec::description)
+      .def_readwrite("units", &FieldSpec::units)
+      .def_readwrite("lower", &FieldSpec::lower)
+      .def_readwrite("upper", &FieldSpec::upper)
+      .def_readwrite("source_reads_time_derivatives",
+                     &FieldSpec::sourceReadsTimeDerivatives,
+                     "Set when this variable's Sources reads state.udot. It is "
+                     "what makes udot be filled and dSources_dudot be asked "
+                     "for.");
+
+  py::class_<ScalarSpec>(m, "Scalar")
+      .def(py::init([](std::string name, std::string description,
+                       std::string units, bool differential) {
+             return ScalarSpec{std::move(name), std::move(description),
+                               std::move(units), differential};
+           }),
+           py::arg("name"), py::arg("description") = "", py::arg("units") = "",
+           py::arg("differential") = false)
+      .def_readwrite("name", &ScalarSpec::name)
+      .def_readwrite("description", &ScalarSpec::description)
+      .def_readwrite("units", &ScalarSpec::units)
+      .def_readwrite("differential", &ScalarSpec::differential);
+
+  py::class_<AuxSpec>(m, "Aux")
+      .def(py::init([](std::string name, std::string description,
+                       std::string units) {
+             return AuxSpec{std::move(name), std::move(description),
+                            std::move(units)};
+           }),
+           py::arg("name"), py::arg("description") = "", py::arg("units") = "")
+      .def_readwrite("name", &AuxSpec::name)
+      .def_readwrite("description", &AuxSpec::description)
+      .def_readwrite("units", &AuxSpec::units);
+
+  // The Python half of SystemSpec.hpp's numberedFields/Scalars/Aux: a spec
+  // whose entries are called Var0, Scalar0, AuxVariable0 and so on. Those are
+  // the names baked into the checked-in .ref.nc files, so a case ported from
+  // the old `self.nVars = 1` form keeps them. A case written from scratch
+  // should name its variables instead.
+  m.def(
+      "numbered_spec",
+      [](Index nVars, Index nScalars, Index nAux, BoundaryCondition lower,
+         BoundaryCondition upper, bool differential) {
+        return SystemSpec{numberedFields(nVars, lower, upper),
+                          numberedScalars(nScalars, differential),
+                          numberedAux(nAux)};
+      },
+      py::arg("nVars"), py::arg("nScalars") = 0, py::arg("nAux") = 0,
+      py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
+      py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet),
+      py::arg("differential") = false,
+      "A SystemSpec using the historical placeholder names (Var0, Scalar0, "
+      "AuxVariable0).");
+
+  // Whether a case follows a changed evaluation plan: SystemSpec.hpp. Named
+  // Regrid, the way a case writes it -- `regrid = manta.Regrid.InPlace`.
+  py::enum_<RegridPolicy>(m, "Regrid")
+      .value("Fixed", RegridPolicy::Fixed)
+      .value("InPlace", RegridPolicy::InPlace);
+
+  py::class_<SystemSpec>(m, "SystemSpec")
+      .def(py::init([](std::vector<FieldSpec> variables,
+                       std::vector<ScalarSpec> scalars,
+                       std::vector<AuxSpec> aux, RegridPolicy regrid) {
+             return SystemSpec{std::move(variables), std::move(scalars),
+                               std::move(aux), regrid};
+           }),
+           py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
+           py::arg("aux") = std::vector<AuxSpec>{},
+           py::arg("regrid") = RegridPolicy::Fixed)
+      .def_readwrite("variables", &SystemSpec::variables)
+      .def_readwrite("scalars", &SystemSpec::scalars)
+      .def_readwrite("aux", &SystemSpec::aux)
+      .def_readwrite("regrid", &SystemSpec::regrid,
+                     "InPlace when the case follows a changed evaluation plan -- a "
+                     "new mesh or degree -- through prepareEvaluation. Fixed, the "
+                     "default, lets it be evaluated by its first plan only.")
+      .def("validate", &SystemSpec::validate);
+
+  // Before TransportSystem, and in this order, because prepareEvaluation()
+  // names these types: pybind11 renders a signature from the types registered
+  // at the point the method is bound, so binding them later would leave C++
+  // names in the generated stub.
+  py::class_<Grid>(m, "Grid")
+      .def(py::init<>(), py::return_value_policy::reference)
+      .def(py::init<Grid::Position, Grid::Position, Grid::Index>(),
+           py::return_value_policy::reference)
+      // Explicit boundaries, which is how a Python caller reaches a non-uniform
+      // mesh now that the `highGridBoundary` flag on the constructor above is
+      // gone. Configure a Runner with GridPoints for the same thing from a dict.
+      .def(py::init<std::vector<Grid::Position> const &>(),
+           py::return_value_policy::reference)
+      .def("getNCells", &Grid::getNCells)
+      .def("lowerBoundary", &Grid::lowerBoundary)
+      .def("upperBoundary", &Grid::upperBoundary)
+      // The nCells + 1 cell boundaries, for a case rebuilding anything cell by
+      // cell from a plan's grid.
+      .def("cellBoundaries", [](Grid const &g) {
+        std::vector<Position> out;
+        out.reserve(g.getNCells() + 1);
+        for (Grid::Index i = 0; i < g.getNCells(); ++i)
+          out.push_back(g[i].x_l);
+        out.push_back(g.upperBoundary());
+        return py::array_t<double>(static_cast<py::ssize_t>(out.size()), out.data());
+      });
+
+  // The evaluation plan: EvaluationPlan.hpp. Everything is read-only -- a plan
+  // is the solver's statement about itself, and a case that edits its copy
+  // changes nothing -- and every point set crosses as a fresh numpy array.
+  py::enum_<EvaluationKind>(m, "EvaluationKind")
+      .value("Residual", EvaluationKind::Residual)
+      .value("Jacobian", EvaluationKind::Jacobian)
+      .value("InitialCondition", EvaluationKind::InitialCondition)
+      .value("TauFaces", EvaluationKind::TauFaces)
+      .value("TauNodes", EvaluationKind::TauNodes)
+      .value("ScalarConstraint", EvaluationKind::ScalarConstraint)
+      .value("ScalarJacobian", EvaluationKind::ScalarJacobian)
+      .value("ScalarCoupling", EvaluationKind::ScalarCoupling)
+      .value("FieldCoupling", EvaluationKind::FieldCoupling)
+      .value("Adjoint", EvaluationKind::Adjoint)
+      .value("InitialProjection", EvaluationKind::InitialProjection)
+      .value("MassMatrix", EvaluationKind::MassMatrix);
+
+  py::enum_<EvaluationEntry>(m, "EvaluationEntry")
+      .value("ComputePhysics", EvaluationEntry::ComputePhysics)
+      .value("ComputePhysicsDerivatives", EvaluationEntry::ComputePhysicsDerivatives)
+      .value("ComputeSourceTimeDerivatives",
+             EvaluationEntry::ComputeSourceTimeDerivatives)
+      .value("ScalarG", EvaluationEntry::ScalarG)
+      .value("ScalarGPrime", EvaluationEntry::ScalarGPrime)
+      .value("InitialScalarDerivative", EvaluationEntry::InitialScalarDerivative)
+      .value("Pointwise", EvaluationEntry::Pointwise);
+
+  py::enum_<EvaluationCadence>(m, "EvaluationCadence")
+      .value("PerResidual", EvaluationCadence::PerResidual)
+      .value("PerJacobianBuild", EvaluationCadence::PerJacobianBuild)
+      .value("PerContinuationStep", EvaluationCadence::PerContinuationStep)
+      .value("PerAdjointSolve", EvaluationCadence::PerAdjointSolve)
+      .value("OncePerRun", EvaluationCadence::OncePerRun)
+      .value("OncePerSolver", EvaluationCadence::OncePerSolver);
+
+  auto positions = [](std::vector<Position> const &x) {
+    return py::array_t<double>(static_cast<py::ssize_t>(x.size()), x.data());
+  };
+
+  py::class_<EvaluationSite>(m, "EvaluationSite")
+      .def_readonly("kind", &EvaluationSite::kind)
+      .def_readonly("entry", &EvaluationSite::entry)
+      .def_readonly("cadence", &EvaluationSite::cadence)
+      .def_readonly("calls", &EvaluationSite::calls)
+      .def_readonly("pointsPerCell", &EvaluationSite::pointsPerCell)
+      .def_property_readonly(
+          "points",
+          [positions](EvaluationSite const &s) { return positions(s.points); })
+      .def("batchSize", &EvaluationSite::batchSize)
+      .def("isBatched", &EvaluationSite::isBatched)
+      .def("__repr__", [](EvaluationSite const &s) {
+        return std::string("EvaluationSite(") + toString(s.kind) + ", " +
+               std::to_string(s.batchSize()) + " points, " +
+               std::to_string(s.calls) + " call(s))";
+      });
+
+  py::class_<EvaluationPlan>(m, "EvaluationPlan")
+      .def_readonly("grid", &EvaluationPlan::grid)
+      .def_readonly("k", &EvaluationPlan::k)
+      .def_readonly("superconvergent", &EvaluationPlan::superconvergent)
+      .def_readonly("steady", &EvaluationPlan::steady)
+      .def_readonly("sites", &EvaluationPlan::sites)
+      .def("has", &EvaluationPlan::has, py::arg("kind"))
+      .def("sitesOf", &EvaluationPlan::sitesOf, py::arg("kind"))
+      .def(
+          "points",
+          [positions](EvaluationPlan const &p, EvaluationKind kind) {
+            return positions(p.points(kind));
+          },
+          py::arg("kind"))
+      .def("batchSizes", &EvaluationPlan::batchSizes, py::arg("entry"))
+      .def("announces", &EvaluationPlan::announces, py::arg("entry"),
+           py::arg("points"),
+           "Whether a call through `entry` at `points` is one this plan "
+           "announced. A case may assert it in its own hooks: an unannounced "
+           "call is a solver bug.");
+
+  // List all interfaces of the main TransportSystem class which is what has to
+  // be derived from in python
+  py::class_<TransportSystem, PyTransportSystem, py::smart_holder>(
+      m, "TransportSystem")
+      .def(py::init<SystemSpec>(), py::arg("spec"))
+      // The same thing spelled out, so a case can say what it is at the point
+      // it calls up without building a SystemSpec first:
+      //     super().__init__(variables=[manta.Field("n", lower=manta.Neumann)])
+      .def(py::init([](std::vector<FieldSpec> variables,
+                       std::vector<ScalarSpec> scalars,
+                       std::vector<AuxSpec> aux) {
+             return new PyTransportSystem(SystemSpec{
+                 std::move(variables), std::move(scalars), std::move(aux)});
+           }),
+           py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
+           py::arg("aux") = std::vector<AuxSpec>{})
+      // a_i(x), the coefficient of du_i/dt. Optional: the base returns 1.0, so a
+      // case that does not define it gets a d_t u - d_x sigma_hat = S.
+      .def("aFn", &TransportSystem::aFn)
+      .def("LowerBoundary", &TransportSystem::LowerBoundary)
+      .def("UpperBoundary", &TransportSystem::UpperBoundary)
+      .def("isLowerBoundaryDirichlet",
+           &TransportSystem::isLowerBoundaryDirichlet)
+      .def("isUpperBoundaryDirichlet",
+           &TransportSystem::isUpperBoundaryDirichlet)
+      .def("ComputePhysics", &TransportSystem::ComputePhysics)
+      // Not exposed, for the same reason as ScalarGPrime: its output parameter
+      // is an array of GlobalStateMatrix references, which has no Python type,
+      // so the bound base method was never callable from Python. A vectorised
+      // subclass *overrides* it and the trampoline reaches the override
+      // directly; binding it only put an unresolvable name in the stub.
+      .def("SigmaFn", py::overload_cast<Index, const State &, Position, Time>(
+                          &TransportSystem::SigmaFn))
+      .def("SigmaFn_v", py::overload_cast<Index, GlobalState const &,
+                                          std::vector<Position> const &, Time>(
+                            &TransportSystem::SigmaFn))
+      .def("Sources", py::overload_cast<Index, const State &, Position, Time>(
+                          &TransportSystem::Sources))
+      .def("Sources_v", py::overload_cast<Index, GlobalState const &,
+                                          std::vector<Position> const &, Time>(
+                            &TransportSystem::Sources))
+      .def("dSigmaFn_du", &TransportSystem::dSigmaFn_du)
+      .def("dSigmaFn_dq", &TransportSystem::dSigmaFn_dq)
+      .def("dSources_du", &TransportSystem::dSources_du)
+      .def("dSources_dq", &TransportSystem::dSources_dq)
+      .def("dSources_dsigma", &TransportSystem::dSources_dsigma)
+      // d(Sources)/d(state.udot), asked for only of a variable whose spec sets
+      // sourceReadsTimeDerivatives. Bound like the four above so the family is
+      // uniform: it is what puts the method in the generated stub, and so what
+      // makes a case's own override something mypy checks against a base rather
+      // than a new name it has never seen.
+      .def("dSources_dudot", &TransportSystem::dSources_dudot)
+      // Derivatives with respect to a field model's geometry slots. Optional,
+      // like the five above: absent means an identically zero column of the A1
+      // coupling block, which is exactly right for a case that does not read
+      // geometry. They are live -- Matrices.cpp's fieldChainOnNodes calls all
+      // three, once per node, whenever a field model is attached.
+      .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
+      .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
+      .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
+      .def("dSigma", &TransportSystem::dSigma)
+      .def("dSources", &TransportSystem::dSources)
+      .def("InitialValue", &TransportSystem::InitialValue)
+      .def("InitialDerivative", &TransportSystem::InitialDerivative)
+      .def("InitialAuxValue", &TransportSystem::InitialAuxValue)
+      .def("AuxG", py::overload_cast<Index, const State &, Position, Time>(
+                       &TransportSystem::AuxG))
+      // The batched overload, as SigmaFn_v and Sources_v are. This was bound to
+      // the pointwise one, which made AuxG_v an exact duplicate of AuxG and
+      // left the aux path the only one with no way to reach the C++ serial
+      // loop from Python -- which is how a test drives a pointwise hook, since
+      // a State cannot be constructed on the Python side.
+      .def("AuxG_v", py::overload_cast<Index, GlobalState const &,
+                                       std::vector<Position> const &, Time>(
+                         &TransportSystem::AuxG))
+      .def("AuxGPrime",
+           py::overload_cast<Index, State &, const State &, Position, Time>(
+               &TransportSystem::AuxGPrime))
+      .def("AuxGPrime_v",
+           py::overload_cast<Index, GlobalState &, GlobalState const &,
+                             std::vector<Position> const &, Time>(
+               &TransportSystem::AuxGPrime))
+      .def("dSources_dPhi", &TransportSystem::dSources_dPhi)
+      .def("dSigma_dPhi", &TransportSystem::dSigma_dPhi)
+      .def("ScalarG", &TransportSystem::ScalarG)
+      // ScalarGPrime is deliberately not exposed: its first two parameters are
+      // GlobalStateMatrix, which has no Python type, so the bound base method
+      // was never callable. Python subclasses *override* it -- the trampoline
+      // reaches the override directly -- and the base default only throws.
+      // Leaving it bound put an unresolvable name in the generated stub.
+      .def("InitialScalarValue", &TransportSystem::InitialScalarValue)
+      .def("dSources_dScalars", &TransportSystem::dSources_dScalars)
+      .def("createAdjointProblem", &TransportSystem::createAdjointProblem)
+      .def("isScalarDifferential", &TransportSystem::isScalarDifferential)
+      // Where and how often the solver will evaluate the case, delivered
+      // before the first physics call of a run whose plan is new to this
+      // instance. Optional: the base does nothing, and a case that does not
+      // define it pays one override lookup per new plan.
+      .def("prepareEvaluation", &TransportSystem::prepareEvaluation,
+           py::arg("plan"))
+      .def("regridPolicy", &TransportSystem::regridPolicy)
+      // A copy of the plan prepareEvaluation was last handed, or None before
+      // any run has initialised with this case.
+      .def_property_readonly(
+          "evaluationPlan",
+          [](TransportSystem const &s) -> std::optional<EvaluationPlan> {
+            if (auto const *plan = s.evaluationPlan())
+              return *plan;
+            return std::nullopt;
+          })
+      .def_property_readonly("spec", &TransportSystem::spec)
+      // Read-only now: these are derived from the spec. Assigning self.nVars
+      // in a subclass __init__ is the pattern this replaces, and leaving it
+      // writable would mean the count and the spec could disagree.
+      .def_property_readonly("nVars", &TransportSystem::getNumVars)
+      .def_property_readonly("nAux", &TransportSystem::getNumAux)
+      .def_property_readonly("nScalars", &TransportSystem::getNumScalars);
+
+  py::class_<AdjointProblem, PyAdjointProblem, py::smart_holder>(
+      m, "AdjointProblem")
+      .def(py::init<>())
+      .def("gFn", py::overload_cast<Index, const GlobalState &,
+                                    std::vector<Position> const &>(
+                      &AdjointProblem::gFn, py::const_))
+      .def("dgFndp", &AdjointProblem::dgFndp)
+      .def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
+      .def("dg", &AdjointProblem::dg)
+      // Not exposed, for the same reason as ScalarGPrime: its output parameter
+      // is an array of GlobalStateMatrix references, which has no Python type,
+      // so the bound base method was never callable from Python. A vectorised
+      // subclass *overrides* it and the trampoline reaches the override
+      // directly; binding it only put an unresolvable name in the stub.
+      .def("dSigma", &AdjointProblem::dSigma)
+      .def("dSources", &AdjointProblem::dSources)
+      .def("dAux", &AdjointProblem::dAux)
+      .def("dAux_dp", &AdjointProblem::dAux_dp)
+      .def("computeUpperBoundarySensitivity",
+           &AdjointProblem::computeUpperBoundarySensitivity)
+      .def("computeLowerBoundarySensitivity",
+           &AdjointProblem::computeLowerBoundarySensitivity)
+      .def("getName", &AdjointProblem::getName)
+      .def_readwrite("np", &PyAdjointProblem::np)
+      .def_readwrite("np_boundary", &PyAdjointProblem::np_boundary)
+      .def_readwrite("ng", &PyAdjointProblem::ng)
+      .def_readwrite("spatialParameters", &PyAdjointProblem::spatialParameters);
+
+  py::class_<toml::value>(m, "TomlValue")
+      .def(py::init<>())
+      .def("__getitem__", [](const toml::value &v, const std::string &key) {
+        auto temp = v;
+
+        py::object result = py::none();
+        if (!v.contains(key)) {
+          for (auto &[k, val] : temp.as_table()) {
+            result = cast_toml(val[key]);
+            if (!result.is_none())
+              break;
+          }
+        } else {
+          result = cast_toml(temp[key]);
+        }
+
+        if (result.is_none()) {
+          throw std::out_of_range("Key " + key + " not found in TOML value.");
+        } else {
+          return result;
+        }
+      });
+  // Defined here, after TomlValue is registered: pybind11 renders a
+  // std::function parameter's signature from the types known at the point of
+  // def(), so binding this earlier left the raw
+  // `toml::toml11_4_4_0::basic_value<...>` in the docstring -- and hence in the
+  // generated stub, where it is not valid Python typing syntax.
+  m.def("registerPhysicsCase", &PhysicsCases::RegisterPhysicsCase,
+        py::arg("name"), py::arg("factory"), py::return_value_policy::reference,
+        "Register a physics case under the name a config file can ask for.");
+
+  // Test support only -- not part of the public API. manta/__init__.py does
+  // not re-export this, so it is reachable only as
+  // manta._manta._test_dSigmaFn_dGeometry, the same way python/Tests already
+  // reaches manta._manta.runner_ffi_ops directly rather than through the
+  // curated `manta` surface.
+  //
+  // It exists because dSigmaFn_dGeometry has no batched (GlobalState-taking)
+  // entry point the way SigmaFn/Sources/AuxG do -- the A1 assembly in
+  // Matrices.cpp calls the *pointwise* hook per node through a member pointer
+  // -- and a State cannot be constructed standalone from Python (see
+  // PyState.hpp), so python/Tests/test_trampolines.py had no way at all to
+  // drive PyTransportSystem.hpp's pointwise dSigmaFn_dGeometry dispatcher, its
+  // optional_override lookup, and the Values cast.
+  //
+  // A free function rather than a TransportSystem method, deliberately: it
+  // adds nothing inheritable or overridable to the interface a physics case
+  // implements, unlike a batched virtual would. It builds a State carrying
+  // only the given geometry (u/q/sigma/phi are left zero, since this is
+  // about the geometry dispatch, not the physics) and calls the pointwise
+  // hook directly -- exactly what a C++ test does, and what the real caller
+  // does: Matrices.cpp's fieldChainOnNodes builds the A1 column the same way,
+  // one pointwise call per node.
+  m.def(
+      "_test_dSigmaFn_dGeometry",
+      [](TransportSystem &sys, Index i, Vector const &geom, Position x, Time t) {
+        State s(sys.getNumVars(), sys.getNumScalars(), sys.getNumAux(),
+                static_cast<Index>(geom.size()));
+        s.geom() = geom;
+        Vector out = Vector::Zero(geom.size());
+        sys.dSigmaFn_dGeometry(i, out, s, x, t);
+        return out;
+      },
+      py::arg("sys"), py::arg("i"), py::arg("geom"), py::arg("x"), py::arg("t"),
+      "Test support only: builds a State carrying the given geometry and calls "
+      "the pointwise dSigmaFn_dGeometry dispatcher directly.");
+
+  m.def("physics_cases", &PhysicsCases::RegisteredNames,
+        "Every physics case name manta.Runner(name) will accept, ascending. "
+        "Includes the C++ cases compiled into this extension, anything a "
+        "loaded plugin registered, and anything registerPhysicsCase was "
+        "called with.");
+
+  m.def(
+      "load_physics_plugin",
+      [](std::string const &path) {
+        // RTLD_GLOBAL so a plugin can be linked against another plugin's
+        // symbols; RTLD_NOW so an unresolved symbol is reported here rather
+        // than at the first call into the case. Both match what runManta does
+        // for the PhysicsPlugins key, deliberately -- a plugin must behave the
+        // same however it was loaded.
+        //
+        // The registration is a side effect of loading: the case's
+        // PhysicsCaseRegister runs during the shared object's static
+        // initialisation and inserts into the same process-global map the
+        // built-in cases use. So there is nothing to return, and nothing to
+        // keep -- the handle is deliberately not closed, because the map would
+        // then hold a factory pointing into unmapped code.
+        if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
+          throw std::runtime_error("Could not load physics plugin " + path +
+                                   ": " + dlerror());
+      },
+      py::arg("path"),
+      "Load a physics case built outside the MaNTA tree, so that "
+      "manta.Runner(name) can reach it. The dict equivalent of a config "
+      "file's PhysicsPlugins key. Compile the plugin with the flags "
+      "`pkg-config --cflags manta` reports, and do not link it against "
+      "-lmanta; see the out-of-tree section of the docs.");
+
+  // A real enum.IntEnum, not a py::enum_, so that its members are ints. Under
+  // jit, FFIRunner's slice ops return the outcome as a traced int32 -- a value
+  // the compiled program will produce, which no Python enum object can stand
+  // for -- and a driver tests it with jnp.equal(outcome,
+  // SteadyOutcome.Converged). That needs the member to be a number JAX can read,
+  // which a py::enum_ member is not; eagerly it is the same member as ever.
+  py::native_enum<SystemSolver::SteadyOutcome>(
+      m, "SteadyOutcome", "enum.IntEnum",
+      "Why a steady solve, or one slice of one, stopped.\n\n"
+      "NotRun: no steady solve has been taken on this solver.\n"
+      "Converged: ||F|| fell below SteadyStateTolerance.\n"
+      "OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. "
+      "Not a failure: the state reached is the last accepted one, and "
+      "continue_steady() resumes from it and the pseudo-time step.\n"
+      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n\n"
+      "An IntEnum, so a traced outcome compares with the members under jit: "
+      "jnp.equal(outcome, SteadyOutcome.Converged).")
+      .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
+             "No steady solve has been taken on this solver.")
+      .value("Converged", SystemSolver::SteadyOutcome::Converged,
+             "||F|| fell below SteadyStateTolerance.")
+      .value("OutOfSteps", SystemSolver::SteadyOutcome::OutOfSteps,
+             "A budget was spent: MaxContinuationSteps, or MaxRejectedSteps. Not a "
+             "failure: the state reached is the last accepted one, and "
+             "continue_steady() resumes from it and the pseudo-time step.")
+      .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
+             "KINSol failed in a way pseudo-transient damping cannot answer.")
+      .finalize();
+
+  py::class_<PyRunner, py::smart_holder>(m, "Runner")
+      .def(py::init<std::shared_ptr<TransportSystem>>())
+      // A C++ case by the name a config file's TransportSystem key would give.
+      // Registered second, so a TransportSystem object still binds to the
+      // overload above rather than being str()'d into this one.
+      .def(py::init<std::string>(), py::arg("physics_case"))
+      .def_property_readonly("physics_case", &PyRunner::physicsCase,
+                             "The registered C++ case name this Runner was "
+                             "built from, or \"\" when it was handed a "
+                             "transport system object.")
+      .def("configure", &PyRunner::configure)
+      // Two overloads: run(tFinal) is the usual way in, run() uses the
+      // configuration's t_final -- the same key a config file must carry.
+      .def("run", static_cast<void (PyRunner::*)(double)>(&PyRunner::run))
+      .def("run", static_cast<void (PyRunner::*)()>(&PyRunner::run))
+      .def("run_ss", &PyRunner::run_ss)
+      .def("start_steady", &PyRunner::start_steady, py::arg("estimate") = true)
+      .def("continue_steady", &PyRunner::continue_steady,
+           py::arg("estimate") = true)
+      .def("finish_steady", &PyRunner::finish_steady)
+      .def("abandon_steady", &PyRunner::abandon_steady)
+      .def("steadyStats", &PyRunner::steadyStats)
+      .def("G", &PyRunner::G)
+      .def("getAdjointGradients", &PyRunner::getAdjointGradients)
+      .def("objectiveEstimate", &PyRunner::objectiveEstimate)
+      .def("getSolution", &PyRunner::getSolution)
+      .def("getDerivative", &PyRunner::getDerivative)
+      .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
+      .def("getCellBoundaries", &PyRunner::getCellBoundaries)
+      .def("get_address", [](const PyRunner &runner) // needed for xla interface
+           { return reinterpret_cast<std::uint64_t>(&runner); });
+#ifdef XLA_FFI
+  m.def("runner_ffi_ops", []() {
+    py::dict ffi_ops;
+    ffi_ops["get_solution_ffi"] = EncapsulateFfiCall(get_solution_ffi_ops);
+    ffi_ops["get_adjoint_gradients_ffi"] =
+        EncapsulateFfiCall(get_adjoint_gradients_ffi_ops);
+    ffi_ops["get_g_val"] = EncapsulateFfiCall(get_g_val_ffi_ops);
+    ffi_ops["run_ffi"] = EncapsulateFfiCall(run_ffi_ops);
+    ffi_ops["run_ss_ffi"] = EncapsulateFfiCall(run_ss_ffi_ops);
+    ffi_ops["start_steady_ffi"] = EncapsulateFfiCall(start_steady_ffi_ops);
+    ffi_ops["continue_steady_ffi"] = EncapsulateFfiCall(continue_steady_ffi_ops);
+    ffi_ops["finish_steady_ffi"] = EncapsulateFfiCall(finish_steady_ffi_ops);
+    ffi_ops["abandon_steady_ffi"] = EncapsulateFfiCall(abandon_steady_ffi_ops);
+    return ffi_ops;
+  });
+#ifdef CUDA
+  m.def("runner_ffi_ops_cuda", []() {
+    py::dict ffi_ops;
+    ffi_ops["get_solution_ffi_cuda"] =
+        EncapsulateFfiCall(get_solution_ffi_ops_cuda);
+    ffi_ops["get_adjoint_gradients_ffi_cuda"] =
+        EncapsulateFfiCall(get_adjoint_gradients_ffi_ops_cuda);
+    return ffi_ops;
+  });
+#endif
+#endif
+};

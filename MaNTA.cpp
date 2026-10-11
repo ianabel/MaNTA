@@ -1,7 +1,4 @@
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include <cmath>
+#include <dlfcn.h> // physics plugins loaded from the config
 #include <memory>
 #include <boost/math/tools/roots.hpp>
 #include <toml.hpp>
@@ -9,9 +6,22 @@
 
 #include "SystemSolver.hpp"
 #include "PhysicsCases.hpp"
+#include "SolverConfig.hpp"
+#include "FieldModel.hpp"
+#include "DegreeAdaptation.hpp"
+#include "MeshAdaptation.hpp"
+#include "PhysicsInstance.hpp"
+#include "ParallelFill.hpp"
 
-// Load restart data into vectors
-int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt)
+// Load restart data into vectors. `nField` is filled with how many of the
+// trailing entries of Y are a field model's psi, so the caller can shape the
+// DGSoln that wraps them.
+//
+// A file written before the field block existed has no nField variable, and
+// reads back as zero rather than as an error: every such file was written by a
+// run with no field model, so zero is the truth about it rather than a guess.
+int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vector<double> &dYdt,
+				 Index &nField)
 {
 	netCDF::NcGroup RestartGroup = restart_file.getGroup("RestartData");
 
@@ -23,72 +33,18 @@ int LoadFromFile(netCDF::NcFile &restart_file, std::vector<double> &Y, std::vect
 	RestartGroup.getVar("Y").getVar(Y.data());
 	RestartGroup.getVar("dYdt").getVar(dYdt.data());
 
+	nField = 0;
+	netCDF::NcVar nFieldVar = RestartGroup.getVar("nField");
+	if (!nFieldVar.isNull())
+	{
+		int stored = 0;
+		nFieldVar.getVar(&stored);
+		nField = stored;
+	}
+
 	restart_file.close();
 
 	return nDOF;
-}
-
-double getFloatWithDefault(std::string const &name, toml::value const &config, double defaultValue)
-{
-	auto confCount = config.count(name);
-	if (confCount == 0)
-	{
-		std::cerr << "INFO: Using default value " << defaultValue << " for configuration option " << name << std::endl;
-		return defaultValue;
-	}
-	else if (confCount > 1)
-	{
-		throw std::invalid_argument(name + " was multiply specified.");
-	}
-
-	auto configElement = toml::find(config, name);
-
-	if (configElement.is_integer())
-		return static_cast<double>(configElement.as_floating());
-	else if (configElement.is_floating())
-		return static_cast<double>(configElement.as_floating());
-	else
-		throw std::invalid_argument(name + " specified incorrrectly");
-	return 0.0;
-}
-
-double getFloat(std::string const &name, toml::value const &config)
-{
-	auto confCount = config.count(name);
-	if (confCount == 0)
-		throw std::invalid_argument(name + " was not specified.");
-	else if (confCount > 1)
-		throw std::invalid_argument(name + " was multiply specified.");
-
-	auto configElement = toml::find(config, name);
-	if (configElement.is_integer())
-		return static_cast<double>(configElement.as_floating());
-	else if (configElement.is_floating())
-		return static_cast<double>(configElement.as_floating());
-	else
-		throw std::invalid_argument(name + " specified incorrrectly");
-	return 0.0;
-}
-
-int getIntWithDefault(std::string const &name, toml::value const &config, int defaultValue)
-{
-	auto confCount = config.count(name);
-	if (confCount == 0)
-	{
-		std::cerr << "INFO: Using default value " << defaultValue << " for configuration option " << name << std::endl;
-		return defaultValue;
-	}
-	else if (confCount > 1)
-	{
-		throw std::invalid_argument(name + " was multiply specified.");
-	}
-
-	auto configElement = toml::find(config, name);
-	if (configElement.is_integer())
-		return static_cast<int>(configElement.as_integer());
-	else
-		throw std::invalid_argument(name + " specified incorrrectly");
-	return 0;
 }
 
 int runManta(std::string const &fname)
@@ -96,220 +52,250 @@ int runManta(std::string const &fname)
 	std::filesystem::path config_file_path(fname);
 	if (!std::filesystem::exists(config_file_path))
 	{
-		std::cerr << "Configuration file " << fname << " does not exist" << std::endl;
+    logmsg<LOG_LEVEL::ERROR>("Configuration file {} does not exist.", fname);
 		return 1;
 	}
 
-	const auto configObject = toml::parse(fname);
-
-	std::shared_ptr<SystemSolver> system;
-
-	// Parse config file for generic configuration options (not physics specific ones)
+	// Every configuration key MaNTA accepts is declared once, in
+	// ConfigSchema.cpp, and read the same way here and in PyRunner::configure.
+	// This function used to open-code ~120 lines of toml::find_or against a
+	// separate list, which is how the two surfaces came to disagree about the
+	// name of the initial time and the default absolute tolerance.
 	const auto configFile = toml::parse(fname);
-	const auto config = toml::find<toml::value>(configFile, "configuration");
+	const auto configuration = toml::find<toml::value>(configFile, "configuration");
 
-	bool isRestarting = toml::find_or(config, "restart", false);
+	// Deliberately not wrapped in a try/catch. A bad configuration has always
+	// propagated out of here: pybind translates it for `manta.run()`, so a
+	// Python caller gets an exception rather than a return code it can ignore,
+	// and main() catches it for the command line.
+	TomlConfigSource source(configuration, fname);
+	SolverConfig config = loadSolverConfig(source, ConfigSchema::Reader::Toml);
+
+	// t_final is required of a config file and not of a dict -- a Runner is told
+	// the end time by run(tFinal) -- which the schema records per reader, so
+	// loadSolverConfig has already reported it alongside any other missing key
+	// rather than in a message of its own.
+	if (!config.t_final)
+		throw std::logic_error("t_final is required of the TOML reader but was not set.");
+
 	netCDF::NcFile restart_file;
-
-	if (isRestarting)
+	if (config.restart)
 	{
-		std::string fbase = std::filesystem::path(fname).stem();
-		std::string fileName = toml::find_or(config, "RestartFile", fbase + ".restart.nc");
+		std::string fileName = config.RestartFile.empty()
+								   ? config.OutputFilename + ".restart.nc"
+								   : config.RestartFile;
 		try
 		{
 			restart_file.open(fileName, netCDF::NcFile::FileMode::read);
 		}
 		catch (...)
 		{
-			std::string msg = "Failed to open restart netCDF file at: " + std::string(std::filesystem::absolute(std::filesystem::path(fileName)));
-			throw std::runtime_error(msg);
+			logmsg<LOG_LEVEL::ERROR>("Failed to open restart netCDF file at: {}",
+									 std::string(std::filesystem::absolute(std::filesystem::path(fileName))));
+			return 1;
 		}
 	}
 
+	// Two meshes and two degrees on a restart, and keeping them apart is the
+	// whole of it: `fileGrid`/`fileOrder` describe how the stored state is laid
+	// out, and are what the DOF check and setRestartValues below must use, while
+	// `grid`/`k` are what the run is solved on and are the configuration's to
+	// choose. Off a restart the two coincide and fileGrid is moved into grid.
+	unsigned int fileOrder = 1;
+	std::unique_ptr<Grid> fileGrid = makeGrid(config, config.restart ? &restart_file : nullptr, fileOrder);
+
+	unsigned int k = fileOrder;
 	std::unique_ptr<Grid> grid;
-
-	//Grid *grid;
-	unsigned int k = 1;
-	if (!isRestarting)
+	if (config.restart)
 	{
-
-		// Solver parameters
-		double lBound, uBound, lowerBoundaryFraction, upperBoundaryFraction;
-		bool highGridBoundary;
-		int nCells;
-
-		auto polyDegree = toml::find(config, "Polynomial_degree");
-		if (config.count("Polynomial_degree") != 1)
-			throw std::invalid_argument("Polynomial_degree unspecified or specified more than once");
-		else if (!polyDegree.is_integer())
-			throw std::invalid_argument("Polynomial_degree must be specified as an integer");
-		else
-			k = polyDegree.as_integer();
-
-		if (config.count("High_Grid_Boundary") != 1)
-		{
-			highGridBoundary = false;
-			lowerBoundaryFraction = 0.0;
-			upperBoundaryFraction = 0.0;
-		}
-		else
-		{
-			highGridBoundary = config.at("High_Grid_Boundary").as_boolean();
-			lowerBoundaryFraction = toml::find_or(config, "Lower_Boundary_Fraction", 0.2);
-			upperBoundaryFraction = toml::find_or(config, "Upper_Boundary_Fraction", 0.2);
-		}
-
-		auto numberOfCells = toml::find(config, "Grid_size");
-		if (config.count("Grid_size") != 1)
-			throw std::invalid_argument("Grid_size unspecified or specified more than once");
-		if (!numberOfCells.is_integer())
-			throw std::invalid_argument("Grid_size must be specified as an integer");
-		else
-			nCells = numberOfCells.as_integer();
-
-		if (nCells < 4 && highGridBoundary)
-			throw std::invalid_argument("Grid size must exceed 4 cells in order to implemet dense boundaries");
-
-		auto lowerBoundary = toml::find(config, "Lower_boundary");
-		if (config.count("Lower_boundary") != 1)
-			throw std::invalid_argument("Lower_boundary unspecified or specified more than once");
-		else if (lowerBoundary.is_integer())
-			lBound = static_cast<double>(lowerBoundary.as_floating());
-		else if (lowerBoundary.is_floating())
-			lBound = static_cast<double>(lowerBoundary.as_floating());
-		else
-			throw std::invalid_argument("Lower_boundary specified incorrrectly");
-
-		auto upperBoundary = toml::find(config, "Upper_boundary");
-		if (config.count("Upper_boundary") != 1)
-			throw std::invalid_argument("Upper_boundary unspecified or specified more than once");
-		else if (upperBoundary.is_integer())
-			uBound = static_cast<double>(upperBoundary.as_floating());
-		else if (upperBoundary.is_floating())
-			uBound = static_cast<double>(upperBoundary.as_floating());
-		else
-			throw std::invalid_argument("Upper_boundary specified incorrrectly");
-
-		grid = std::make_unique<Grid>(lBound, uBound, nCells, highGridBoundary, lowerBoundaryFraction, upperBoundaryFraction);
+		grid = restartRunGrid(config, *fileGrid);
+		k = restartRunOrder(config, fileOrder);
 	}
 	else
 	{
-		// Load grid from restart file
-		netCDF::NcGroup GridGroup = restart_file.getGroup("Grid");
-		auto nPoints = GridGroup.getDim("Index").getSize();
-		std::vector<Position> CellBoundaries(nPoints);
-
-		GridGroup.getVar("CellBoundaries").getVar(CellBoundaries.data());
-
-		grid = std::make_unique<Grid>(CellBoundaries);
-
-		GridGroup.getVar("PolyOrder").getVar(&k);
+		grid = std::move(fileGrid);
 	}
 
-	double tau = getFloatWithDefault("tau", config, 1.0);
-	double delta_t = getFloat("delta_t", config);
-	double tZero = getFloatWithDefault("t_initial", config, 0.0);
-	double tFinal = getFloat("t_final", config);
-	double rtol = getFloatWithDefault("Relative_tolerance", config, 1e-3);
-
-	std::vector<double> absTol;
-
-	if (config.count("Absolute_tolerance") == 1)
+	// Physics cases built outside this tree.
+	//
+	// A case registers itself from a static initialiser, so loading the shared
+	// object is all that is needed -- its PhysicsCaseRegister runs on dlopen and
+	// inserts into the same process-global map the built-in cases use. This has
+	// to happen before InstantiateProblem, and duplicate names now throw rather
+	// than being dropped, so a plugin colliding with a built-in says so.
+	for (auto const &path : config.PhysicsPlugins)
 	{
-		auto atol_toml = toml::find(config, "Absolute_tolerance");
-		if (atol_toml.is_array())
-			absTol = toml::get<std::vector<double>>(atol_toml);
-		else
+		// RTLD_GLOBAL so a plugin can be linked against another plugin's
+		// symbols; RTLD_NOW so an unresolved symbol is reported here rather
+		// than at the first call into the case.
+		if (dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL) == nullptr)
 		{
-			absTol.resize(1);
-			if (atol_toml.is_integer())
-				absTol[0] = static_cast<double>(toml::get<int>(atol_toml));
-			else
-				absTol[0] = toml::get<double>(atol_toml);
+			logmsg<LOG_LEVEL::ERROR>("Could not load physics plugin {}: {}", path, dlerror());
+			return 1;
 		}
 	}
-	else if (config.count("Absolute_tolerance") == 0)
+
+	// InstantiateProblem throws for an unrecognised name, with the list of what
+	// is registered in the message. Caught here so the standalone binary still
+	// exits 1 with a readable line rather than terminating on an uncaught
+	// exception out of main.
+	// Shared, so that an adaptation driver rebuilding the case can replace it in
+	// place (PhysicsInstance).
+	std::shared_ptr<TransportSystem> pProblem;
+	try
 	{
-		absTol.resize(1);
-		absTol[0] = 1e-2;
+		pProblem = PhysicsCases::InstantiateProblem(config.TransportSystem, configFile, *grid);
 	}
-	else
+	catch (std::invalid_argument const &e)
 	{
-		throw std::invalid_argument("Absolute_tolerance was specified more than once");
+		logmsg<LOG_LEVEL::ERROR>("Could not instantiate a physics model for TransportSystem = {}\n  {}",
+								 config.TransportSystem, e.what());
+		return 1;
 	}
-
-	double dt_min = getFloatWithDefault("MinStepSize", config, 1e-7);
-
-	int nOutput = getIntWithDefault("OutputPoints", config, 301);
-
-	bool solveAdjoint = false;
-	if (config.count("solveAdjoint") == 1)
-		solveAdjoint = config.at("solveAdjoint").as_boolean();
-
-	if (config.count("TransportSystem") != 1)
-		throw std::invalid_argument("TransportSystem needs to specified exactly once in the general configuration section");
-
-	std::string ProblemName = config.at("TransportSystem").as_string();
-
-	// Convert string to TransportSystem* instance
-
-	std::unique_ptr<TransportSystem> pProblem = PhysicsCases::InstantiateProblem(ProblemName, configFile, *grid);
 
 	std::unique_ptr<AdjointProblem> adjoint = nullptr;
-	if (solveAdjoint)
+	if (config.solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
-	if (isRestarting)
+	// A field model is selected by name from the same process-global registry
+	// pattern the physics cases use, and is handed the parsed config file so it
+	// can read its own table. After the plugin dlopens above, since a model may
+	// come from one; and *before* the restart block below, because the field
+	// block is part of the solution vector and its length is what the restart
+	// file has to be checked against and the restart DGSoln shaped by. It is
+	// attached to the solver further down -- setFieldModel needs a solver, and a
+	// solver cannot exist until the restart values are in the problem.
+	std::shared_ptr<FieldModel> fieldModel;
+	if (!config.FieldModel.empty())
+	{
+		try
+		{
+			fieldModel = FieldModels::InstantiateFieldModel(config.FieldModel, configFile, *grid);
+		}
+		catch (std::invalid_argument const &e)
+		{
+			logmsg<LOG_LEVEL::ERROR>("Could not instantiate a field model for FieldModel = {}\n  {}",
+									 config.FieldModel, e.what());
+			return 1;
+		}
+	}
+	const Index nField = fieldModel ? fieldModel->nFieldDOF() : 0;
+
+	if (config.restart)
 	{
 		std::vector<double> Y, dYdt;
-		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt);
+		Index nField_file = 0;
+		Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
 
-		// Make sure degrees of freedom are consistent with restart file
-		const Index nCells = grid->getNCells();
-		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (k + 1) + pProblem->getNumVars() * (nCells + 1) + pProblem->getNumScalars() + pProblem->getNumAux() * nCells * (k + 1);
+		// Make sure degrees of freedom are consistent with restart file. The
+		// file's mesh and degree, not the run's: this is a statement about how
+		// the vector just read is laid out.
+		const Index nCells = fileGrid->getNCells();
+		const Index nDOF = pProblem->getNumVars() * 3 * nCells * (fileOrder + 1) +
+						   pProblem->getNumVars() * (nCells + 1) +
+						   pProblem->getNumScalars() +
+						   pProblem->getNumAux() * nCells * (fileOrder + 1) +
+						   nField;
+
+		// Two checks, not one, because nDOF alone cannot separate them: a file
+		// with one extra field unknown and one fewer scalar has exactly the
+		// right total length, and would be read back with psi in the scalar
+		// slot. The field count is the cheaper thing to be sure of, so it is
+		// reported first and by name.
+		if (nField_file != nField)
+			throw std::invalid_argument(
+				"Restart file carries " + std::to_string(nField_file) +
+				" field unknowns but the configured FieldModel declares " +
+				std::to_string(nField) + ".");
 
 		if (nDOF_file != nDOF)
 			throw std::invalid_argument("nVars/nAux/nScalars in restart file inconsistent with physics case");
 
-		pProblem->setRestartValues(Y, dYdt, *grid, k);
+		// The file's own mesh and degree, which is what its DOF are laid out at.
+		// The run's, which may differ in either, were chosen above;
+		// setInitialConditions projects across whichever differs and keeps the
+		// copy path when neither does.
+		pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder, nField);
 	}
 
-	if (pProblem == nullptr)
+	// Degree adaptation builds and runs a solver per level itself, and
+	// runAdaptiveDegree has no way to take a field model -- so a field model
+	// would silently never be attached, leaving the run solving the fixed-field
+	// problem while the restart check above has already sized the state for
+	// nField unknowns. Refused rather than ignored, the way a sliced steady
+	// solve refuses it.
+	if ((config.DegreeAdaptation || config.MeshAdaptation || !config.DegreeLadder.empty() ||
+		 !config.GridLadder.empty()) &&
+		fieldModel)
+		throw std::invalid_argument(
+			"DegreeAdaptation and MeshAdaptation cannot be combined with a FieldModel: "
+			"the adaptive drivers build a solver per level and cannot carry the field model.");
+
+	// The adaptation drivers solve on several discretisations. Under
+	// RebuildPhysicsOnRegrid a case that cannot follow a new one in place is
+	// rebuilt for each from the registry, by the same name and table it was
+	// first built from; without it there is no way to rebuild, and such a case is
+	// refused.
+	PhysicsInstance::Rebuild rebuild;
+	if (config.RebuildPhysicsOnRegrid)
+		rebuild = [&](Grid const &g) -> std::shared_ptr<TransportSystem>
+		{ return PhysicsCases::InstantiateProblem(config.TransportSystem, configFile, g); };
+	PhysicsInstance physics(pProblem, adjoint, *grid, std::move(rebuild));
+
+	// The configured level is the one place no controller chooses, so it is the
+	// one that is only warned about. See ParallelFill.hpp.
+	if (config.PhysicsParallelism > 1)
 	{
-		std::cerr << " Could not instantiate a physics model for TransportSystem = " << ProblemName << std::endl;
-		std::cerr << " Available physics models include: " << std::endl;
-		for (auto pair : *PhysicsCases::map)
-		{
-			std::cerr << '\t' << pair.first << std::endl;
-		}
-		std::cerr << std::endl;
-		return 1;
+		const auto planner = physics.plannerFor(*grid, k, [&](SystemSolver &s)
+												{ applySolverConfig(config, s); });
+		if (const std::string w = underuseWarning(
+				[&](Grid const &g, unsigned int kk) { return planner->evaluationPlanFor(g, kk); },
+				*grid, k, config.MaxPolynomialDegree, config.PhysicsParallelism,
+				config.MaxPhysicsBatch);
+			!w.empty())
+			logmsg<LOG_LEVEL::WARNING>("{}", w);
 	}
 
-	system = std::make_shared<SystemSolver>(*grid, k, pProblem.get(), adjoint.get());
-
-	system->setOutputCadence(delta_t);
-	system->setTolerances(absTol, rtol);
-	system->setTau(tau);
-	system->setInitialTime(tZero);
-	system->setInputFile(fname);
-	system->setSolveAdjoint(solveAdjoint);
-
-	system->setNOutput(nOutput);
-	system->setMinStepSize(dt_min);
-
-	if (config.count("SteadyStateTolerance") == 1)
+	if (config.MeshAdaptation)
 	{
-		double sst = toml::find<double>(config, "SteadyStateTolerance");
-		std::cout << "Running until steady state achieved (variation below " << sst << "or end time reached." << std::endl;
+		// p -> h -> p. Owns the graded mesh it may build, and its solver points
+		// into that, so the whole result is destroyed together and in the right
+		// order (see AdaptiveMeshResult).
+		auto adapted = runAdaptiveMesh(config, physics, *grid, k, *config.t_final);
 	}
+	else if (config.DegreeAdaptation)
+	{
+		// The driver builds and runs a solver per degree, so it does the
+		// applySolverConfig/setAdjointProblem/runSolver sequence below itself --
+		// for each level, which is the point. It returns the last one so the
+		// object survives to be destroyed here in the usual way.
+		auto system = runAdaptiveDegree(config, physics, *grid, k, *config.t_final);
+	}
+	else if (!config.DegreeLadder.empty() || !config.GridLadder.empty())
+	{
+		// Same shape, and for the same reason: a solver per rung, built inside.
+		auto system = runLadder(config, physics, *grid, k, *config.t_final);
+	}
+	else
+	{
+		auto system = std::make_shared<SystemSolver>(*grid, k, pProblem.get());
 
-	system->runSolver(tFinal);
+		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
+		// reshapes the solution vector and refuses once the solver is initialised.
+		if (fieldModel)
+			system->setFieldModel(fieldModel);
+
+		applySolverConfig(config, *system);
+		if (config.solveAdjoint)
+			system->setAdjointProblem(adjoint.get());
+
+		system->runSolver(*config.t_final);
+	}
 
 	// For compiled-in TransportSystems we have the type information and
 	// this will call the correct inherited destructor
 
 	//delete grid;
-	std::cout << "Done." << std::endl;
+	std::println("Done.");
 	return 0;
 }

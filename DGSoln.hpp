@@ -14,9 +14,9 @@ class DGSolnImpl
 public:
     typedef BasisType basis_type;
     using DGApprox = DGApproxImpl<BasisType>;
-    DGSolnImpl(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars(Scalars), nAux(aux), mu_(nullptr, 0), Basis(BasisType::getBasis(Order)) {};
+    DGSolnImpl(Index n_var, Grid const &_grid, Index Order, Index Scalars = 0, Index aux = 0, Index nField = 0) : nVars(n_var), grid(_grid), k(Order), nScalars(Scalars), nAux(aux), nField(nField), mu_(nullptr, 0), psi_(nullptr, 0), Basis(BasisType::getBasis(Order)) {};
 
-    DGSolnImpl(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0, Index naux = 0) : nVars(n_var), grid(_grid), k(Order), nScalars(Scalars), nAux(naux), mu_(nullptr, 0), Basis(BasisType::getBasis(Order)) { Map(memory); };
+    DGSolnImpl(Index n_var, Grid const &_grid, Index Order, double *memory, Index Scalars = 0, Index naux = 0, Index nField = 0) : nVars(n_var), grid(_grid), k(Order), nScalars(Scalars), nAux(naux), nField(nField), mu_(nullptr, 0), psi_(nullptr, 0), Basis(BasisType::getBasis(Order)) { Map(memory); };
 
     virtual ~DGSolnImpl() = default;
 
@@ -24,14 +24,36 @@ public:
     Index getScalars() const { return nScalars; };
     Index getAux() const { return nAux; };
 
+    // The length of the flat vector this view imposes structure on, from the
+    // problem's shape alone -- no instance needed.
+    //
+    // Static because the formula had five copies: this member, Solver.cpp where
+    // the N_Vector is allocated, NetCDFIO.cpp where a restart file is sized, and
+    // MaNTA.cpp and PyRunner.cpp where a restart file's length is checked against
+    // the case. All five had to agree, and nothing said so. Callers that already
+    // hold a DGSoln keep using the no-argument overload below; the rest ask here.
+    //
+    // 3 = u + q + sigma, each nVars fields of (k+1) coefficients in every cell.
+    // lambda is a trace unknown, so there are nCells+1 of them per variable -- one
+    // per face, both ends included. Scalars carry no spatial discretisation at all.
+    // Auxiliary variables do, so each carries nCells*(k+1) like a field.
+    //
+    // nField is required rather than defaulted: the field model's unknowns go
+    // last, and a copy of this formula that did not know about them once wrote a
+    // short restart file whose recorded length matched the uncoupled formula, so
+    // the truncated file read back as consistent.
+    static constexpr size_t getDoF(Index nVars, Grid::Index nCells, Index k,
+                                   Index nScalars, Index nAux, Index nField)
+    {
+        return nCells * nVars * (k + 1) * 3 + (nCells + 1) * nVars + nScalars +
+               nCells * nAux * (k + 1) + nField;
+    };
+
     size_t getDoF() const
     {
-        // 3 = u + q + sigma
-        // nCells + 1 for lambda because we store values at both ends
-        // and we are carrying nScalar scalar variables
-        // Auxiliary variables depend on space, so each one carries nCells * (k+1) degrees of freedom
-        return grid.getNCells() * nVars * (k + 1) * 3 +
-               (grid.getNCells() + 1) * nVars + nScalars + grid.getNCells() * nAux * (k + 1);
+        // The field model's unknowns are appended last, so adding them shifts
+        // nothing before them.
+        return getDoF(nVars, grid.getNCells(), k, nScalars, nAux, nField);
     };
 
     void Map(double *Y)
@@ -69,6 +91,9 @@ public:
 
         new (&mu_) VectorWrapper(Y + scalar_offset, nScalars);
 
+        size_t field_offset = scalar_offset + nScalars;
+        new (&psi_) VectorWrapper(Y + field_offset, nField);
+
         for (int a = 0; a < nAux; a++)
             aux_.emplace_back(grid, Basis, Y + aux_offset + a * (k + 1), per_cell_dof);
     };
@@ -92,6 +117,28 @@ public:
     VectorWrapper const &Scalars() const { return mu_; };
     VectorWrapper &Scalars() { return mu_; };
 
+    Index getFieldDOF() const { return nField; };
+
+    /// Attach (or resize) the field block after construction.
+    ///
+    /// Every other part of a DGSoln's shape is fixed at construction and stays
+    /// that way. This one cannot be: SystemSolver builds y, dydt, yJac and
+    /// dydtJac in its constructor initialiser list, and a field model
+    /// arrives later -- setFieldModel() is what a configuration calls, and a
+    /// configuration cannot run before the object it configures exists.
+    ///
+    /// The field block is last in the layout, so nothing before it moves. What
+    /// does move is getDoF(): any memory already mapped is now the wrong length,
+    /// so re-Map() after calling this, and re-allocate first if the DGSoln owns
+    /// what it maps.
+    void setFieldDOF(Index n) { nField = n; };
+
+    double Field(Index j) const { return psi_[j]; };
+    double &Field(Index j) { return psi_[j]; };
+
+    VectorWrapper const &getField() const { return psi_; };
+    VectorWrapper &getField() { return psi_; };
+
     // Auxiliary variables that are purely algebraic
     DGApprox &Aux(Index i) { return aux_[i]; };
     DGApprox const &Aux(Index i) const { return aux_[i]; };
@@ -101,17 +148,17 @@ public:
         State out(nVars, nScalars, nAux);
         for (Index i = 0; i < nVars; ++i)
         {
-            out.Variable[i] = u_[i](x);
-            out.Derivative[i] = q_[i](x);
-            out.Flux[i] = sigma_[i](x);
+            out.u(i) = u_[i](x);
+            out.q(i) = q_[i](x);
+            out.sigma(i) = sigma_[i](x);
         }
         for (Index i = 0; i < nScalars; ++i)
         {
-            out.Scalars[i] = mu_[i];
+            out.scalar(i) = mu_[i];
         }
         for (Index i = 0; i < nAux; ++i)
         {
-            out.Aux[i] = aux_[i](x);
+            out.phi(i) = aux_[i](x);
         }
         return out;
     }
@@ -144,7 +191,7 @@ public:
         return out;
     }
 
-    GlobalState evalOnNodes() const
+    GlobalState evalOnNodes() const 
     {
         GlobalState out(grid.getNCells(), k, nVars, nScalars, nAux);
 
@@ -163,17 +210,17 @@ public:
         State out(nVars, nScalars, nAux);
         for (Index i = 0; i < nVars; ++i)
         {
-            out.Variable[i] = u_[i].getCoeff(cell).second(node);
-            out.Derivative[i] = q_[i].getCoeff(cell).second(node);
-            out.Flux[i] = sigma_[i].getCoeff(cell).second(node);
+            out.u(i) = u_[i].getCoeff(cell).second(node);
+            out.q(i) = q_[i].getCoeff(cell).second(node);
+            out.sigma(i) = sigma_[i].getCoeff(cell).second(node);
         }
         for (Index i = 0; i < nScalars; ++i)
         {
-            out.Scalars[i] = mu_[i];
+            out.scalar(i) = mu_[i];
         }
         for (Index i = 0; i < nAux; ++i)
         {
-            out.Aux[i] = aux_[i].getCoeff(cell).second(node);
+            out.phi(i) = aux_[i].getCoeff(cell).second(node);
         }
         return out;
     }
@@ -186,6 +233,14 @@ public:
             throw std::invalid_argument("Cannot add two DGSoln's with different numbers of variables");
         if (grid != other.grid)
             throw std::invalid_argument("Cannot add two DGSoln's with different grids");
+        // psi_ is an Eigen::Map, so `psi_ = other.psi_` at a different length is
+        // not a resize -- it is an assertion under a debug Eigen and undefined
+        // behaviour without one. The way to get here is a restart whose file was
+        // written by a run with a different field model, or with none; that is a
+        // configuration error and it says so rather than corrupting the block
+        // after the one it was aimed at.
+        if (nField != other.nField)
+            throw std::invalid_argument("Cannot copy two DGSoln's with different numbers of field unknowns");
         for (Index i = 0; i < nVars; ++i)
         {
             u_[i].copy(other.u_[i]);
@@ -196,6 +251,7 @@ public:
             lambda_[i] = other.lambda_[i];
         }
         mu_ = other.mu_;
+        psi_ = other.psi_;
         for (Index i = 0; i < nAux; ++i)
         {
             aux_[i].copy(other.aux_[i]);
@@ -220,11 +276,17 @@ public:
         return *this;
     }
 
+    // Lambdas rather than std::bind for the same reason the callers use them
+    // rather than std::bind_front: the bind family's call operators are where
+    // libstdc++ and clang disagree (see SystemSolver::setInitialConditions).
+    // Capturing by reference is safe -- the parameter outlives the loop, and
+    // DGApproxImpl::operator= projects onto the basis immediately rather than
+    // storing the callable.
     void AssignU(std::function<double(Index, double)> u_fn)
     {
         for (Index i = 0; i < nVars; ++i)
         {
-            u_[i] = std::bind(u_fn, i, std::placeholders::_1);
+            u_[i] = [&u_fn, i](double x) { return u_fn(i, x); };
         }
     };
 
@@ -232,7 +294,7 @@ public:
     {
         for (Index i = 0; i < nVars; ++i)
         {
-            q_[i] = std::bind(q_fn, i, std::placeholders::_1);
+            q_[i] = [&q_fn, i](double x) { return q_fn(i, x); };
         }
     };
 
@@ -240,7 +302,7 @@ public:
     {
         for (Index i = 0; i < nAux; ++i)
         {
-            aux_[i] = std::bind(phi_fn, i, std::placeholders::_1);
+            aux_[i] = [&phi_fn, i](double x) { return phi_fn(i, x); };
         }
     };
 
@@ -285,23 +347,6 @@ public:
         }
     };
 
-    void AssignSigma(std::function<Values(Index, GlobalState const &, std::vector<Position> const & )> sigmaFn )
-    {
-        auto nodes = getPoints();
-        auto global_state = evalOnNodes();
-        for( Index var = 0; var < nVars; ++var ) {
-            Values out = sigmaFn( var, global_state, nodes );
-
-            for (size_t i = 0; i < grid.getNCells(); i++)
-            {
-                for (Index j = 0; j < k + 1; j++)
-                {
-                    sigma_[var].coeffs[i].second(j) = out( i * ( k + 1 ) + j );
-                }
-            }
-        }
-    };
-
     void AssignSigma(std::function<Value(Index, const State &, Position, Time)> sigmaFn)
     {
 
@@ -318,12 +363,30 @@ public:
                     State s(nVars, nScalars);
                     for (Index j = 0; j < nVars; ++j)
                     {
-                        s.Variable[j] = u_[j].coeffs[cellIndex].second(i);
-                        s.Derivative[j] = q_[j].coeffs[cellIndex].second(i);
+                        s.u(j) = u_[j].coeffs[cellIndex].second(i);
+                        s.q(j) = q_[j].coeffs[cellIndex].second(i);
                     }
                     // Sigma isn't allowed to depend on scalars so we don't need to fill them in s
                     // Now just eval on Node
                     sigma_[var].coeffs[cellIndex].second(i) = sigmaFn(var, s, I.fromRef(nodes(i)), 0.0);
+                }
+            }
+        }
+    }
+
+    void AssignSigma(GlobalState &sin)
+    {
+        Index nCells = grid.getNCells();
+        for (Index var = 0; var < nVars; ++var)
+        {
+            for (Index cellIndex = 0; cellIndex < nCells; ++cellIndex)
+            {
+                Vector nodes = Basis.getNodes();
+
+                const auto cellwiseFlux = sin.cellwiseFlux(cellIndex);
+                for (Index i = 0; i < nodes.size(); ++i)
+                {
+                    sigma_[var].coeffs[cellIndex].second(i) = cellwiseFlux(var, i);
                 }
             }
         }
@@ -343,6 +406,7 @@ public:
             lambda_[i].setZero();
         }
         mu_.setZero();
+        psi_.setZero();
         for (Index i = 0; i < nAux; ++i)
         {
             aux_[i].zeroCoeffs();
@@ -365,11 +429,14 @@ private:
     const Grid &grid;
     const Index k;
     const Index nScalars, nAux;
+    // Not const, unlike everything above it: see setFieldDOF.
+    Index nField;
     std::vector<DGApprox> u_;
     std::vector<DGApprox> q_;
     std::vector<DGApprox> sigma_;
     std::vector<VectorWrapper> lambda_;
     VectorWrapper mu_;
+    VectorWrapper psi_;
     std::vector<DGApprox> aux_;
     const BasisType Basis;
 

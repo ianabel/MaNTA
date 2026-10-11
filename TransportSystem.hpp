@@ -1,7 +1,10 @@
 #ifndef TRANSPORTSYSTEM_HPP
 #define TRANSPORTSYSTEM_HPP
 
+#include "State.hpp"
 #include "Types.hpp"
+#include "SystemSpec.hpp"
+#include "EvaluationPlan.hpp"
 #include "DGSoln.hpp"
 #include "NetCDFIO.hpp"
 #include "AdjointProblem.hpp"
@@ -12,45 +15,215 @@
         a_i d_t u_i + d_x ( sigma_i ) = S_i( u(x), q(x), x, t ) ; S_i can depend on the entire u & q vector, but only locally.
         sigma_i = sigma_hat_i( u( x ), q( x ), x, t ) ; so can sigma_hat_i
 
+    The second line is a sign convention, not an identity. SigmaFn returns
+    sigma_hat, but the solver stores sigma_i = -sigma_hat_i: residual() forms the
+    flux row as ( sigma_h + I_h sigma_hat, phi ) = 0. So the equation actually
+    integrated is
+
+        a_i d_t u_i - d_x[ sigma_hat_i( u, q, x, t ) ] = S_i
+
+    Two things follow for anyone writing a case here. A manufactured source must
+    carry that minus sign -- get it backwards and the case converges at the right
+    rate to the wrong function, which no order study can detect. And State::Flux[i],
+    which the hooks below receive, holds the negated sigma_h rather than the
+    sigma_hat that SigmaFn returned.
+
+    See CLAUDE.md, "The equation being solved".
  */
 
-class TransportSystem
+
+class TransportSystem : public std::enable_shared_from_this<TransportSystem>
 {
 
 protected:
-  Index nVars;
-  Index nScalars = 0;
-  Index nAux = 0;
+  /// A case describes itself once, as data, and cannot be built without one.
+  ///
+  /// There is deliberately no default constructor. A case whose shape depends
+  /// on its configuration builds the spec in a static helper and passes it up:
+  ///
+  ///     MyCase::MyCase(toml::value const &config, Grid const &grid)
+  ///         : TransportSystem(buildSpec(config)) { ... }
+  ///
+  /// which is what forces the description to be complete before any hook can
+  /// be called, rather than assembled by assignment part-way through a
+  /// constructor body.
+  explicit TransportSystem(SystemSpec spec)
+      : m_spec(validated(std::move(spec))),
+        nVars(m_spec.numVars()), nScalars(m_spec.numScalars()), nAux(m_spec.numAux())
+  {
+  }
+
+  static SystemSpec validated(SystemSpec spec)
+  {
+    spec.validate();
+    return spec;
+  }
+
+  const SystemSpec m_spec;
+
+  // Derived from the spec, never assigned. They are const so that the old
+  // `nVars = 2;` in a constructor body is a compile error rather than a second
+  // source of truth.
+  const Index nVars;
+  const Index nScalars;
+  const Index nAux;
 
 public:
   virtual ~TransportSystem() = default;
+
+  SystemSpec const &spec() const { return m_spec; }
 
   Index getNumVars() const { return nVars; };
   Index getNumScalars() const { return nScalars; };
   Index getNumAux() const { return nAux; };
 
-  virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k)
+  /*
+      Where the solver is about to evaluate this case, and how often.
+
+      Called before a run's first physics call -- before even aFn, which the
+      first initialize() of a solver integrates into the mass matrix -- with the
+      plan that solver will follow: every point set it will hand
+      ComputePhysics, ComputePhysicsDerivatives and the pointwise hooks, the
+      batch shape of each, and its cadence. See EvaluationPlan.hpp. The plan
+      carries the grid and the degree, so it is all a case is told about where
+      it is.
+
+      Called only when the plan *changes*: on the first run an instance takes
+      part in, and afterwards only when a run would evaluate it differently from
+      the last plan it was handed. A rerun on the same mesh, degree and
+      configuration makes no call. A change after the first is a **regrid** --
+      a new mesh, or a new degree, which adds nodes and moves the old ones -- and
+      reaches this hook only for a case whose spec's RegridPolicy is InPlace. Any
+      other case sees exactly one plan in its life: the change is refused, or,
+      where the configuration sets RebuildPhysicsOnRegrid, a driver replaces the
+      case with a new instance built from the registry (PhysicsInstance.hpp).
+
+      Here rather than at construction, because a case is built from (config,
+      grid) before any solver exists, and the degree, Superconvergent and the tau
+      scaling are the solver's configuration rather than the case's. The default
+      does nothing.
+  */
+  virtual void prepareEvaluation(EvaluationPlan const &) {}
+
+  /// The plan prepareEvaluation was last handed, or null before any solver has
+  /// initialised with this case.
+  EvaluationPlan const *evaluationPlan() const { return m_evaluationPlan.get(); }
+
+  /// Spec data. See RegridPolicy.
+  RegridPolicy regridPolicy() const { return m_spec.regrid; }
+
+  /// May this instance be evaluated according to `plan`? Always before its first
+  /// plan, and afterwards if the plan is the one it already has or the case
+  /// takes a new one in place.
+  bool acceptsPlan(EvaluationPlan const &plan) const
   {
-    // need to copy data into vectors owned by TransportSystem
-    restart_Y_data = std::move(y);
-    restart_dYdt_data = std::move(dydt);
+    return !m_evaluationPlan || *m_evaluationPlan == plan ||
+           regridPolicy() == RegridPolicy::InPlace;
+  }
+
+  /// Why a changed plan was refused, for every surface that refuses one.
+  static std::string regridRefusal()
+  {
+    return "This physics case has already been evaluated on another mesh or degree, and "
+           "its RegridPolicy is Fixed, so it may not be evaluated anywhere else: "
+           "whatever it derived from where it was evaluated would be stale. Either "
+           "declare RegridPolicy InPlace in its spec (regrid = manta.Regrid.InPlace in "
+           "Python), if prepareEvaluation rebuilds that state from a new plan or "
+           "nothing depends on it; or set RebuildPhysicsOnRegrid = true, under which an "
+           "adaptation driver builds a new instance from the registry for each new "
+           "discretisation -- which needs a registered case, named rather than handed "
+           "over as an object.";
+  }
+
+  /// What SystemSolver::initialize calls: tell the case about `plan` if it is new
+  /// to it, and refuse a plan the case cannot accept.
+  void deliverEvaluationPlan(std::shared_ptr<const EvaluationPlan> plan)
+  {
+    if (m_evaluationPlan && *m_evaluationPlan == *plan)
+      return;
+    if (!acceptsPlan(*plan))
+      throw std::invalid_argument(regridRefusal());
+    m_evaluationPlan = std::move(plan);
+    prepareEvaluation(*m_evaluationPlan);
+  }
+
+  // `nField` is how many of the trailing entries of `y` are the field model's
+  // psi. It defaults to zero, which is every caller that has no field model --
+  // PyRunner, and the tests that build a restart vector by hand. It is not
+  // optional for one that does: the field block is last in the layout, so a
+  // DGSoln built without it maps a *shorter* vector, and DGSoln::copy would then
+  // be asked to assign a length-zero psi onto a length-nField one.
+  virtual void setRestartValues(const std::vector<double> &y, const std::vector<double> &dydt, const Grid &grid, Index k, Index nField = 0)
+  {
+    // Drop any previous restart before the buffers under it move: reassigning
+    // restart_Y_data below can reallocate, and the old DGSolns are mapped over
+    // it.
+    restart_Y.reset();
+    restart_dYdt.reset();
+
+    // Copy into vectors owned by TransportSystem. (These were written as
+    // std::move(y), but y is a const lvalue reference -- std::move on it yields
+    // a const rvalue, which binds to copy-assignment, not move-assignment. So
+    // it was always a copy; the std::move only misled the reader. A copy is
+    // what we want here, since the caller keeps ownership of its vectors.)
+    restart_Y_data = y;
+    restart_dYdt_data = dydt;
+
+    // Take our own copy of the grid. DGSolnImpl stores it as `const Grid &`
+    // (DGSoln.hpp), so binding the caller's costs a use-after-free the moment
+    // that caller moves on: PyRunner hands us the referent of its own
+    // unique_ptr and nulls it at the top of the very next configure(), leaving
+    // restart_Y pointing at freed memory. DGSolnImpl::copy then compares
+    // `grid != other.grid` against whatever now occupies it -- which is not a
+    // crash but a wrong answer, and was observed reporting two identical
+    // eight-cell grids as different.
+    restart_grid = std::make_unique<Grid>(grid);
 
     // Create DGSolns to wrap restart data
-    restart_Y = std::make_shared<DGSoln>(nVars, grid, k, restart_Y_data.data(), nScalars, nAux);
-    restart_dYdt = std::make_shared<DGSoln>(nVars, grid, k, restart_dYdt_data.data(), nScalars, nAux);
+    restart_Y = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_Y_data.data(), nScalars, nAux, nField);
+    restart_dYdt = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_dYdt_data.data(), nScalars, nAux, nField);
     restarting = true;
 
     // Pull boundary conditions directly from restart values
-    Position xL = grid.lowerBoundary();
-    Position xR = grid.upperBoundary();
+    Position xL = restart_grid->lowerBoundary();
+    Position xR = restart_grid->upperBoundary();
 
     uL.resize(nVars);
     uR.resize(nVars);
 
     for (Index i = 0; i < nVars; ++i)
     {
-      uL[i] = isLowerBoundaryDirichlet(i) ? restart_Y->u(i)(xL) : restart_Y->sigma(i)(xL);
-      uR[i] = isUpperBoundaryDirichlet(i) ? restart_Y->u(i)(xR) : restart_Y->sigma(i)(xR);
+      // q, not sigma. A Neumann boundary value is applied to q -- see
+      // SystemSolver.cpp's L_global assembly and docs/physics_interface.rst --
+      // so seeding it from sigma handed the resumed run the wrong quantity, and
+      // with the wrong sign into the bargain, since the stored sigma is
+      // -sigma_hat. For sigma_hat = kappa q that made the resumed boundary
+      // -kappa q rather than q: a sign flip even at kappa = 1. It stayed hidden
+      // because it needs three things at once -- a Neumann boundary, a *nonzero*
+      // value on it, and a case that does not override LowerBoundary, since an
+      // overriding case never reads these at all.
+      // A Mixed end has one datum to recover and it is c, so evaluate the row's
+      // own left-hand side on the restarted profile. Note `d` multiplies the
+      // *stored* sigma, which is -sigma_hat, because that is what the assembly
+      // multiplies -- reading the other one here is exactly the defect above,
+      // one level up.
+      auto recover = [&](BoundaryCondition const &bc, Position x)
+      {
+        switch (bc.kind)
+        {
+        case BoundaryKind::Dirichlet:
+          return restart_Y->u(i)(x);
+        case BoundaryKind::Neumann:
+          return restart_Y->q(i)(x);
+        case BoundaryKind::Mixed:
+          return bc.a * restart_Y->u(i)(x) + bc.b * restart_Y->q(i)(x) +
+                 bc.d * restart_Y->sigma(i)(x);
+        }
+        return restart_Y->q(i)(x);
+      };
+
+      uL[i] = recover(lowerBoundaryCondition(i), xL);
+      uR[i] = recover(upperBoundaryCondition(i), xR);
     }
   }
 
@@ -58,18 +231,84 @@ public:
   DGSoln &getRestartY() { return *restart_Y; };
   DGSoln &getRestartdYdt() { return *restart_dYdt; };
 
-  // Function for passing boundary conditions to the solver
-  virtual Value LowerBoundary(Index i, Time t) const { return uL[i]; };
-  virtual Value UpperBoundary(Index i, Time t) const { return uR[i]; };
+  // Forget any restart state. A restart belongs to one *configuration*, but a
+  // TransportSystem outlives configurations -- PyRunner keeps one across every
+  // configure() call, rebuilding only the solver and the grid -- so without
+  // this `restarting` is sticky and the run after a restart resumes from the
+  // previous file instead of from InitialValue. Nothing cleared it until
+  // test_reconfiguring_without_restart_clears_the_restart_state was written,
+  // because every other restart test builds a fresh Runner.
+  void clearRestart()
+  {
+    restarting = false;
+    restart_Y.reset();
+    restart_dYdt.reset();
+    restart_grid.reset();
+    restart_Y_data.clear();
+    restart_dYdt_data.clear();
+  }
 
-  virtual bool isLowerBoundaryDirichlet(Index i) const { return isLowerDirichlet; };
-  virtual bool isUpperBoundaryDirichlet(Index i) const { return isUpperDirichlet; };
+  // Take over another instance's restart state, or its absence. For a driver
+  // that replaces a case with a freshly built one between two solves, so the
+  // next solve warm-starts from the last as it would have on the old instance.
+  void copyRestartFrom(TransportSystem const &other)
+  {
+    if (!other.restarting)
+    {
+      clearRestart();
+      return;
+    }
+    setRestartValues(other.restart_Y_data, other.restart_dYdt_data, *other.restart_grid,
+                     other.restart_Y->getBasis().Order(), other.restart_Y->getFieldDOF());
+  }
+
+  // Function for passing boundary conditions to the solver.
+  //
+  // The defaults read uL/uR, which nothing fills unless the case is restarting
+  // (setRestartValues above) or is an AutodiffTransportSystem, which loads them
+  // from its own [AutodiffTransportSystem] uL/uR keys. A case that is neither
+  // and overrides neither used to index an empty vector -- undefined behaviour,
+  // and in practice a core dump inside the first residual evaluation, with
+  // nothing pointing at the boundary conditions. It says so now.
+  virtual Value LowerBoundary(Index i, Time t) const { return boundaryFallback(uL, i, "LowerBoundary", "uL"); };
+  virtual Value UpperBoundary(Index i, Time t) const { return boundaryFallback(uR, i, "UpperBoundary", "uR"); };
+
+  // Not virtual: the boundary *kind* is part of what a case is, and lives in the
+  // spec. Only the boundary *values* above depend on t and stay overridable.
+  // This is also what retired the pair of uninitialised bools these used to
+  // read, which a case that overrode neither function would silently consult.
+  //
+  // .at(), here and in the lookups below, deliberately. The old versions
+  // answered for any index -- getScalarName(1) on a case with no scalars
+  // returned "Scalar1", and isScalarDifferential(0) returned false -- so a
+  // caller that had confused nAux with nVars, or looped to the wrong bound, got
+  // a plausible answer instead of a complaint. That confusion is a documented
+  // source of bugs here (dGdaux_Vec carried two of them). These are integer
+  // lookups next to matrix solves; the bounds check is not measurable.
+  bool isLowerBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).lower.kind == BoundaryKind::Dirichlet; };
+  bool isUpperBoundaryDirichlet(Index i) const { return m_spec.variables.at(i).upper.kind == BoundaryKind::Dirichlet; };
+
+  // The kind itself, and the whole condition including a Mixed end's
+  // coefficients. These exist because the two predicates above are *booleans*:
+  // every `!isLowerBoundaryDirichlet(var)` in the solver has meant "Neumann"
+  // since there were only two kinds, and now silently means "Neumann or Mixed".
+  // Anything that has to tell those apart must ask here rather than negate a
+  // predicate. The predicates stay because they are bound into Python and
+  // asserted in python/Tests/test_package_api.py.
+  BoundaryKind lowerBoundaryKind(Index i) const { return m_spec.variables.at(i).lower.kind; };
+  BoundaryKind upperBoundaryKind(Index i) const { return m_spec.variables.at(i).upper.kind; };
+
+  bool isLowerBoundaryMixed(Index i) const { return lowerBoundaryKind(i) == BoundaryKind::Mixed; };
+  bool isUpperBoundaryMixed(Index i) const { return upperBoundaryKind(i) == BoundaryKind::Mixed; };
+
+  BoundaryCondition const &lowerBoundaryCondition(Index i) const { return m_spec.variables.at(i).lower; };
+  BoundaryCondition const &upperBoundaryCondition(Index i) const { return m_spec.variables.at(i).upper; };
 
   // The same for the flux and source functions -- the vectors have length nVars
   virtual Value SigmaFn(Index i, const State &s, Position x, Time t) = 0;
   virtual Value Sources(Index i, const State &s, Position x, Time t) = 0;
 
-  // This determines the a_i functions. Only one with a default option, but can be overriden
+  // This determines the a_i functions. Only one with a default option, but can be overridden
   virtual Value aFn(Index i, Position x) { return 1.0; };
 
   // We need derivatives of the flux functions
@@ -81,50 +320,175 @@ public:
   virtual void dSources_dq(Index i, VectorRef, const State &, Position x, Time t) = 0;
   virtual void dSources_dsigma(Index i, VectorRef, const State &, Position x, Time t) = 0;
 
+  /*
+      d(S_i)/d(du_j/dt), the derivative of a source with respect to the time
+      derivatives State::udot carries.
+
+      Defaults to leaving the vector at the zero it arrives as, which is the same
+      "an unread hook means no coupling" convention as dSigmaFn_dGeometry: a case
+      that does not read udot needs no override and gets an identical Jacobian.
+
+      It is only ever called for a variable whose spec sets
+      `sourceReadsTimeDerivatives`, so declaring that flag and not overriding
+      this is a wrong Jacobian rather than a wrong answer -- the solver warns
+      about it at startup for exactly that reason. The converse, overriding this
+      without declaring the flag, is the silent one: nothing calls it, and the
+      term in the value hook is differentiated as though it were not there.
+
+      This block enters the Jacobian weighted by alpha, beside the mass term, so
+      it is **invisible in the steady Jacobian** (alpha = 0) and therefore in the
+      adjoint. A finite-difference check of it has to be run at alpha != 0.
+  */
+  virtual void dSources_dudot(Index, VectorRef, const State &, Position, Time) {}
+
+  /// Spec data. See FieldSpec::sourceReadsTimeDerivatives.
+  bool sourceReadsTimeDerivatives(Index i) const
+  {
+    return m_spec.variables.at(i).sourceReadsTimeDerivatives;
+  }
+  bool anySourceReadsTimeDerivatives() const
+  {
+    return m_spec.anySourceReadsTimeDerivatives();
+  }
+
+
+ /*
+ * Compute all fluxes and sources 
+ */
+  virtual PhysicsOutput ComputePhysics(GlobalState const &states, std::vector<Position> const & abscissae, Time time)
+{
+    m_sourceCache.resize(nVars); // make sure we have enough elements in cache
+    PhysicsOutput out;
+    out[0].resize(nVars);
+    out[1].resize(nVars);
+    out[2].resize(nAux);
+    for (auto& p: out)
+    {
+      for (auto &v : p)
+           v.resize(states.size());
+    }
+    for (Index i = 0; i < nVars; ++i) 
+    {
+        out[0][i] = SigmaFn(i, states, abscissae, time);
+        out[1][i] = Sources(i, states, abscissae, time);
+        m_sourceCache[i] = out[1][i];
+    }
+    for (Index i = 0; i < nAux; ++i)
+      out[2][i] = AuxG(i, states, abscissae, time);
+    return out;
+  }
   // Wrapper functions which serialise batched evaluations
   //
+  // **Serial, deliberately, and not an oversight to be fixed.** These are the
+  // fallback for a case that supplies only pointwise hooks, and a case that has
+  // not provided a batched implementation is assumed to have a reason. Threading
+  // them would call an arbitrary case's hooks concurrently on one instance --
+  // which nothing here can check and the case never agreed to.
+  //
+  // For a Python case it is not merely unsafe but ruinous. Every pointwise
+  // trampoline in PyTransportSystem takes the GIL, so N threads serialise on it
+  // and pay a lock handoff *per point*: measured, MANTA_OPENMP=ON with four
+  // threads took the Python suite from ~110 s to over 1500 s, where it hit
+  // ctest's timeout without finishing. That is a floor of 13.6x slower, not a
+  // failure to speed up.
+  //
+  // A case that wants its physics parallel overrides the batched level, which is
+  // the whole point of these being virtual -- and where it can cross into Python
+  // once for the entire grid rather than once per point, as
+  // PyTransportSystem::ComputePhysics and manta.jax already do. The solver's own
+  // cell loops are still threaded (see util/ParallelFor.hpp), so a case that
+  // takes this path still gets the assembly and solve parallelism, which is
+  // where the time is.
   virtual Values SigmaFn(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = SigmaFn(i, states[j], abscissae[j], time);
-    }
     return out;
   };
 
   virtual Values Sources(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
     Values out(states.size());
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
-    {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
       out(j) = Sources(i, states[j], abscissae[j], time);
-    }
     return out;
   };
 
-  virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  virtual void ComputePhysicsDerivatives(std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>&&  out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    GlobalStateMatrix& dSigma_vals = out[0];
+    GlobalStateMatrix& dSource_vals = out[1];
+    GlobalStateMatrix& dAux_vals = out[2];
+    for (Index i = 0; i < nVars; i++)
     {
-      dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
-      dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
+        dSigma(i, dSigma_vals[i], states, abscissae, time);
+        dSources(i, dSource_vals[i], states, abscissae, time);
+    }
+    for (Index i = 0; i < nAux; i++)
+    {
+        AuxGPrime(i, dAux_vals[i], states, abscissae,  time);
     }
   }
 
+  virtual void dSigma(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+    {
+      dSigmaFn_du(i, out.Variable(j), states[j], abscissae[j], time);
+      dSigmaFn_dq(i, out.Derivative(j), states[j], abscissae[j], time);
+      if (nAux > 0)
+        dSigma_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
+    }
+  }
+
+  // Geometry does not join this batched wrapper, or dSigma's above: both loop
+  // over GlobalStateMatrix's Variable/Derivative/Flux/Aux slices, and there is
+  // deliberately no Geometry slice yet -- see the comment on
+  // GlobalState::Geometry in State.hpp. dSigmaFn_dGeometry/dSources_dGeometry
+  // are pointwise-only for now; whatever assembles the A1 coupling block calls
+  // them directly rather than through here.
   virtual void dSources(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
   {
-#pragma omp parallel for
-    for (size_t j = 0; j < states.size(); ++j)
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
     {
       dSources_du(i, out.Variable(j), states[j], abscissae[j], time);
       dSources_dq(i, out.Derivative(j), states[j], abscissae[j], time);
       dSources_dsigma(i, out.Flux(j), states[j], abscissae[j], time);
-      dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
+      if (nAux > 0)
+        dSources_dPhi(i, out.Aux(j), states[j], abscissae[j], time);
     }
+  }
+
+  /*
+      d(S)/d(udot) for every variable at once, into the *Variable* slice of its
+      own GlobalStateMatrix.
+
+      A separate pass rather than a fourth entry in ComputePhysicsDerivatives,
+      and deliberately: that array's width is part of the interface a Python or
+      JAX case overrides, and widening it would break every vectorised case in
+      existence to add a block that almost all of them would leave zero. This
+      one is called only when the spec asks for it, so a case that does not
+      declare `sourceReadsTimeDerivatives` never sees it at all.
+
+      The Variable slice, not a new one, because dS_i/d(udot_j) has exactly the
+      shape dS_i/du_j has and lands in the same block of the cell matrix -- one
+      factor of alpha apart. See SystemSolver::assembleCellMatrix.
+  */
+  virtual void ComputeSourceTimeDerivatives(GlobalStateMatrix &out, GlobalState const &states,
+                                            std::vector<Position> const &abscissae, Time time)
+  {
+    for (Index i = 0; i < nVars; ++i)
+      dSourcesDot(i, out[i], states, abscissae, time);
+  }
+
+  virtual void dSourcesDot(Index i, GlobalState &out, GlobalState const &states,
+                           std::vector<Position> const &abscissae, Time time)
+  {
+    if (!sourceReadsTimeDerivatives(i))
+      return;
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+      dSources_dudot(i, out.Variable(j), states[j], abscissae[j], time);
   }
 
   // and initial conditions for u & q
@@ -144,40 +508,102 @@ public:
     return 0.0;
   }
 
-  // Scalar functions
-  virtual Value ScalarG(Index, const DGSoln &, Time)
+  /*
+      The global (non-spatial) scalar constraints, G_s( mu, y, dy/dt, t ) = 0.
+
+      There were four names and five signatures here: ScalarG, ScalarGExtended,
+      ScalarGPrime and two ScalarGPrimeExtended overloads, one of which handed
+      the case a std::function test function and an Interval and asked it to
+      integrate against them with a quadrature rule of its own choosing. Two
+      pieces:
+
+        * `y` and `ydot` are the solution and its time derivative sampled on the
+          element nodes -- the same GlobalState the flux and source hooks see.
+          The basis is interpolatory, so a nodal value *is* the coefficient it
+          multiplies.
+
+        * `abscissae` gives the position of each node, for a constraint whose
+          integrand depends on x itself -- a mirror plasma's needs the magnetic
+          geometry at each point. Same vector the flux and source hooks get.
+
+        * `weights` holds one quadrature weight per node, so an integral over
+          the whole domain is `weights.dot(y.Variable().row(i))`. Using the
+          framework's weights rather than a rule of your own is not a
+          convenience: ScalarTestLD3 integrated its own mass with a global
+          adaptive Kronrod rule over a piecewise polynomial, which is not a
+          smooth function of the coefficients, and its finite-difference
+          reference disagreed with the exact answer by 8% at k = 4 on 16 cells.
+
+      This is the shape the Python trampoline already flattened these into, and
+      it is now the one contract rather than a translation of another one.
+
+        * `phiBoundary` is (k+1) x 2: the basis functions of the first and last
+          cells evaluated at the two ends of the domain. It is what makes a
+          constraint on a boundary *point* expressible at all -- MaNTA's nodes
+          are Chebyshev points of the first kind, which are strictly interior,
+          so sigma(x_R) cannot be read off the nodal values. boundaryValue() in
+          State.hpp does that contraction. (The Python trampoline passed
+          phiBoundary only to the derivative, so a Python case could not write
+          such a constraint at all; both hooks take it now.)
+  */
+  virtual Value ScalarG(Index s, GlobalState const &y, GlobalState const &ydot,
+                        std::vector<Position> const &abscissae, Values const &weights,
+                        Matrix const &phiBoundary, Time t)
   {
     if (nScalars != 0)
       throw std::logic_error("nScalars > 0 but no scalar G provided");
     return 0.0;
   }
 
-  virtual Value ScalarGExtended(Index i, const DGSoln &y, const DGSoln &dydt, Time t)
+  /*
+      dG_s/d(state) and dG_s/d(state_dot), for every s at once.
+
+      Each is written as the derivative with respect to the *degrees of
+      freedom*, not as a function of x: for G = mu - Int u dx the u entry at
+      node j is -weights(j), because that is d/du_j of the integral. That is
+      why `weights` is passed to the derivative as well as to G itself.
+
+      `phiBoundary` is (k+1) x 2: the basis functions of the first and last
+      cells evaluated at the two ends of the domain. It is what makes point
+      functionals expressible -- a constraint involving sigma(x_R) has
+      d/d(sigma DOF j of the last cell) = phiBoundary(j, 1) -- since the nodes
+      need not include the endpoints.
+  */
+  virtual void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot,
+                            GlobalState const &y, GlobalState const &ydot,
+                            std::vector<Position> const &abscissae, Values const &weights,
+                            Matrix const &phiBoundary, Time t)
   {
-    return ScalarG(i, y, t);
+    if (nScalars != 0)
+      throw std::logic_error("nScalars > 0 but no scalar G derivative provided");
   }
 
-  virtual void ScalarGPrime(Index i, State &out, const DGSoln &y, std::function<double(double)> phi, Interval I, Time t)
-  {
-    throw std::logic_error("nScalars > 0 but no scalar G derivative provided");
-  }
-
-  virtual void ScalarGPrimeExtended(Index i, State &out, State &out_dt, const DGSoln &y, const DGSoln &dydt, std::function<double(double)> phi, Interval I, Time t)
-  {
-    out_dt.zero();
-    ScalarGPrime(i, out, y, phi, I, t);
-  }
-
-  virtual bool isScalarDifferential(Index i)
-  {
-    return false;
-  }
+  // Also spec data. Consulted to decide whether InitialScalarDerivative is
+  // asked for this scalar, and whether G_s carries an alpha * dG/dmu' term.
+  bool isScalarDifferential(Index i) const { return m_spec.scalars.at(i).differential; }
 
   virtual void dSources_dScalars(Index, VectorRef, const State &, Position, Time)
   {
     if (nScalars != 0)
       throw std::logic_error("nScalars > 0 but no coupling function provided");
   }
+
+  /*
+      Derivatives with respect to the geometry slots a field model supplies.
+
+      Each `out` is length nGeometry and arrives zeroed, so a case that does not
+      read geometry may leave all three unimplemented and contributes an
+      identically zero coupling block -- which is exactly right, because it does
+      not couple.
+
+      These are the first factor of A1; the second, dGeometry/dpsi, is the field
+      model's. Note that q has no geometry dependence (q = d_x u is a definition,
+      not a physical relation) and neither do the trace rows, so there is no
+      hook for either -- a geometry-dependent boundary condition is out of scope.
+  */
+  virtual void dSigmaFn_dGeometry(Index, VectorRef, const State &, Position, Time) {}
+  virtual void dSources_dGeometry(Index, VectorRef, const State &, Position, Time) {}
+  virtual void dAuxG_dGeometry(Index, VectorRef, const State &, Position, Time) {}
 
   // Auxiliary variable functions
 
@@ -197,10 +623,31 @@ public:
     return 0.0;
   }
 
+  virtual Values AuxG(Index i, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  {
+    Values out(states.size());
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+      out(j) = AuxG(i, states[j], abscissae[j], time);
+    return out;
+  }
+
   // AuxGPrime returns dG_i in out
   virtual void AuxGPrime(Index i, State &out, const State &, Position, Time)
   {
     throw std::logic_error("nAux > 0 but no G derivative provided");
+  }
+
+  virtual void AuxGPrime(Index i, GlobalState &out, GlobalState const &states, std::vector<Position> const &abscissae, Time time)
+  {
+    for (Index j = 0; j < static_cast<Index>(states.size()); ++j)
+    {
+      // Declared inside the loop body, not outside it. Even serially this
+      // matters: a shared State carried one point's values into the next when a
+      // hook wrote only its nonzero entries. Per-iteration, it starts zeroed.
+      State temp(nVars, nScalars, nAux);
+      AuxGPrime(i, temp, states[j], abscissae[j], time);
+      out.setWithState(j, temp);
+    }
   }
 
   virtual void dSources_dPhi(Index, VectorRef, const State &, Position, Time)
@@ -209,10 +656,10 @@ public:
       throw std::logic_error("nAux > 0 but no coupling to the main sources provided");
   }
 
-  virtual void dSigma_dPhi(Index, Values &v, const State &, Position, Time)
+  virtual void dSigma_dPhi(Index, VectorRef, const State &, Position, Time)
   {
-    v.setZero();
-    return;
+    if (nAux != 0)
+      throw std::logic_error("nAux > 0 but no coupling to fluxes provided");
   }
 
   virtual std::unique_ptr<AdjointProblem> createAdjointProblem()
@@ -220,50 +667,20 @@ public:
     throw std::logic_error("Adjoint problem not implemented for this physics case");
   }
 
-  virtual std::string getVariableName(Index i)
-  {
-    return std::string("Var") + std::to_string(i);
-  }
+  // Nine virtuals' worth of naming, now one lookup each. These are what key the
+  // netCDF groups and time series, so they are the case's own names for things
+  // rather than Var0/Scalar1/AuxVariable2.
+  std::string const &getVariableName(Index i) const { return m_spec.variables.at(i).name; }
+  std::string const &getScalarName(Index i) const { return m_spec.scalars.at(i).name; }
+  std::string const &getAuxVarName(Index i) const { return m_spec.aux.at(i).name; }
 
-  virtual std::string getScalarName(Index i)
-  {
-    return std::string("Scalar") + std::to_string(i);
-  }
+  std::string const &getVariableDescription(Index i) const { return m_spec.variables.at(i).description; }
+  std::string const &getScalarDescription(Index i) const { return m_spec.scalars.at(i).description; }
+  std::string const &getAuxDescription(Index i) const { return m_spec.aux.at(i).description; }
 
-  virtual std::string getAuxVarName(Index i)
-  {
-    return std::string("AuxVariable") + std::to_string(i);
-  }
-
-  virtual std::string getVariableDescription(Index i)
-  {
-    return std::string("Variable ") + std::to_string(i);
-  }
-
-  virtual std::string getScalarDescription(Index i)
-  {
-    return std::string("Scalar ") + std::to_string(i);
-  }
-
-  virtual std::string getAuxDescription(Index i)
-  {
-    return std::string("Auxiliary Variable ") + std::to_string(i);
-  }
-
-  virtual std::string getVariableUnits(Index i)
-  {
-    return std::string("");
-  }
-
-  virtual std::string getScalarUnits(Index i)
-  {
-    return std::string("");
-  }
-
-  virtual std::string getAuxUnits(Index i)
-  {
-    return std::string("");
-  }
+  std::string const &getVariableUnits(Index i) const { return m_spec.variables.at(i).units; }
+  std::string const &getScalarUnits(Index i) const { return m_spec.scalars.at(i).units; }
+  std::string const &getAuxUnits(Index i) const { return m_spec.aux.at(i).units; }
 
   // Hooks for adding extra NetCDF outputs
   virtual void initialiseDiagnostics(NetCDFIO &)
@@ -291,15 +708,50 @@ public:
 
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
+  std::optional<std::reference_wrapper<Values>> getSourceCache(Index var) { 
+    if (m_sourceCache.size() > 0)
+    {
+      return m_sourceCache[var]; 
+    } else {
+      return std::nullopt;
+    }
+  }
+
+private:
+  // Shared by the two boundary defaults above. Not .at(): out_of_range names a
+  // vector, not the thing the case has to do about it.
+  Value boundaryFallback(std::vector<Value> const &values, Index i,
+                         char const *hook, char const *key) const
+  {
+    if (i < 0 || static_cast<std::size_t>(i) >= values.size())
+      throw std::runtime_error(
+          std::string("This physics case does not override ") + hook +
+          "(), and has no fallback boundary values for variable " +
+          std::to_string(i) + ". The default reads a table that only a restart "
+          "fills, or that AutodiffTransportSystem loads from its "
+          "[AutodiffTransportSystem] '" + key + "' key. Override " + hook +
+          "(), or supply '" + key + "' with one entry per variable.");
+    return values[i];
+  }
+
 protected:
   bool restarting = false;
   std::vector<double> restart_Y_data;
   std::vector<double> restart_dYdt_data;
+  // Declared *before* restart_Y/restart_dYdt, and that ordering is load-bearing:
+  // members are destroyed in reverse declaration order, so the two DGSolns --
+  // which hold this grid by reference -- die before it does.
+  std::unique_ptr<Grid> restart_grid = nullptr;
   std::shared_ptr<DGSoln> restart_Y = nullptr;
   std::shared_ptr<DGSoln> restart_dYdt = nullptr;
 
+  std::vector<Values> m_sourceCache; // since sources might be expensive to calculate, cache them for use in outputs
+
   std::vector<Value> uL, uR;
-  bool isUpperDirichlet, isLowerDirichlet;
+
+  // Shared rather than copied: the solver keeps no copy of its own, and a case
+  // that ignores the plan should not pay for one.
+  std::shared_ptr<const EvaluationPlan> m_evaluationPlan;
 };
 
 #endif // TRANSPORTSYSTEM_HPP

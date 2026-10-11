@@ -29,13 +29,16 @@
 REGISTER_PHYSICS_IMPL(AuxVarTest);
 
 const double AuxNorm = 1.0;
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
+    : TransportSystem({.variables = {{"u", "reaction-diffusion variable", ""},
+                                     {"v", "plain diffusion variable", ""}},
+                       .aux = {{"a", "the auxiliary a = u * u", ""}},
+                       .regrid = RegridPolicy::InPlace})
 {
-    // Always set nVars in a derived constructor
-    nVars = 2;
-    nAux = 1;
-
-    // Construst your problem from user-specified config
+    // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
     // here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -50,7 +53,7 @@ AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
     Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value AuxVarTest::LowerBoundary(Index, Time t) const
 {
     return 0.0;
@@ -61,19 +64,18 @@ Value AuxVarTest::UpperBoundary(Index, Time t) const
     return 0.0;
 }
 
-bool AuxVarTest::isLowerBoundaryDirichlet(Index) const { return true; };
-bool AuxVarTest::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Value AuxVarTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-    return kappa * s.Derivative[i];
+    double a = s.phi(0);
+    double u = s.u(0);
+    return kappa * s.q(i) + (a - u * u );
 }
 
 //
 Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
 {
     double U = ::cos(M_PI_2 * x);
-    double a = st.Aux[0];
+    double a = st.phi(0);
     switch ( i ) {
       case 0:
         return kappa * M_PI_2 * M_PI_2 * U + (a - U * U);
@@ -89,15 +91,17 @@ Value AuxVarTest::Sources(Index i, const State &st, Position x, Time)
     return 0;
 }
 
-void AuxVarTest::dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time)
+void AuxVarTest::dSigmaFn_dq(Index i, VectorRef v, const State &s, Position, Time)
 {
     v.setZero();
     v[i] = kappa;
 };
 
-void AuxVarTest::dSigmaFn_du(Index, VectorRef v, const State &, Position, Time)
+void AuxVarTest::dSigmaFn_du(Index i, VectorRef v, const State &s, Position, Time)
 {
+    double u = s.u(0);
     v.setZero();
+    v[0] =( -2.0 * u );
 };
 
 void AuxVarTest::dSources_du(Index, VectorRef v, const State &st, Position, Time)
@@ -123,14 +127,14 @@ Value AuxVarTest::InitialAuxValue(Index i, Position x) const
 
 Value AuxVarTest::AuxG(Index, const State &st, Position x, Time t)
 {
-    double a = st.Aux[0];
-    double u = st.Variable[0];
+    double a = st.phi(0);
+    double u = st.u(0);
     return -(a - u * u);
 }
 
 void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Time)
 {
-    double u = st.Variable[0];
+    double u = st.u(0);
 
     if (iAux != 0)
     {
@@ -139,9 +143,9 @@ void AuxVarTest::AuxGPrime(Index iAux, State &out, const State &st, Position, Ti
     // most derivatives are zero
     out.zero();
     // dG/du = -2.0 * u
-    out.Variable[0] = -AuxNorm * (-2.0 * u);
+    out.u(0) = -AuxNorm * (-2.0 * u);
     // dG/da = 1.0
-    out.Aux[0] = -AuxNorm * (1.0);
+    out.phi(0) = -AuxNorm * (1.0);
 
     return;
 }
@@ -159,6 +163,24 @@ void AuxVarTest::dSources_dPhi(Index i, VectorRef v, const State &st, Position, 
     }
 }
 
+void AuxVarTest::dSigma_dPhi(Index i, VectorRef v, const State &st, Position, Time)
+{
+    v.setZero();
+    switch (i)
+    {
+    case 0:
+        v[0] = AuxNorm * 1.0;
+        return;
+    case 1:
+        // SigmaFn adds (a - u*u) to *both* variables' fluxes, so variable 1
+        // depends on the auxiliary too and this block is not zero. Declaring the
+        // derivative rather than removing the term from SigmaFn keeps the physics
+        // -- and so the reference solution -- exactly as it was.
+        v[0] = AuxNorm * 1.0;
+        return;
+    }
+
+}
 // Initialise with a Gaussian at x = 0 for both variables
 Value AuxVarTest::InitialValue(Index, Position x) const
 {

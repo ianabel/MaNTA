@@ -9,10 +9,22 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(MatrixDiffusionTest);
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
+SystemSpec MatrixDiffusionTest::buildSpec(toml::value const &config)
+{
+	Index nVars = 2;
+	if (config.count("DiffusionProblem") == 1)
+		nVars = toml::find_or(config.at("DiffusionProblem"), "nVars", 2);
+	return {.variables = numberedFields(nVars), .regrid = RegridPolicy::InPlace};
+}
+
 MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config, Grid const &)
+	: TransportSystem(buildSpec(config))
 {
 
-	// Construst your problem from user-specified config
+	// Construct your problem from user-specified config
 	// throw an exception if you can't. NEVER leave a part-constructed object around
 	// here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -21,7 +33,6 @@ MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config, Grid const &
 
 	auto const &DiffConfig = config.at("DiffusionProblem");
 
-	nVars = toml::find_or(DiffConfig, "nVars", 2);
 	Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 	alpha = toml::find_or(DiffConfig, "alpha", 0.0);
 
@@ -53,7 +64,7 @@ MatrixDiffusionTest::MatrixDiffusionTest(toml::value const &config, Grid const &
 	a2 = (InitialHeights[0] - InitialHeights[1]) / (2.0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value MatrixDiffusionTest::LowerBoundary(Index i, Time t) const
 {
 	if (i == 0)
@@ -72,12 +83,9 @@ Value MatrixDiffusionTest::UpperBoundary(Index, Time) const
 	return 0.0;
 }
 
-bool MatrixDiffusionTest::isLowerBoundaryDirichlet(Index) const { return true; };
-bool MatrixDiffusionTest::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Value MatrixDiffusionTest::SigmaFn(Index i, const State &s, Position, Time)
 {
-	Eigen::Map<const Vector> qVec(s.Derivative.data(), s.Derivative.size());
+	Eigen::Map<const Vector> qVec(s.q().data(), s.q().size());
 	auto sigma = Kappa * qVec;
 
 	return sigma(i);

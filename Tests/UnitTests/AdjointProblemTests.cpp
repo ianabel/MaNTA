@@ -1,0 +1,722 @@
+// Tests for AdjointProblem's defaults and for the adjoint derivative vectors
+// SystemSolver builds from them.
+//
+// Context worth knowing before reading: end-to-end adjoint output is currently
+// dead -- WriteAdjoints() is commented out at Solver.cpp:350 (commit 57d2652,
+// "adjoint writing doesn't work for spatial adjoints"), so no run emits the
+// gradients and both the regression and Python suites skip their adjoint
+// comparison. That makes unit coverage the *only* thing standing behind this
+// machinery, and the existing AdjointTests.cpp only ever asserts that
+// dGdq_Vec/dGdsigma_Vec/dGdaux_Vec are zero -- true for AdjointTestProblem,
+// whose integrand genuinely has no q, sigma or phi dependence, but vacuous as
+// a test. The mock here gives all four a nonzero derivative.
+
+#include <boost/test/unit_test.hpp>
+
+#include "AdjointProblem.hpp"
+#include "SystemSolver.hpp"
+#include "TransportSystem.hpp"
+#include "Types.hpp"
+
+#include <boost/math/quadrature/gauss.hpp>
+#include <nvector/nvector_serial.h>
+#include <sundials/sundials_context.h>
+
+#include <cmath>
+#include <stdexcept>
+
+namespace
+{
+
+// Two variables, one aux variable, so every derivative slot has somewhere
+// distinct to go.
+class AdjointHostSystem : public TransportSystem
+{
+public:
+    AdjointHostSystem()
+        : TransportSystem({.variables = numberedFields(2), .aux = numberedAux(1)})
+    {
+    }
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+
+    Value SigmaFn(Index i, const State &s, Position, Time) override
+    {
+        return s.q(i);
+    }
+    Value Sources(Index, const State &s, Position, Time) override { return s.phi(0); }
+
+    void dSigmaFn_dq(Index i, VectorRef v, const State &, Position, Time) override
+    {
+        v.setZero();
+        v[i] = 1.0;
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v.setZero();
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v.setZero();
+    }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v.setZero();
+    }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v.setZero();
+    }
+    void dSources_dPhi(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v.setZero();
+        v[0] = 1.0;
+    }
+    void dSigma_dPhi(Index, VectorRef v, const State &, Position, Time) override
+    {
+        v.setZero();
+    }
+    Value AuxG(Index, const State &s, Position, Time) override
+    {
+        return s.phi(0) - s.u(0);
+    }
+    void AuxGPrime(Index, State &out, const State &, Position, Time) override
+    {
+        out.zero();
+        out.u(0) = -1.0;
+        out.phi(0) = 1.0;
+    }
+
+    Value InitialValue(Index i, Position x) const override
+    {
+        return (1.0 + i) * x * (1.0 - x) + 0.3;
+    }
+    Value InitialDerivative(Index i, Position x) const override
+    {
+        return (1.0 + i) * (1.0 - 2.0 * x);
+    }
+    Value InitialAuxValue(Index, Position x) const override { return 0.7 + x; }
+};
+
+// Implements only the pure virtuals, so every default below is the base one.
+// np = 3 with np_boundary = 1 makes getNpInternal() = 2, which is the split the
+// dSigma/dSources defaults loop over -- if they used np instead they would run
+// off the end of the p-derivative block.
+class MockAdjoint : public AdjointProblem
+{
+public:
+    MockAdjoint()
+    {
+        ng = 2;
+        np = 3;
+        np_boundary = 1;
+    }
+
+    // The pointwise overrides below would otherwise hide the base's batched
+    // and vector-valued overloads of the same names, which are the defaults
+    // this suite exists to test.
+    using AdjointProblem::dGFndp;
+    using AdjointProblem::gFn;
+
+    Value GFn(Index gIndex, DGSoln &) const override { return 100.0 + gIndex; }
+    Value dGFndp(Index gIndex, Index pIndex, DGSoln &) const override
+    {
+        return 1.0 + 10.0 * gIndex + pIndex;
+    }
+
+    // A g whose derivatives are nonzero in *every* slot, so the four dgFn_*
+    // hooks can be told apart in the assembled vectors.
+    Value gFn(Index gIndex, const State &s, Position x) const override
+    {
+        return (1.0 + gIndex) * (s.u(0) * s.u(0) + 2.0 * s.q(0) +
+                                 3.0 * s.sigma(0) + 4.0 * s.phi(0) + x);
+    }
+
+    void dgFn_du(Index gIndex, VectorRef v, const State &s, Position) override
+    {
+        v.setZero();
+        v[0] = (1.0 + gIndex) * 2.0 * s.u(0);
+    }
+    void dgFn_dq(Index gIndex, VectorRef v, const State &, Position x) override
+    {
+        v.setZero();
+        v[0] = (1.0 + gIndex) * (2.0 + x);
+    }
+    void dgFn_dsigma(Index gIndex, VectorRef v, const State &, Position x) override
+    {
+        v.setZero();
+        v[0] = (1.0 + gIndex) * (3.0 - 0.5 * x);
+    }
+    void dgFn_dphi(Index gIndex, VectorRef v, const State &, Position x) override
+    {
+        v.setZero();
+        v[0] = (1.0 + gIndex) * (4.0 + 2.0 * x);
+    }
+
+    void dSigmaFn_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override
+    {
+        out = 1.0 + i + 10.0 * pIndex + x + s.u(0);
+    }
+    void dSources_dp(Index i, Index pIndex, Value &out, const State &s, Position x) override
+    {
+        out = -2.0 - i - 20.0 * pIndex + 2.0 * x + s.q(0);
+    }
+};
+
+// An objective that is a real functional of the state, whose GFn integrates its
+// own gFn and whose dgFn_* hooks really are that gFn's derivatives.
+//
+// MockAdjoint above cannot serve here on either count. Its GFn returns the
+// constant 100 + gIndex, so it does not depend on the state at all, and its
+// dgFn_dq/dsigma/dphi carry x-dependence its gFn does not -- deliberately, so
+// that the four hooks can be told apart in the assembled vectors. A
+// finite-difference check needs all of it to line up.
+//
+// g is nonlinear in u and depends on q, sigma and phi as well. Every part of that
+// is load-bearing. A g linear in u cannot tell a correct chain rule from
+// evaluating the objective functional on the derivative vector, the two
+// coinciding only in the linear case. And a g that ignored q, sigma or phi could
+// not tell a full chain
+// rule from one missing those terms -- the same blind spot that let the gate be
+// evaluated where dydt.q, dydt.sigma and dydt.phi are all still zero.
+class QuadratureAdjoint : public AdjointProblem
+{
+public:
+    explicit QuadratureAdjoint(Grid const &g) : grid(g)
+    {
+        ng = 1;
+        np = 1;
+        np_boundary = 0;
+    }
+
+    using AdjointProblem::gFn;
+
+    // Every term is quadratic at worst, so each of the four derivatives is degree
+    // k or less. That mattered more when GFn below integrated exactly; it is kept
+    // because it also keeps every derivative representable, so a failure here is
+    // about the chain rule rather than about interpolation.
+    Value gFn(Index, const State &s, Position x) const override
+    {
+        return s.u(0) * s.u(0)              // nonlinear in u
+               + 0.5 * s.q(0) * s.q(0)      // and in q
+               + (2.0 + x) * s.sigma(0)     // linear in sigma, x-weighted
+               + s.phi(0) * s.phi(0)        // and in the auxiliary variable
+               + 0.25 * s.u(1);             // a second variable, so var != 0 counts too
+    }
+
+    Value GFn(Index gIndex, DGSoln &Y) const override
+    {
+        // sum_m w_m g(Z_m) -- the objective every GFn in the tree reports, and
+        // therefore the one the adjoint gradient has to differentiate.
+        //
+        // This used to be a 30-point Gauss rule per cell, chosen so the reference
+        // shared no quadrature with the assembly and could not agree with it by
+        // sharing a mistake. The trouble is that it made *this fixture* report a
+        // different functional from every real one: Int g dx rather than
+        // Int I_h[g] dx. The assembly used to match it, by applying the mass
+        // matrix, and that was the defect -- invisible in every aggregate,
+        // because (M - diag(w)) annihilates constants, and caught only by a
+        // per-node spatial gradient. Pinning the exact integral here would pin
+        // the defect.
+        //
+        // Independence is kept where it can be: this is a separate
+        // implementation, summing the basis's weights against gFn directly
+        // rather than going anywhere near DerivativeSubVector. What it no longer
+        // does is choose the quadrature independently, because the quadrature is
+        // the definition of G rather than an approximation to it.
+        Value total = 0.0;
+        auto const &points = Y.getPoints();
+        for (Grid::Index i = 0; i < grid.getNCells(); ++i)
+        {
+            Interval const &I = grid[i];
+            const Vector w = Y.getBasis().getIntegrationWeights(I);
+            for (Index j = 0; j < w.size(); ++j)
+            {
+                const Position x = points[i * w.size() + j];
+                total += w(j) * gFn(gIndex, Y.eval(x), x);
+            }
+        }
+        return total;
+    }
+
+    Value dGFndp(Index, Index, DGSoln &) const override { return 0.0; }
+
+    void dgFn_du(Index, VectorRef v, const State &s, Position) override
+    {
+        v.setZero();
+        v[0] = 2.0 * s.u(0);
+        v[1] = 0.25;
+    }
+    void dgFn_dq(Index, VectorRef v, const State &s, Position) override
+    {
+        v.setZero();
+        v[0] = s.q(0);
+    }
+    void dgFn_dsigma(Index, VectorRef v, const State &, Position x) override
+    {
+        v.setZero();
+        v[0] = 2.0 + x;
+    }
+    void dgFn_dphi(Index, VectorRef v, const State &s, Position) override
+    {
+        v.setZero();
+        v[0] = 2.0 * s.phi(0);
+    }
+
+    void dSigmaFn_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+    void dSources_dp(Index, Index, Value &out, const State &, Position) override { out = 0.0; }
+
+private:
+    Grid const &grid;
+};
+
+GlobalState makeStates(Index nCells, Index k, Index nVars, Index nAux)
+{
+    GlobalState g(nCells, k, nVars, 0, nAux);
+    for (Index j = 0; j < static_cast<Index>(g.size()); ++j)
+    {
+        State s(nVars, 0, nAux);
+        for (Index v = 0; v < nVars; ++v)
+        {
+            s.u(v) = 0.2 * (j + 1) + v;
+            s.q(v) = -0.4 * (j + 1) + v;
+            s.sigma(v) = 0.6 * (j + 1) - v;
+        }
+        for (Index a = 0; a < nAux; ++a)
+            s.phi(a) = 0.11 * (j + 1);
+        g.setWithState(j, s);
+    }
+    return g;
+}
+
+std::vector<Position> makePoints(Index n)
+{
+    std::vector<Position> p(n);
+    for (Index j = 0; j < n; ++j)
+        p[j] = 0.09 * (j + 1);
+    return p;
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_SUITE(adjoint_problem_tests)
+
+// ------------------------------------------------------ index bookkeeping --
+
+BOOST_AUTO_TEST_CASE(parameter_index_split_is_internal_then_boundary)
+{
+    // np is split into np_boundary trailing boundary parameters and the rest
+    // internal. Several defaults loop to getNpInternal(), and F_p is assembled
+    // with the boundary block handled separately, so this split has to hold.
+    MockAdjoint adj;
+    BOOST_TEST(adj.getNg() == 2);
+    BOOST_TEST(adj.getNp() == 3);
+    BOOST_TEST(adj.getNpBoundary() == 1);
+    BOOST_TEST(adj.getNpInternal() == 2);
+
+    BOOST_TEST(adj.isAdjointIndexInternal(0));
+    BOOST_TEST(adj.isAdjointIndexInternal(1));
+    BOOST_TEST(!adj.isAdjointIndexInternal(2));
+
+    BOOST_TEST(adj.areParametersSpatial() == false);
+    BOOST_TEST(adj.getName(2) == "p2");
+    BOOST_TEST(adj.computeUpperBoundarySensitivity(0, 0) == false);
+    BOOST_TEST(adj.computeLowerBoundarySensitivity(0, 0) == false);
+}
+
+BOOST_AUTO_TEST_CASE(vector_dgfndp_gathers_the_scalar_form_over_internal_indices)
+{
+    // The row-vector overload fills only the internal parameters and leaves the
+    // boundary entries at zero -- their sensitivity comes from a different
+    // route entirely.
+    MockAdjoint adj;
+    Grid grid(0.0, 1.0, 2);
+    DGSoln y(2, grid, 1);
+
+    const Matrix row = adj.dGFndp(1, y);
+    BOOST_TEST_REQUIRE(row.rows() == 1);
+    BOOST_TEST_REQUIRE(row.cols() == adj.getNp());
+
+    for (Index p = 0; p < adj.getNpInternal(); ++p)
+        BOOST_TEST(row(0, p) == adj.dGFndp(1, p, y));
+    BOOST_TEST(row(0, adj.getNp() - 1) == 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(dgfndp_over_a_global_state_is_python_only_and_says_so)
+{
+    // The batched dgFndp has no C++ implementation; it exists for the pybind11
+    // trampoline to override. Calling it from C++ must fail loudly rather than
+    // return garbage.
+    MockAdjoint adj;
+    GlobalState states = makeStates(2, 1, 2, 1);
+    const auto pts = makePoints(static_cast<Index>(states.size()));
+    BOOST_CHECK_THROW(adj.dgFndp(0, states, pts), std::runtime_error);
+}
+
+// -------------------------------------------------------- batched defaults --
+
+BOOST_AUTO_TEST_CASE(batched_g_matches_the_pointwise_form)
+{
+    MockAdjoint adj;
+    GlobalState states = makeStates(2, 2, 2, 1);
+    const auto pts = makePoints(static_cast<Index>(states.size()));
+
+    for (Index g = 0; g < adj.getNg(); ++g)
+    {
+        const Values out = adj.gFn(g, states, pts);
+        BOOST_TEST_REQUIRE(out.size() == static_cast<Index>(pts.size()));
+        for (size_t j = 0; j < pts.size(); ++j)
+            BOOST_TEST(out(j) == adj.gFn(g, states[j], pts[j]),
+                       boost::test_tools::tolerance(1e-14));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(dg_routes_each_hook_to_its_own_state_slice)
+{
+    // dgFn_du -> Variable, dgFn_dq -> Derivative, dgFn_dsigma -> Flux,
+    // dgFn_dphi -> Aux. Those four land in different blocks of the adjoint
+    // right-hand side, so a swap would silently solve the wrong adjoint.
+    MockAdjoint adj;
+    const Index nCells = 2, k = 2, nVars = 2, nAux = 1;
+    GlobalState states = makeStates(nCells, k, nVars, nAux);
+    const auto pts = makePoints(static_cast<Index>(states.size()));
+
+    GlobalState out(nCells, k, nVars, 0, nAux);
+    adj.dg(1, out, states, pts);
+
+    Vector refV(nVars), refA(nAux);
+    for (size_t j = 0; j < states.size(); ++j)
+    {
+        const State s = states[j];
+        adj.dgFn_du(1, refV, s, pts[j]);
+        BOOST_TEST((out.Variable(j) - refV).norm() < 1e-14);
+        adj.dgFn_dq(1, refV, s, pts[j]);
+        BOOST_TEST((out.Derivative(j) - refV).norm() < 1e-14);
+        adj.dgFn_dsigma(1, refV, s, pts[j]);
+        BOOST_TEST((out.Flux(j) - refV).norm() < 1e-14);
+        adj.dgFn_dphi(1, refA, s, pts[j]);
+        BOOST_TEST((out.Aux(j) - refA).norm() < 1e-14);
+    }
+
+    // Not vacuous: all four blocks are nonzero and mutually different.
+    BOOST_TEST(out.Variable().norm() > 1e-3);
+    BOOST_TEST(out.Derivative().norm() > 1e-3);
+    BOOST_TEST(out.Flux().norm() > 1e-3);
+    BOOST_TEST(out.Aux().norm() > 1e-3);
+}
+
+BOOST_AUTO_TEST_CASE(parameter_derivatives_fill_only_the_internal_indices)
+{
+    // dSigma/dSources reuse the Variable slot to hold p-derivatives -- the
+    // comment in AdjointProblem.hpp calls this out. They loop pIndex over
+    // getNpInternal(), so out.Variable(j)(np-1) must stay untouched.
+    MockAdjoint adj;
+    const Index nCells = 2, k = 1, nVars = 3, nAux = 1;
+    GlobalState states = makeStates(nCells, k, nVars, nAux);
+    const auto pts = makePoints(static_cast<Index>(states.size()));
+
+    GlobalState out(nCells, k, nVars, 0, nAux);
+    // Poison the block so an untouched entry is distinguishable from a zero.
+    out.Variable().setConstant(-999.0);
+
+    adj.dSigma(0, out, states, pts);
+    for (size_t j = 0; j < states.size(); ++j)
+    {
+        for (Index p = 0; p < adj.getNpInternal(); ++p)
+        {
+            Value expected = 0.0;
+            adj.dSigmaFn_dp(0, p, expected, states[j], pts[j]);
+            BOOST_TEST(out.Variable(j)(p) == expected,
+                       boost::test_tools::tolerance(1e-14));
+        }
+        BOOST_TEST(out.Variable(j)(adj.getNp() - 1) == -999.0);
+    }
+
+    out.Variable().setConstant(-999.0);
+    adj.dSources(1, out, states, pts);
+    for (size_t j = 0; j < states.size(); ++j)
+        for (Index p = 0; p < adj.getNpInternal(); ++p)
+        {
+            Value expected = 0.0;
+            adj.dSources_dp(1, p, expected, states[j], pts[j]);
+            BOOST_TEST(out.Variable(j)(p) == expected,
+                       boost::test_tools::tolerance(1e-14));
+        }
+}
+
+BOOST_AUTO_TEST_CASE(compute_physics_derivatives_dispatches_to_all_three)
+{
+    // The default ComputePhysicsDerivatives loops dSigma_vals.size() (not
+    // nVars) and dAux_vals.size(), so the sizes come from the caller's
+    // GlobalStateMatrix rather than the problem. Pin that.
+    MockAdjoint adj;
+    const Index nCells = 2, k = 1, nVars = 2, nAux = 1;
+    GlobalState states = makeStates(nCells, k, nVars, nAux);
+    const auto pts = makePoints(static_cast<Index>(states.size()));
+
+    GlobalStateMatrix dSigma(nVars), dSource(nVars), dAux(nAux);
+    for (Index v = 0; v < nVars; ++v)
+    {
+        dSigma.add(nCells, k, nVars, 0, nAux);
+        dSource.add(nCells, k, nVars, 0, nAux);
+    }
+    for (Index a = 0; a < nAux; ++a)
+        dAux.add(nCells, k, nVars, 0, nAux);
+
+    // dAux_dp has no C++ implementation, so the aux leg must fail loudly.
+    BOOST_CHECK_THROW(adj.ComputePhysicsDerivatives({dSigma, dSource, dAux}, states, pts),
+                      std::logic_error);
+
+    // With no aux parameters requested the other two legs run cleanly.
+    GlobalStateMatrix noAux(0);
+    BOOST_CHECK_NO_THROW(
+        adj.ComputePhysicsDerivatives({dSigma, dSource, noAux}, states, pts));
+
+    for (Index i = 0; i < nVars; ++i)
+        for (size_t j = 0; j < states.size(); ++j)
+            for (Index p = 0; p < adj.getNpInternal(); ++p)
+            {
+                Value expected = 0.0;
+                adj.dSigmaFn_dp(i, p, expected, states[j], pts[j]);
+                BOOST_TEST(dSigma[i].Variable(j)(p) == expected,
+                           boost::test_tools::tolerance(1e-14));
+            }
+}
+
+BOOST_AUTO_TEST_CASE(missing_aux_parameter_derivative_is_reported)
+{
+    // The default dAux_dp exists only to complain. It must actually throw --
+    // constructing a std::logic_error and dropping it on the floor would leave
+    // the caller's output at whatever was in the buffer, which is how a silent
+    // wrong-gradient bug gets into the adjoint solve.
+    MockAdjoint adj;
+    Value out = 0.0;
+    State s(2, 0, 1);
+    BOOST_CHECK_THROW(adj.dAux_dp(0, 0, out, s, 0.5), std::logic_error);
+}
+
+// -------------------------------- the adjoint vectors SystemSolver builds --
+
+BOOST_AUTO_TEST_CASE(the_aux_derivative_sub_vector_weights_dg_by_the_integration_weights)
+{
+    // dGdaux_Vec must produce w_j * dg/dphi_a|_j and nothing else -- the same
+    // operator as DerivativeSubVector, over nAux blocks rather than nVars.
+    //
+    // This replaces a case that compared it against an independent 30-point Gauss
+    // rule. They agreed, because both computed Int dg/dphi phi_j dx; neither is
+    // the derivative of the objective GFn reports, which is sum_m w_m g(Z_m) and
+    // so has dG/dZ_i = w_i dg/dZ|_i. See the comment on the sibling case below:
+    // two integration routines agreeing was exactly the evidence that misled
+    // before, so the reference here is built from the weights directly.
+    //
+    // Which is necessary but not sufficient, and the second half of this case is
+    // the part that bites. M and diag(w) agree on far more than the constants the
+    // sibling comment names: (M v)_i = Int phi_i v and (diag(w) v)_i = v_i Int
+    // phi_i, so they coincide whenever the interpolatory rule integrates phi_i * v
+    // exactly. On k+1 Chebyshev points of the first kind that rule is symmetric,
+    // so for even k it is exact to degree k+1 -- and at k = 2 that covers every
+    // *affine* dg/dphi, which is what MockAdjoint's is. Reintroducing
+    // InterpolateOntoBasis here therefore passes a check driven through dg alone,
+    // measured: it moves the answer by 5e-16. Distinguishing them needs a dg/dphi
+    // of degree k, and a guard that it stays one.
+    //
+    // nVars = 2 with nAux = 1 deliberately: the output is nAux*(k+1) long, which
+    // for this fixture is not the length an nVars-shaped one would be, so a loop
+    // bound or a size that has drifted back to nVars fails here rather than
+    // silently agreeing.
+    const Index k = 2, nCells = 4, nVars = 2, nAux = 1;
+    Grid grid(0.0, 1.0, nCells);
+    AdjointHostSystem problem;
+    MockAdjoint adjoint;
+
+    SystemSolver sys(grid, k, &problem);
+    sys.setAdjointProblem(&adjoint);
+    sys.setTau(1.0);
+    sys.resetCoeffs();
+    sys.initialiseMatrices();
+
+    SUNContext ctx;
+    SUNContext_Create(SUN_COMM_NULL, &ctx);
+
+    DGSoln shape(nVars, grid, k, Index(0), Index(1));
+    N_Vector Y = N_VNew_Serial(shape.getDoF(), ctx), dYdt = N_VClone(Y);
+    N_VConst(0.0, Y);
+    N_VConst(0.0, dYdt);
+    sys.setInitialConditions(Y, dYdt);
+
+    const Index gIndex = 1;
+
+    // The route the solver takes: the batched dg hook -- whose default loops over
+    // MockAdjoint's pointwise dgFn_dphi at the nodes -- then dGdaux_Vec over the
+    // Aux slice of the result. Driving it any other way would test a path
+    // initializeMatricesForAdjointSolve does not use.
+    GlobalState dGdvars(nCells, k, nVars, 0, nAux);
+    adjoint.dg(gIndex, dGdvars, sys.y.evalOnNodes(), sys.y.getPoints());
+
+    // Nodal values of a genuine degree-k polynomial, for the discriminating half.
+    // Not affine: with these, phi_i * v has degree 2k and the two operators part
+    // company.
+    Matrix synthetic(nAux, k + 1);
+    for (Index a = 0; a < nAux; ++a)
+        for (Index j = 0; j < k + 1; ++j)
+            synthetic(a, j) = 1.0 + a + (j == 1 ? 6.0 : -2.0 * j);
+
+    Vector actualAux(nAux * (k + 1)), expected(nAux * (k + 1));
+    for (Index cell = 0; cell < nCells; ++cell)
+    {
+        const Vector weights = sys.y.getBasis().getIntegrationWeights(grid[cell]);
+
+        sys.dGdaux_Vec(gIndex, actualAux, dGdvars.cellwiseAux(cell), sys.y, cell);
+
+        auto const dgdphi = dGdvars.cellwiseAux(cell);
+        for (Index a = 0; a < nAux; ++a)
+            for (Index j = 0; j < k + 1; ++j)
+                expected(a * (k + 1) + j) = weights(j) * dgdphi(a, j);
+
+        BOOST_TEST((actualAux - expected).norm() < 1e-14,
+                   "cell " << cell << ": assembled dG/dphi is not diag(w) dg/dphi, "
+                           << "differing by " << (actualAux - expected).norm());
+        BOOST_TEST(actualAux.norm() > 1e-6);
+
+        // The same identity on data the mass matrix cannot fake. The first check
+        // is that the fixture still tells the two apart -- without it this half
+        // could go quietly vacuous the way the route above already is.
+        for (Index a = 0; a < nAux; ++a)
+        {
+            const Vector nodal = synthetic.row(a).transpose();
+            const Vector viaWeights = nodal.cwiseProduct(weights);
+            const Vector viaMass =
+                sys.y.getBasis().InterpolateOntoBasis(grid[cell], nodal);
+
+            BOOST_TEST((viaMass - viaWeights).norm() > 1e-4,
+                       "cell " << cell << ", aux " << a << ": diag(w) and the mass "
+                               << "matrix agree on this dg/dphi, so the check below "
+                               << "cannot tell them apart");
+
+            expected.segment(a * (k + 1), k + 1) = viaWeights;
+        }
+
+        sys.dGdaux_Vec(gIndex, actualAux, synthetic, sys.y, cell);
+        BOOST_TEST((actualAux - expected).norm() < 1e-14,
+                   "cell " << cell << ": dGdaux_Vec is not diag(w) on a degree-k "
+                           << "dg/dphi, differing by " << (actualAux - expected).norm());
+    }
+
+    N_VDestroy(Y);
+    N_VDestroy(dYdt);
+    SUNContext_Free(&ctx);
+}
+
+// ------------------------------------------- the derivative sub-vectors --
+
+namespace
+{
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(the_derivative_sub_vector_weights_dg_by_the_integration_weights)
+{
+    // DerivativeSubVector must produce w_j * dg/dZ|_j and nothing else.
+    //
+    // This replaces a case that asserted the nodal route agreed with a
+    // quadrature one. They did agree -- both computed Int dg/dZ phi_j dx, and
+    // they coincide whenever dg/dZ is a polynomial the basis represents, which
+    // MockAdjoint's affine dgFn_dq is. The trouble was that neither is the
+    // derivative of the objective GFn reports: G = sum_m w_m g(Z_m) gives
+    // dG/dZ_i = w_i dg/dZ|_i. Applying the mass matrix instead was wrong by
+    // (M - diag(w)) dg/dZ, which annihilates constants and so vanished from
+    // every aggregate -- the reason it took a per-node spatial gradient to see.
+    //
+    // So the reference here is built straight from the weights rather than by a
+    // second quadrature: the point is to pin which operator this is, and two
+    // integration routines agreeing was exactly the evidence that misled before.
+    //
+    // "Annihilates constants" understates how close the two are, and the second
+    // half below exists because of it. (M v)_i = Int phi_i v while
+    // (diag(w) v)_i = v_i Int phi_i, so they agree whenever the interpolatory
+    // rule integrates phi_i * v exactly -- and on k+1 Chebyshev points of the
+    // first kind that rule is symmetric, hence exact to degree k+1 for even k.
+    // At k = 2 that covers every affine dg/dZ, which is what MockAdjoint's
+    // dgFn_dq is: restoring InterpolateOntoBasis moves the check above by 3e-16
+    // and it goes on passing. Measured, not deduced -- and until this half was
+    // added, the only case in the suite that noticed the regression at all was
+    // the dG/dt check that used to live here, at a relative 6e-6
+    // against its 1e-6 tolerance.
+    const Index k = 2, nCells = 3, nVars = 2;
+    Grid grid(0.0, 1.0, nCells);
+    AdjointHostSystem problem;
+    MockAdjoint adjoint;
+
+    SystemSolver sys(grid, k, &problem);
+    sys.setAdjointProblem(&adjoint);
+    sys.setTau(1.0);
+    sys.resetCoeffs();
+    sys.initialiseMatrices();
+
+    SUNContext ctx;
+    SUNContext_Create(SUN_COMM_NULL, &ctx);
+
+    DGSoln shape(nVars, grid, k, Index(0), Index(1));
+    N_Vector Y = N_VNew_Serial(shape.getDoF(), ctx), dYdt = N_VClone(Y);
+    N_VConst(0.0, Y);
+    N_VConst(0.0, dYdt);
+    sys.setInitialConditions(Y, dYdt);
+
+    GlobalState dGdvars(nCells, k, nVars, 0, 1);
+    adjoint.dg(1, dGdvars, sys.y.evalOnNodes(), sys.y.getPoints());
+
+    // Nodal values of a genuine degree-k polynomial: phi_i * v is then degree 2k,
+    // past what the rule integrates exactly, and the two operators part company.
+    Matrix synthetic(nVars, k + 1);
+    for (Index var = 0; var < nVars; ++var)
+        for (Index j = 0; j < k + 1; ++j)
+            synthetic(var, j) = 1.0 + var + (j == 1 ? 6.0 : -2.0 * j);
+
+    Vector viaNodes(nVars * (k + 1)), expected(nVars * (k + 1));
+    for (Index cell = 0; cell < nCells; ++cell)
+    {
+        const Vector weights = sys.y.getBasis().getIntegrationWeights(grid[cell]);
+
+        sys.DerivativeSubVector(1, viaNodes, dGdvars.cellwiseDerivative(cell), sys.y, cell);
+
+        auto const dgdq = dGdvars.cellwiseDerivative(cell);
+        for (Index var = 0; var < nVars; ++var)
+            for (Index j = 0; j < k + 1; ++j)
+                expected(var * (k + 1) + j) = weights(j) * dgdq(var, j);
+
+        BOOST_TEST((viaNodes - expected).norm() < 1e-14,
+                   "cell " << cell << ": assembled dG/dq is not diag(w) dg/dq, "
+                           << "differing by " << (viaNodes - expected).norm());
+        BOOST_TEST(viaNodes.norm() > 1e-6);
+
+        // The same identity on data the mass matrix cannot fake, guarded by a
+        // check that this fixture still tells the two apart at all.
+        for (Index var = 0; var < nVars; ++var)
+        {
+            const Vector nodal = synthetic.row(var).transpose();
+            const Vector viaWeights = nodal.cwiseProduct(weights);
+            const Vector viaMass =
+                sys.y.getBasis().InterpolateOntoBasis(grid[cell], nodal);
+
+            BOOST_TEST((viaMass - viaWeights).norm() > 1e-4,
+                       "cell " << cell << ", var " << var << ": diag(w) and the mass "
+                               << "matrix agree on this dg/dZ, so the check below "
+                               << "cannot tell them apart");
+
+            expected.segment(var * (k + 1), k + 1) = viaWeights;
+        }
+
+        sys.DerivativeSubVector(1, viaNodes, synthetic, sys.y, cell);
+        BOOST_TEST((viaNodes - expected).norm() < 1e-14,
+                   "cell " << cell << ": DerivativeSubVector is not diag(w) on a "
+                           << "degree-k dg/dZ, differing by "
+                           << (viaNodes - expected).norm());
+    }
+
+    N_VDestroy(Y);
+    N_VDestroy(dYdt);
+    SUNContext_Free(&ctx);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

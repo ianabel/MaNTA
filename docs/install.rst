@@ -1,0 +1,545 @@
+Building MaNTA
+==============
+
+Prerequisites
+-------------
+
+**CMake 3.22 or newer**, with a generator — GNU make or Ninja — and a **C++23**
+compiler: g++ 15 or newer, or clang++ 18 or newer.
+
+.. warning::
+
+   **Avoid g++ 14 if you can.** Something in it breaks on this tree at the release
+   flags (``-O3 -flto -march=native``), and the symptom is a wrong number rather
+   than an error: adding any member to ``SystemSolver`` makes one of the Jacobian
+   tests fail about half the time, with an O(1) error, and no sanitiser reports
+   anything. g++ 15, g++ 16 and every clang tested are clean, and the build prints
+   a warning if it sees g++ 14.
+
+   It still compiles, and the solver's own output was reproducible in the case
+   measured, so this is a recommendation rather than a hard floor — but the
+   numbers from a g++ 14 release build are not ones this project can vouch for.
+   The root cause is not yet known; ``CLAUDE.md`` and ``TODO`` carry the
+   reproduction.
+
+The clang floor is measured rather than assumed, and so was the old gcc one:
+g++ 13 cannot build MaNTA at all — libstdc++ 13 has no ``<print>``, and the output
+layer uses ``std::print`` throughout. g++ 14 does build it; the floor moved to 15
+on the miscompile above, not on a language feature. clang++ 18 needed one source
+change to admit: ``PyGrid.hpp`` used to declare ``constexpr Vector
+getNodes(...)``, and a dynamically allocating Eigen vector is not a literal type,
+which C++23 permits only under P2448R2 — implemented by clang 19 but not clang 18.
+That ``constexpr`` was decorative and is now ``inline``.
+
+clang++ 18, clang++ 19 and clang++ 21 have each been verified by hand to build the
+solver, the Python module and all three test suites clean under ``-Wall -Werror``.
+CI runs seven build legs: g++ 15, g++ 16, clang++ 19, clang++ 20 and clang++ 21
+against the distribution's Eigen, then g++ 15 and clang++ 19 again against Eigen
+5.0.1. g++ 14 and clang++ 18 are deliberately not among them, so both are verified
+rather than guarded — and since g++ 14 is what Ubuntu noble ships, the gcc most
+people have by default is now the one this project tests least.
+
+.. note::
+
+   With clang, **the standard library matters as much as the compiler.** clang
+   uses the newest GCC installation it finds, so a local clang build and CI's
+   clang legs can compile against different versions of libstdc++ — CI's get the
+   ``ubuntu-24.04`` image's libstdc++ 14, while a developer box with g++ 15
+   installed gets libstdc++ 15.
+
+   This has bitten once already: three ``std::bind_front`` conversions built fine
+   under clang++ 21 with libstdc++ 15 and were rejected by the same compiler with
+   libstdc++ 14.2, because ``_Bind_front::operator()`` has two implementations
+   selected by ``__cpp_explicit_this_parameter`` — a macro clang defines only from
+   version 20. If you are checking portability locally, pin the library too:
+   ``--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14``.
+
+System libraries, which you install yourself:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Library
+     - Notes
+   * - Boost
+     - Headers only. Boost.Test is used in header-only mode, so there is no
+       ``unit_test_framework`` to link.
+   * - Eigen
+     - Dense linear algebra throughout. Either 3.4.x or 5.0.x. A packaged Eigen
+       is found with nothing configured; for an unpacked *source* tree, which
+       carries no ``Eigen3Config.cmake``, use ``MANTA_EIGEN_INCLUDE_DIR``.
+   * - SUNDIALS
+     - **7.1.0 or newer**, built with **IDA and KINSOL**. Not 6.x — MaNTA links
+       ``sundials_core`` and uses ``SUNContext``, neither of which exists before
+       v7. KINSOL drives the steady-state solver; without it the build stops at
+       ``kinsol/kinsol.h`` rather than at the link step.
+   * - netCDF C and netCDF C++
+     - 4.3 or newer for the C++ interface, which needs netCDF C 4.6.0 or newer.
+   * - BLAS
+     - Eigen is built with ``-DEIGEN_USE_BLAS``. A plain ``-lblas`` by default;
+       see ``MANTA_BLAS_VENDOR`` below before changing that.
+
+Three more libraries are **git submodules** under ``extern/``, so there is
+nothing to install and no path to configure — see below:
+
+* `toml11 <https://github.com/ToruNiina/toml11>`_ parses the configuration files.
+* `autodiff <https://autodiff.github.io>`_ provides the forward-mode automatic
+  differentiation that ``AutodiffTransportSystem`` uses to derive Jacobian
+  entries from a flux and a source.
+* `pybind11 <https://github.com/pybind/pybind11>`_ builds the Python module. Only
+  needed for the ``_manta`` target; configure with ``-DMANTA_PYTHON=OFF`` to skip it.
+
+Getting the source
+------------------
+
+Clone with submodules:
+
+.. code-block:: sh
+
+   git clone --recurse-submodules https://github.com/ianabel/MaNTA.git
+
+If you have already cloned without that flag, ``extern/`` will contain three
+empty directories and the build will stop at
+``fatal error: toml.hpp: No such file or directory``. Populate them with
+
+.. code-block:: sh
+
+   git submodule update --init
+
+That is the whole of the toml11, autodiff and pybind11 installation. None of the
+three needs a path configured — the include directories are wired into the build.
+If one is missing, the configure step stops with a message naming the submodule
+and the command above, rather than at ``fatal error: toml.hpp``.
+
+Configuring
+-----------
+
+MaNTA builds with CMake, out of source. There is no file you have to write first:
+
+.. code-block:: sh
+
+   cmake --preset default        # configure  -> build/
+   cmake --build build -j        # compile
+   ctest --test-dir build        # all three suites
+
+In practice one dependency usually needs naming, because distributions rarely
+package SUNDIALS 7 — unless you used the bundled ``build_sundials`` script, which
+installs into ``./sundials/install``, where the configure step looks on its own:
+
+.. code-block:: sh
+
+   cmake --preset default -DSUNDIALS_ROOT=/somewhere/else/sundials/install
+
+Anything else somewhere unusual is named the same way: ``-DEigen3_ROOT``,
+``-DBOOST_ROOT``, or ``-DCMAKE_PREFIX_PATH="/opt/a;/opt/b"`` for several at once.
+The quotes on that last one matter — the semicolon is CMake's list separator, not
+the shell's.
+
+.. note::
+
+   Naming a prefix the compiler already searches is a **no-op**, and that is
+   worth stating because it used not to be. Passing ``-isystem /usr/include``
+   makes gcc and clang drop ``/usr/include`` from the end of the system chain and
+   search it where the flag appeared — ahead of the libstdc++ headers — so
+   ``<cstdlib>``'s ``#include_next <stdlib.h>`` finds nothing and every
+   translation unit fails. ``Makefile.config`` carried a compiler probe and a
+   hand-written filter for exactly that. CMake strips implicit include
+   directories from the flags it generates, so the filter is gone; CI still
+   checks the property holds on both compiler families.
+
+Presets
+~~~~~~~
+
+``CMakePresets.json`` defines four, each with its own build directory so they can
+coexist:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 78
+
+   * - Preset
+     - Effect
+   * - ``default``
+     - Release: ``-O3 -flto=auto -march=native``, into ``build/``.
+   * - ``debug``
+     - ``-O0 -g -DDEBUG -DPHYSICS_DEBUG``, into ``build-debug/``.
+   * - ``coverage``
+     - ``--coverage -O0``, no LTO, no ``-Werror``, into ``build-coverage/``.
+   * - ``portable``
+     - Release without ``-march=native``, into ``build-portable/``.
+
+.. note::
+
+   The Release configuration deliberately does **not** define ``NDEBUG``, which
+   CMake would normally add. ``NDEBUG`` disables ``assert()`` and takes Eigen's
+   own assertions with it, and those are the diagnostic of record for a class of
+   defect here: when the adjoint's spatial-parameter branch wrote a
+   ``(np, nPoints)`` block into an ``(nPoints, np)`` destination, the only thing
+   that reported it was Eigen's ``resize()`` assertion. Under ``NDEBUG`` that run
+   would have silently transposed a gradient instead.
+
+   What they cost was measured rather than assumed, and it depends on the
+   polynomial degree: about 2.5% at ``Polynomial_degree = 3``, and 7-9% at 8-10,
+   where the per-cell blocks are large. ``-DMANTA_ASSERTS=OFF`` defines
+   ``NDEBUG`` and buys that back. ``CLAUDE.md`` has the table and the reason the
+   effect grows with ``k``.
+
+.. _openmp:
+
+Threading (``MANTA_OPENMP``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Off by default. When on, the solver's cell-independent loops — the per-cell
+factorisation and solves, and both back-substitutions — run through
+``manta::parallel_for`` in ``util/ParallelFor.hpp``, which is the only place in
+the tree that writes an ``omp`` pragma. The *physics* is never threaded; see
+:doc:`physics_interface`.
+
+Four threads are worth 1.3x at :math:`k = 3` on 400 cells, rising to 1.78x at
+:math:`k = 10` on 20 — the more work there is per cell, the better it does. That
+is a recent state of affairs: while the condensed trace matrix was factorised
+densely it accounted for up to 91% of a low-degree run, and threading bought 11%
+there however many cores it was given. Fixing that unlocked the parallelism as
+well as removing its own cost.
+
+Two cautions.
+
+*Do not oversubscribe.* There is no ``num_threads`` clause; with more threads
+than cells the loss is large rather than marginal. Keep ``OMP_NUM_THREADS`` at or
+below the cell count.
+
+*Set your BLAS thread count explicitly.* Building with ``-fopenmp`` links
+``libgomp``, and that alone is enough for a dispatching BLAS (MKL's ``libmkl_rt``,
+OpenBLAS) to begin threading itself when ``OMP_NUM_THREADS`` is set. That changes
+floating-point reduction order, which is enough to change whether a tight-
+tolerance ``IDACalcIC`` converges. Set ``MKL_NUM_THREADS`` or
+``OPENBLAS_NUM_THREADS`` alongside ``OMP_NUM_THREADS`` rather than letting one
+variable drive both — and note they want opposite things, since BLAS threading
+helps exactly the low-degree case where MaNTA's own threading does not.
+
+``CMakeUserPresets.json``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Machine-specific paths belong in ``CMakeUserPresets.json``, which is gitignored
+and is the direct replacement for the old ``Makefile.local``. Copy
+``CMakeUserPresets.json.example`` and edit it; its presets ``inherit`` the ones
+above, so you add only what your machine needs.
+
+.. code-block:: json
+
+   {
+     "version": 3,
+     "configurePresets": [
+       {
+         "name": "local",
+         "inherits": "default",
+         "cacheVariables": {
+           "SUNDIALS_ROOT": "$env{HOME}/sundials/install",
+           "CMAKE_CXX_COMPILER": "g++-15"
+         }
+       }
+     ]
+   }
+
+Then ``cmake --preset local``. Anything on the command line still wins.
+
+Options
+~~~~~~~
+
+``cmake -B build -LH`` lists every option with its description. The MaNTA-specific
+ones:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Option
+     - Effect
+   * - ``MANTA_TESTS``
+     - Build the Boost.Test unit tests. ``OFF`` also removes the Boost
+       requirement. Default ``ON``.
+   * - ``MANTA_PYTHON``
+     - Build the ``manta`` Python extension. Default ``ON``.
+   * - ``MANTA_OPENMP``
+     - Thread the cell-independent loops, through ``util/ParallelFor.hpp``.
+       Default ``OFF``; see :ref:`openmp` before turning it on.
+   * - ``MANTA_LAPACK``
+     - Use LAPACK's ``dgbtrf``/``dgbtrs`` for the banded trace solve when one is
+       found. Default ``ON``; with no LAPACK, or ``OFF``, an equivalent built-in
+       factorisation is used instead and the answers are the same.
+   * - ``MANTA_ASSERTS``
+     - Keep ``assert()``, and so Eigen's assertions, in an optimised build.
+       Default ``ON``; ``OFF`` defines ``NDEBUG``.
+   * - ``MANTA_VERBOSE``
+     - Define ``VERBOSE`` — extra solver logging.
+   * - ``MANTA_PHYSICS_DEBUG``
+     - Define ``PHYSICS_DEBUG`` without a full Debug build. Implied by ``Debug``.
+   * - ``MANTA_NATIVE_ARCH``
+     - ``-march=native`` in Release. Default ``ON``.
+   * - ``MANTA_XLA_FFI`` / ``MANTA_CUDA``
+     - The JAX FFI interface. Needs jaxlib headers.
+   * - ``MANTA_EIGEN_INCLUDE_DIR``
+     - Eigen headers, for a source checkout with no ``Eigen3Config.cmake``.
+   * - ``MANTA_BLAS_VENDOR``
+     - ``BLA_VENDOR`` for ``FindBLAS``. ``Generic`` (the default) is a plain
+       ``-lblas``; ``Any`` lets CMake choose.
+   * - ``MANTA_VENV`` / ``MANTA_VENV_PYTHON``
+     - Where the ``venv`` target builds its environment (``build/venv`` by
+       default), and with which interpreter.
+   * - ``MANTA_INSTALL_PYTHONDIR``
+     - Where ``install`` puts the Python package, relative to the prefix.
+       Defaults to the interpreter's own layout, ``lib/python3.X/site-packages``.
+   * - ``MANTA_DOCS_SOURCE_COPY``
+     - Where ``install`` also copies the built HTML; ``docs/_build/html`` in the
+       checkout by default, empty for nowhere.
+
+.. warning::
+
+   ``MANTA_BLAS_VENDOR`` defaults to ``Generic`` — a plain ``-lblas``, which is
+   what the Makefile linked and what the distribution's alternatives symlink
+   points at — rather than letting ``FindBLAS`` choose freely. On a box with
+   Intel's libraries installed, an unconstrained ``FindBLAS`` takes the *layered*
+   MKL link (``mkl_gf_lp64`` + ``mkl_gnu_thread`` + ``mkl_core`` + ``libgomp``).
+   That combination is unsafe to ``dlopen``, and importing a C extension is a
+   ``dlopen``: the Python module built that way dies mid-solve and takes the
+   interpreter with it, while the standalone solver — linked from the very same
+   objects — runs the whole regression suite. Change this deliberately, and test
+   the Python suite if you do.
+
+Installing SUNDIALS
+-------------------
+
+The included ``build_sundials`` script fetches and builds a minimal SUNDIALS
+(IDA, KINSOL and the serial ``N_Vector`` only, no examples) into
+``./sundials/install``:
+
+.. code-block:: sh
+
+   ./build_sundials
+   # then, when configuring:  -DSUNDIALS_ROOT=./sundials/install
+
+Override the version with ``SUNDIALS_VERSION=7.4.0 ./build_sundials``. On macOS
+the script needs ``coreutils`` and ``cmake``.
+
+.. note::
+
+   An install from a copy of that script predating the steady-state solver has
+   no KINSOL — it passed ``-DBUILD_KINSOL=OFF`` — so rerun the script if the
+   build stops at ``kinsol/kinsol.h``. A SUNDIALS built by hand has every solver
+   already, that being the cmake default.
+
+Build targets
+-------------
+
+Built with ``cmake --build build --target <name>``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Target
+     - What it does
+   * - ``MaNTA``
+     - The solver binary, at ``build/MaNTA``.
+   * - *(none)*
+     - The solver, ``libmanta.so``, the Python module and the unit tests.
+   * - ``_manta``
+     - The pybind11 extension, into the build's package directory,
+       ``build/python/manta/``. See :ref:`build-tree-package`.
+   * - ``UnitTests``
+     - The Boost.Test binary, at ``build/Tests/UnitTests/UnitTests``.
+   * - ``manta``
+     - ``libmanta.so``, for embedding the solver in another program.
+   * - ``unit_tests`` / ``regression_tests`` / ``python_tests``
+     - Run one suite. ``ctest --test-dir build`` runs all three.
+   * - ``stubs`` / ``stubs-check`` / ``typecheck``
+     - Generate ``_manta.pyi`` into ``build/stubs/``, fail if the committed one
+       differs from it, and run mypy over the package.
+   * - ``stubs-update``
+     - Copy the generated stub over ``python/manta/_manta.pyi``.
+   * - ``docs``
+     - Sphinx, into ``build/docs/html``.
+   * - ``coverage``
+     - Runs all three suites instrumented and writes the gcovr reports. Only
+       does anything in a ``Coverage`` build directory.
+   * - ``venv``
+     - Creates ``build/venv`` and installs the Python dependencies into it. See
+       below.
+   * - ``install`` / ``uninstall``
+     - Everything, under a prefix. See :ref:`installing`.
+   * - ``clean_data``
+     - Just the run output: ``.nc``, ``.restart.nc`` and ``.dat`` at the repo
+       root and in ``Tests/RegressionTests``, ``python/Tests`` and each
+       directory under ``python-examples`` and ``python-physics``.
+   * - ``clean_coverage``
+     - Instrumentation data and the reports.
+
+There is no ``clean`` target to describe, and that is the point of an
+out-of-source build: **a build writes nothing outside its build directory**, so
+``rm -rf build`` is the whole of it. The suites run from there as well. Two
+targets write into the checkout, and both exist to: ``stubs-update``, whose job
+is to change a tracked file, and ``install``'s copy of the docs.
+
+.. warning::
+
+   ``clean_data`` spares files with ``.ref.`` in the name — the references the
+   regression and pytest suites compare against — and it does not descend into
+   subdirectories, so scratch and archive directories like ``runs/`` are left
+   alone.
+
+   It also skips ``Tests/UnitTests`` entirely. Every ``.nc`` in there is a
+   tracked test *input* rather than output, and one of them —
+   ``MatrixDiffusion.restart.nc``, read by ``SystemSolverTests.cpp`` — has no
+   ``.ref.`` in its name, so the keep-pattern would not save it. Keep both facts
+   in mind before adding a directory to the list in
+   ``cmake/MantaCleanData.cmake``.
+
+   None of what it sweeps comes from a build or a suite; it is the output of runs
+   started by hand from inside the checkout.
+
+Python dependencies
+-------------------
+
+The regression and Python suites need the packages in ``requirements.txt``. On
+distributions where the system Python is externally managed that means a
+virtualenv, and the ``venv`` target builds one:
+
+.. code-block:: sh
+
+   cmake --build build --target venv
+   cmake -B build -DPython3_EXECUTABLE="$PWD/build/venv/bin/python"
+
+It installs ``requirements.txt`` plus ``gcovr``, so ``coverage`` works too.
+
+There is no need to put it on ``PATH``. CMake records which interpreter to use
+and runs the regression driver and pytest with that one. A fresh configure picks
+up ``build/venv``, or failing that a ``.venv`` of your own in the repository
+root, without being told.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Option
+     - Effect
+   * - ``-DMANTA_VENV_PYTHON=python3.12``
+     - Build the environment against a different interpreter.
+   * - ``-DMANTA_VENV=/path/to/env``
+     - Put the environment somewhere else.
+   * - ``-DMANTA_VENV_EXTRA=``
+     - Skip ``gcovr``.
+   * - ``-DPython3_EXECUTABLE=...``
+     - Which interpreter the extension is built for and the tools run under.
+
+.. note::
+
+   The ``venv`` target uses a **versioned** interpreter (``python3.13`` by
+   default) deliberately. A virtualenv records the interpreter it was created
+   with, and ``python3 -m venv`` records the unversioned ``/usr/bin/python3``.
+   When the distribution later moves that symlink to a new release, the
+   environment's ``bin/python3`` follows it while the installed packages stay
+   behind in ``lib/python3.<old>/site-packages``, and every import in the
+   environment fails with ``No module named pytest``. Naming ``python3.13``
+   records ``python3.13``, and the environment survives the upgrade.
+
+.. note::
+
+   The **ABI-mismatch trap is gone**, and it is worth knowing what it was. The
+   Makefile named the module from ``python3-config --extension-suffix`` and took
+   its headers from the same program, so the two matched each other but not
+   necessarily the interpreter that would import them. After the system default
+   moved, ``make python`` built ``_manta.cpython-3<new>-*.so`` while the
+   virtualenv still ran the old release — and ``python_tests``, ``stubs-check``
+   and ``typecheck`` then failed with three messages pointing somewhere else.
+   ``stubs-check`` was the worst: regenerating the stub needs the import too, so
+   it failed to write one and then reported a perfectly good committed file
+   stale.
+
+   CMake finds **one** interpreter and derives the headers, the ABI suffix and
+   every tool command from it, so the three cannot disagree. If you want a
+   different one, name it once with ``-DPython3_EXECUTABLE``.
+
+.. _build-tree-package:
+
+The Python package in the build tree
+------------------------------------
+
+The ``manta`` package is assembled in the build directory, at
+``build/python/manta/``: the extension that build linked, beside a symlink to
+each file of ``python/manta/``. ``build/python`` is therefore a ``sys.path``
+entry, and every suite, ``stubs``, ``typecheck`` and anything you run by hand
+against the build use it the same way:
+
+.. code-block:: sh
+
+   export PYTHONPATH=$PWD/build/python
+   python -c 'import manta; print(manta._manta.__file__)'
+
+Because the Python files are links, an edit to one is seen by the next import
+without a rebuild, so this is also the editable form of the package;
+``pip install -e .`` is not supported. Each build directory has a package of its
+own, so a Release and a Coverage build never see each other's extension.
+
+The suites run from the build tree too. CTest starts each one in the build
+directory's copy of its source directory — ``build/Tests/RegressionTests``,
+``build/python/Tests``, ``build/Tests/UnitTests`` — which is where their output
+lands; configs, references and fixtures are read from the source tree. The
+Python suite keeps pytest's cache, its temporary directories and the bytecode of
+the test files there as well, and refuses to start if ``manta`` resolves anywhere
+but the build under test.
+
+.. _installing:
+
+Installing
+----------
+
+.. code-block:: sh
+
+   cmake --install build --prefix /opt/manta              # default /usr/local
+   DESTDIR=/tmp/stage cmake --install build --prefix /usr   # staged, for packaging
+   cmake --install build --component python               # one part only
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 20 35
+
+   * - Under the prefix
+     - Component
+     - What
+   * - ``bin/MaNTA``
+     - ``runtime``
+     - The solver.
+   * - ``lib/libmanta.so``
+     - ``runtime``
+     - The solver as a library, for embedding.
+   * - ``include/manta/``, ``lib/pkgconfig/manta.pc``
+     - ``devel``
+     - What an out-of-tree physics case builds against; see
+       :doc:`out_of_tree`.
+   * - ``lib/python3.X/site-packages/manta/``
+     - ``python``
+     - The package, extension included.
+   * - ``bin/manta``
+     - ``python``
+     - The console script. It finds the package relative to itself, so it needs
+       nothing on ``PYTHONPATH``.
+   * - ``share/doc/MaNTA/html/``
+     - ``docs``
+     - The HTML, if the ``docs`` target has been built.
+
+The directories are CMake's ``GNUInstallDirs`` ones, so ``lib`` is ``lib64``
+where the platform says so. The package directory follows the interpreter the
+build was configured for rather than ``GNUInstallDirs``, because that is where
+the interpreter will look. A distribution Python may look elsewhere — Debian's
+reads ``/usr/local/lib/python3/dist-packages`` — so set
+``-DMANTA_INSTALL_PYTHONDIR`` for one of those, or install the package with
+``pip install .`` instead.
+
+The ``docs`` component also copies the HTML into the checkout, at
+``docs/_build/html`` (``MANTA_DOCS_SOURCE_COPY``). That copy is skipped under
+``DESTDIR`` and is not removed by ``uninstall``.
+
+The installed binaries keep the paths to libraries found outside the system
+directories — a SUNDIALS under a prefix of its own, typically — so they run
+without ``LD_LIBRARY_PATH``.

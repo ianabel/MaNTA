@@ -1,0 +1,791 @@
+Writing a transport system
+==========================
+
+A *transport system* supplies the physics: the flux, the source, any auxiliary
+constraints, the initial condition and the boundary conditions. Everything
+outside ``PhysicsCases/`` is generic, and the solver knows nothing about what
+your variables mean.
+
+This page documents the interface. It deliberately does not document any of the
+cases that ship in ``PhysicsCases/`` — read those as examples, but treat the
+interface described here as the contract.
+
+Declaring what a case is
+------------------------
+
+A case describes itself as data, once, and cannot be constructed without doing
+so. That description is a ``SystemSpec``:
+
+.. code-block:: cpp
+
+   MyProblem::MyProblem(toml::value const &config, Grid const &grid)
+       : TransportSystem({.variables = {{"n", "density",  "m^-3",
+                                         BoundaryKind::Neumann,
+                                         BoundaryKind::Dirichlet},
+                                        {"T", "temperature", "eV"}},
+                          .aux     = {{"phi", "electrostatic potential", "V"}},
+                          .scalars = {{"I", "plasma current", "A", /*differential=*/true}}})
+   {
+       // config parsing only
+   }
+
+``nVars``, ``nScalars`` and ``nAux`` are derived from it and are ``const``; the
+names reach the netCDF output; the boundary *kind* is per variable and per end;
+and ``differential`` marks a scalar whose constraint involves :math:`\dot y`.
+
+The spec is validated in the constructor — it must declare at least one
+variable, and names are unique across all three groups — so a case that fails
+validation never becomes an object.
+
+If the shape depends on the configuration, build the spec in a static helper and
+pass it up, so it is still complete before the base class exists:
+
+.. code-block:: cpp
+
+   class MyProblem : public TransportSystem
+   {
+       static SystemSpec buildSpec(toml::value const &config);
+       MyProblem(toml::value const &config, Grid const &grid)
+           : TransportSystem(buildSpec(config)) { ... }
+   };
+
+.. note::
+
+   ``numberedFields(n)`` / ``numberedScalars(n)`` / ``numberedAux(n)`` in
+   ``SystemSpec.hpp`` produce the placeholder names ``Var0``, ``Scalar0``,
+   ``AuxVariable0``. They are for a case whose *width comes from its
+   configuration* and which therefore has no names to give —
+   ``MatrixDiffusion``, ``MatrixDiffusionTest`` and ``LinearDiffSourceTest`` are
+   the three in the tree. Every other case names its variables, and the netCDF
+   groups take those names.
+
+Two ways in
+-----------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Base class
+     - When to use it
+   * - ``TransportSystem``
+     - You write the flux, the source, and their derivatives. Full control;
+       more to get wrong.
+   * - ``AutodiffTransportSystem``
+     - You write only ``Flux`` and ``Source``, in ``autodiff`` types, and every
+       Jacobian entry is derived for you. Prefer this unless you have a reason
+       not to.
+
+The autodiff route
+------------------
+
+Derive from ``AutodiffTransportSystem`` and implement two functions:
+
+.. code-block:: cpp
+
+   Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) override;
+
+   Real Source(Index i, RealVector u, RealVector q, RealVector sigma,
+               RealVector phi, Real x, Time t) override;
+
+Its constructor takes the spec alongside the config and grid:
+
+.. code-block:: cpp
+
+   MyCase::MyCase(toml::value const &config, Grid const &grid)
+       : AutodiffTransportSystem(config, grid, buildSpec(config)) {}
+
+``Flux`` returns :math:`\hat\sigma_i` — the physical flux, exactly what
+``SigmaFn`` would return. The sign convention discussed in
+:ref:`the formulation <sign-convention>` is applied by the solver, not by you.
+
+An ``[AutodiffTransportSystem]`` config section may set ``isUpperDirichlet`` /
+``isLowerDirichlet``, which are applied to every variable; a case that declares
+per-variable boundary kinds in its own spec keeps them unless those keys are
+present.
+
+.. tip::
+
+   ``autodiff`` expression templates hold **references** to their operands. A
+   lambda whose result is stored — anything passed to an integrator, for instance
+   — must declare ``-> Real`` explicitly. With a deduced return type it hands back
+   an expression referring to dead temporaries, and the symptom is a silently
+   wrong (often zero) answer rather than a crash.
+
+The explicit route
+------------------
+
+Derive from ``TransportSystem``. The pure virtuals you must implement:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 42 58
+
+   * - Hook
+     - Returns
+   * - ``SigmaFn(i, State, x, t)``
+     - :math:`\hat\sigma_i`, the flux.
+   * - ``Sources(i, State, x, t)``
+     - :math:`S_i`, the source.
+   * - ``dSigmaFn_du``, ``dSigmaFn_dq``
+     - Derivatives of the flux with respect to :math:`u` and :math:`q`.
+   * - ``dSources_du``, ``dSources_dq``, ``dSources_dsigma``
+     - Derivatives of the source.
+   * - ``InitialValue(i, x)``, ``InitialDerivative(i, x)``
+     - The initial condition and its :math:`x` derivative.
+
+One more is **optional**, and is the only hook with a default rather than a pure
+virtual:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 42 58
+
+   * - Hook
+     - Returns
+   * - ``aFn(i, x)``
+     - :math:`a_i(x)`, the coefficient on :math:`\partial_t u_i`. Defaults to
+       ``1.0``.
+
+Override it where the conserved quantity is :math:`\int a_i u_i \,\mathrm{d}x`
+rather than :math:`\int u_i \,\mathrm{d}x` — a geometric volume element, for
+instance. It is a *weight on the mass matrix*, :math:`\int a_i \phi_j \phi_l
+\,\mathrm{d}x`, integrated rather than sampled, so a position-dependent
+:math:`a_i` costs no accuracy. ``ADTestProblem`` is the case in the tree that
+uses it, and it is available from Python as well.
+
+Reading the ``State``
+~~~~~~~~~~~~~~~~~~~~~
+
+Every hook receives a ``State``. Use the named accessors:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - Accessor
+     - Meaning
+   * - ``s.u(i)``
+     - the variable :math:`u_i`
+   * - ``s.q(i)``
+     - its derivative :math:`q_i = \partial_x u_i`
+   * - ``s.sigma(i)``
+     - the **stored** flux, :math:`-\hat\sigma_i`
+   * - ``s.sigmaHat(i)``
+     - the **physical** flux, the quantity ``SigmaFn`` returns
+   * - ``s.phi(i)``
+     - the auxiliary variable :math:`\phi_i`
+   * - ``s.scalar(i)``
+     - the global scalar :math:`\mu_i`
+   * - ``s.udot(i)``
+     - :math:`\partial_t u_i` — see :ref:`time-derivative-sources` below
+
+They are bounds-checked in a ``DEBUG`` build, which is worth having: anything
+indexed per auxiliary variable is sized ``nAux``, not ``nVars``, and those
+coincide in almost every case.
+
+.. note::
+
+   The derivative hooks receive their output vector **already zeroed**. Assign
+   only the entries that are nonzero; there is no need to call ``setZero()``
+   first, and an omitted entry means zero rather than uninitialised memory.
+
+.. _time-derivative-sources:
+
+Sources that read a time derivative
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A source may depend on :math:`\partial_t u_j`, which is what a formulation whose
+state variables are not the conserved quantities produces — a heat equation
+carrying :math:`\partial_t n` on its right-hand side, for instance. Declare it on
+the variable whose source does the reading, and supply the derivative:
+
+.. code-block:: cpp
+
+   SystemSpec spec{.variables = {{"n", "density", "m^-3"},
+                                 {"T", "temperature", "eV"}}};
+   spec.variables[1].sourceReadsTimeDerivatives = true;
+
+   Value Sources(Index i, const State &s, Position x, Time t) override
+   {
+       if (i == 1)
+           return heating(x, t) - Z * phi0 * s.udot(0);   // reads dn/dt
+       return particleSource(x, t);
+   }
+
+   void dSources_dudot(Index i, VectorRef v, const State &s,
+                       Position x, Time t) override
+   {
+       if (i == 1)
+           v[0] = -Z * phi0;
+   }
+
+From Python the flag is ``manta.Field(..., source_reads_time_derivatives=True)``
+and the value is ``state.udot[0]``; from ``AutodiffTransportSystem`` override the
+``Source`` overload that takes a ``udot`` vector and the derivative is derived
+for you.
+
+A **vectorised** case — one that supplies ``ComputePhysics`` and
+``ComputePhysicsDerivatives`` — reads it as the ``"VariableDot"`` entry of the
+state dict, ``(nPoints, nVars)`` like the others, and returns the derivative from
+``ComputeSourceTimeDerivatives``: one dict per variable, with
+:math:`\partial S_i/\partial\dot u_j` in the **Variable** slice, because that
+block has the shape :math:`\partial S_i/\partial u_j` has and lands in the same
+place. It is a call of its own rather than a fourth group in
+``ComputePhysicsDerivatives``, whose three-group shape is part of the interface
+every vectorised case already implements. When no variable declares the flag the
+entry is an *empty* array rather than a grid of zeros, so a case that wants to
+work either way should test ``VariableDot.size`` rather than index it blind.
+
+A ``manta.jax`` case needs neither: ``VariableDot`` is a field of the layer's
+``State``, so the value arrives as ``state.VariableDot[j]`` and
+``grad(source)`` carries :math:`\partial S/\partial\dot u` beside the four
+blocks it already produced.
+
+Four things are worth knowing before using it.
+
+**It is meaningful in** ``Sources`` **and nowhere else.** ``SigmaFn`` and
+``AuxG`` receive the same ``State``, so the value is there, but the Jacobian
+carries no :math:`\partial\hat\sigma/\partial\dot u` or
+:math:`\partial G/\partial\dot u` term. A flux that read it would be
+differentiated wrongly, and the only symptom would be slow Newton convergence.
+
+**There is no** ``qdot``, ``sigmadot`` **or** ``phidot``, and the reason is
+``IDASetId``. IDA hands the residual a ``y'`` for every component, algebraic ones
+included, so the values exist; what does not exist is a mass term for them. ``id``
+marks :math:`u` differential and nothing else, so a source reading
+:math:`\dot q` would put :math:`\alpha`-weighted entries in the :math:`q`
+columns of :math:`\partial F/\partial y'` and make that declaration false. They
+are also exactly zero at the initial point, because ``setInitialConditions``
+fills only the differential rows and ``IDA_YA_YDP_INIT`` holds the algebraic
+:math:`y'` fixed — so a term reading one would be wrong for the evaluations
+``IDACalcIC`` converges on and right for every one after.
+
+**It changes what multiplies the time derivative**, from :math:`X` to
+:math:`X - \partial S/\partial\dot u`. A source containing :math:`a_i
+\partial_t u_i` cancels its own mass term, which makes the row algebraic and
+raises the index of the system; the solver assembles that operator at the initial
+state and refuses the run by name rather than leaving it to IDA. A near-cancellation
+warns instead, because pseudo-transient continuation damps with this operator
+rather than with :math:`X`, so its step schedule may behave unlike it does
+elsewhere.
+
+**A steady solve sees** :math:`\dot u = 0`, which is the right reading of a
+steady state: ``PseudoTransient`` drives its damping term to zero at the fixed
+point and ``Newton`` never has one. The adjoint is built at :math:`\alpha = 0`
+and so is unaffected by this feature entirely.
+
+Boundary conditions
+~~~~~~~~~~~~~~~~~~~
+
+The *kind* is spec data. Only the *value* is a function you write, because it
+can depend on :math:`t`:
+
+.. code-block:: cpp
+
+   Value LowerBoundary(Index i, Time t) const override;
+   Value UpperBoundary(Index i, Time t) const override;
+
+A Dirichlet boundary fixes :math:`u`. **A Neumann boundary fixes** :math:`q`,
+the gradient — *not* the flux :math:`\hat\sigma`, which this said until it was
+measured. The two coincide only when :math:`\hat\sigma = q`, which is every case
+in this tree that uses a nonzero value, so nothing noticed. For
+:math:`\hat\sigma = \kappa q` the boundary value must be
+:math:`\hat\sigma_{\text{wanted}}/\kappa`, and for a flux with a spatially
+varying coefficient there is no single factor to divide by.
+
+.. warning::
+
+   Because it is a condition on :math:`q`, a problem whose flux vanishes at a
+   boundary *by degeneracy* — :math:`\hat\sigma = x\,\chi(q)\,q` at :math:`x=0`,
+   say — cannot be expressed by asking for a zero Neumann value. Doing so
+   imposes :math:`q = 0` there, which is an extra condition the original problem
+   does not have, and it is generally false: the true :math:`q` at such a
+   boundary is whatever regularity demands, not zero. The symptom is a
+   first-order error, independent of polynomial degree, from a one-cell layer at
+   that boundary. ``python-examples/jardin-critical-gradient`` documents a worked
+   case, where supplying the correct gradient instead takes the error from
+   ``7e-4`` to machine precision at every resolution.
+
+   The way to express such a boundary is a
+   :ref:`mixed condition <mixed-boundaries>` below, which can constrain the flux
+   directly. ``python-examples/shestakov-nonlinear``'s ``ANALYSIS.md`` §8 measures
+   what that is worth on a worked case: the flux offset falls to round-off and the
+   error by two to three orders.
+
+.. _mixed-boundaries:
+
+Mixed (Robin) boundaries
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+A **mixed** end imposes one scalar equation per variable per end,
+
+.. math::
+
+   a\,u + b\,q + d\,\sigma = c,
+
+with :math:`a`, :math:`b`, :math:`d` declared in the spec and :math:`c` returned
+by the same ``LowerBoundary`` / ``UpperBoundary`` hook as any other kind — so the
+coefficients are data and only the datum may depend on :math:`t`:
+
+.. code-block:: cpp
+
+   {"n", "density", "m^-3",
+    BoundaryCondition::mixed(/* a */ 2.0, /* b */ -1.0, /* d */ 0.0),
+    BoundaryKind::Dirichlet}
+
+.. code-block:: python
+
+   variables = [manta.Field("n", "density", "m^-3",
+                            lower=manta.Mixed(a=2.0, b=-1.0),
+                            upper=manta.Dirichlet)]
+
+Four things to know before using it.
+
+**Neumann is the** :math:`b = 1` **case; Dirichlet is not the** :math:`a = 1`
+**case.** A Neumann end is assembled as exactly this row with :math:`b = 1` — or
+:math:`d = 1` under :doc:`zeroFlux <configuration>` — and reproduces it bit for
+bit. A Dirichlet end is imposed by a different mechanism: an identically zero
+trace row *and* column, with the datum substituted into the cell rows. Asking for
+:math:`a = 1` alone gives a *weakly imposed* Dirichlet instead, a different
+discretisation reaching the same answer, so the spec validation refuses
+:math:`b = d = 0` and points at ``BoundaryKind::Dirichlet``.
+
+**Only one of** :math:`b` **and** :math:`d` **may be zero**, for the same reason:
+the row has to constrain something other than :math:`u`.
+
+**The** :math:`d` **coefficient multiplies the stored** :math:`\sigma`, which is
+:math:`-\hat\sigma` — see :ref:`the sign convention <sign-convention>`. A
+homogeneous flux condition is unambiguous, but a nonzero :math:`c` with
+:math:`d \neq 0` inherits that sign.
+
+.. warning::
+
+   **The signs of** :math:`a` **and** :math:`b` **are not free if the run has to
+   be stable.** The energy identity for a diffusion problem is
+   :math:`\frac{d}{dt}\int u^2/2 = [u q] - \int q^2`, so the boundary term at the
+   *lower* end is :math:`-u q`, and a homogeneous :math:`a u + b q = 0` there
+   contributes :math:`+(a/b)\,u^2`. Dissipation therefore wants :math:`a` and
+   :math:`b` of **opposite** signs at the lower end and of the **same** sign at
+   the upper one. Choosing them the other way round is not a discretisation
+   problem but an anti-dissipative boundary condition, and the symptom is a run
+   that diverges rather than one that is merely inaccurate.
+
+.. warning::
+
+   **The flux has to be diffusive, and the precise condition is a sector
+   condition on** :math:`\partial\hat\sigma_j/\partial q_k` **rather than
+   positive definiteness.** Linearising the flux about a state,
+
+   .. math::
+
+      \hat\sigma_j \simeq V_j(u, q) + D_{jk}\,\delta q_k ,
+      \qquad D_{jk} = \frac{\partial \hat\sigma_j}{\partial q_k} ,
+
+   the eigenvalues of the semi-discrete operator are :math:`-\nu_n \mu_k`, with
+   :math:`\nu_n > 0` the scalar discrete Dirichlet--Laplacian eigenvalues and
+   :math:`\mu_k` the eigenvalues of :math:`D`. So the spectrum sits at angle
+   :math:`\max_k |\arg \mu_k(D)|` from the negative real axis, whatever the mesh
+   or the degree.
+
+   Two things follow. :math:`\operatorname{Re}\mu_k > 0` is needed for the
+   problem to be well posed at all --- reverse the sign and you have the backward
+   heat equation, which diverges because the equation is ill posed and not
+   because the scheme is. And the BDF of order three to five are
+   :math:`A(\alpha)`-stable only for :math:`\alpha = 86.03^\circ`,
+   :math:`73.35^\circ` and :math:`51.84^\circ`, so a :math:`D` that is positive
+   definite but strongly non-symmetric can still sit outside the wedge:
+   :math:`D = \left(\begin{smallmatrix}1 & b\\ -b & 1\end{smallmatrix}\right)`
+   has symmetric part the identity and spectrum at
+   :math:`\arctan b`, which leaves BDF5's wedge at :math:`b = 3`.
+
+   A symmetric positive definite :math:`D` is at angle zero, and so is any
+   :math:`D = SA` with :math:`S` and :math:`A` symmetric positive definite --- an
+   Onsager matrix times a metric, which is the usual structure, and which stays
+   at angle zero however asymmetric :math:`D` itself looks. An antisymmetric part
+   is what tilts the spectrum, and Onsager--Casimir reciprocity in a magnetic
+   field permits one. ``Tests/UnitTests/SpectrumTests.cpp`` measures all of this.
+
+.. note::
+
+   A **pure** flux condition (:math:`b = 0`) can leave the boundary gradient only
+   weakly determined when the flux degenerates. Where
+   :math:`\hat\sigma \sim q^3`, the sole constraint on :math:`q` at that boundary
+   vanishes along with :math:`q` itself, and the corrector can stop converging at
+   some resolutions and not others; ``ANALYSIS.md`` §8 measures this. A small
+   :math:`b` alongside :math:`d` restores a non-vanishing derivative in the row
+   while :math:`d` still pins the flux, which is the case such a problem wants.
+
+   An adjoint **boundary parameter** is refused on a non-Dirichlet end. Only a
+   Dirichlet datum has a derivative in ``F_p``, which has no trace rows; a mixed
+   or Neumann datum enters through ``L_global`` in the trace row instead. The run
+   throws rather than returning a plausible wrong gradient.
+
+``aFn(i, x)`` supplies the coefficient :math:`a_i` multiplying
+:math:`\partial_t u_i`, and defaults to 1.
+
+Auxiliary variables and global scalars
+--------------------------------------
+
+Declare ``aux`` in the spec and implement ``AuxG`` (the constraint
+:math:`G_j = 0`) and ``AuxGPrime``, plus ``dSources_dPhi`` and ``dSigma_dPhi``
+so the solver knows how the flux and source depend on :math:`\phi`.
+``InitialAuxValue`` seeds them. Both derivative hooks throw when ``nAux > 0`` and
+they have not been overridden — a zero block has to be *stated*, because the base
+cannot tell a derivative that is structurally zero from one that was forgotten.
+
+.. warning::
+
+   **On** ``AutodiffTransportSystem``\ **, the flux cannot depend on an auxiliary
+   variable.** ``Flux`` is declared ``(Index, u, q, x, t)`` and is given no
+   :math:`\phi`, so :math:`\partial\hat\sigma/\partial\phi` is identically zero
+   and the layer overrides ``dSigma_dPhi`` to say so. A case that needs a flux
+   depending on :math:`\phi` must implement ``TransportSystem`` directly, as
+   ``AuxVarTest`` does. ``Source`` *does* take :math:`\phi`, so source coupling is
+   available on either layer.
+
+Declare ``scalars`` in the spec and implement two hooks, plus
+``InitialScalarValue``, ``InitialScalarDerivative`` (consulted only for
+differential scalars) and ``dSources_dScalars`` — which is indexed by
+**scalar**, not by variable:
+
+.. code-block:: cpp
+
+   Value ScalarG(Index s, GlobalState const &y, GlobalState const &ydot,
+                 std::vector<Position> const &abscissae, Values const &weights,
+                 Matrix const &phiBoundary, Time t) override;
+
+   void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot,
+                     GlobalState const &y, GlobalState const &ydot,
+                     std::vector<Position> const &abscissae, Values const &weights,
+                     Matrix const &phiBoundary, Time t) override;
+
+A scalar constraint is a functional of the whole solution, so it is handed the
+solution sampled on the element nodes rather than pointwise data:
+
+* ``weights`` gives one quadrature weight per node, so an integral over the
+  domain is ``ScalarHooks::integrate(y.Variable().row(i), weights)``. **Use
+  these rather than a quadrature rule of your own** — see the warning below.
+* ``phiBoundary`` is :math:`(k+1)\times 2`, the basis functions of the first and
+  last cells evaluated at the ends of the domain. The nodes are Chebyshev points
+  of the first kind and so are strictly interior, which makes this the only way
+  to reach a boundary point value: ``ScalarHooks::boundaryValue(...)``.
+* ``abscissae`` gives each node's position, for an integrand that depends on
+  :math:`x` itself.
+
+``ScalarGPrime`` reports **every** scalar at once, as the derivative with
+respect to the degrees of freedom. For :math:`G = \mu - \int u\,dx` the
+:math:`u` entry at node :math:`j` is :math:`-w_j`. ``dG[s]`` and ``dGdot[s]``
+arrive zeroed. ``ScalarHooks::addBoundaryDerivative`` is the counterpart of
+``boundaryValue`` for a constraint on a boundary point.
+
+.. warning::
+
+   Integrating with your own rule is how ``ScalarTestLD3`` came to disagree with
+   itself. It computed its mass with a global adaptive Kronrod rule over a
+   piecewise polynomial, which is not a smooth function of the coefficients, and
+   its finite-difference reference disagreed with the exact :math:`\int\phi` by
+   8% at :math:`k = 4` on 16 cells. The weights you are handed are the ones the
+   solver integrates with.
+
+.. _geometry-derivatives:
+
+Reading the magnetic geometry
+-----------------------------
+
+When a :doc:`field model <field_coupling>` is attached, the metric fields it
+derives from its own unknowns reach a physics case through ``State::geom(s)``,
+slot by slot, exactly as ``u``, ``q``, ``sigma`` and ``phi`` do. Nothing else
+changes: geometry is a function of :math:`(\psi, x)` evaluated at the same
+nodes, cached per residual, in the same standing as :math:`\hat\sigma`.
+
+Reading it in a value hook is all that is needed for the *residual* to be
+right. For the *Jacobian* to be right, a case that reads geometry must also say
+how it depends on it:
+
+.. code-block:: cpp
+
+   void dSigmaFn_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+   void dSources_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+   void dAuxG_dGeometry   (Index i, VectorRef out, const State &s, Position x, Time t);
+
+Each ``out`` is length ``nGeometry`` and, like every other derivative
+out-parameter, **arrives zeroed** — so a hook assigns only its nonzero entries.
+These are the first factor of the coupling block :math:`A_1`; the second,
+:math:`\partial g/\partial\psi`, is the field model's.
+
+**An absent hook is an identically zero block, and that is correct rather than
+approximate** for a case that does not read geometry: it does not couple. It is
+*not* correct for a case that does. Getting this wrong has the usual asymmetric
+consequence — the Jacobian is never assembled, so a missing block costs Newton
+iterations and nothing else in a forward run, but the adjoint operator *is* the
+transpose and a missing block there is a silently wrong gradient beside a
+perfectly good :math:`G`.
+
+There is deliberately no hook for :math:`\partial q/\partial g` or for the trace
+rows. :math:`q = \partial_x u` is a definition rather than a physical relation,
+and a geometry-dependent boundary condition is out of scope.
+
+The three hooks are **pointwise only**. ``dSigma`` and ``dSources``, the batched
+wrappers below, loop over ``GlobalStateMatrix``'s ``Variable``/``Derivative``/
+``Flux``/``Aux`` slices and there is no ``Geometry`` slice; the coupling
+assembly calls the pointwise hooks directly instead.
+
+Pointwise and batched
+---------------------
+
+**Every physics hook exists in two forms**: pointwise, taking a ``State`` and one
+position, and batched, taking a ``GlobalState`` and a vector of positions. The
+batched versions have default implementations in ``TransportSystem.hpp`` that are
+serial loops over the pointwise version.
+
+**Serial always, including under** ``MANTA_OPENMP``. A case that supplies only
+pointwise hooks is assumed to have a reason, and threading that fallback would
+call arbitrary case code concurrently on one instance — a hook that writes to a
+member, a cache, a scratch vector, would be a data race the solver cannot detect.
+For a Python case it is worse than unsafe: every pointwise trampoline takes the
+GIL, so threads serialise on it and pay a lock handoff per point, which measured
+more than 13x *slower* than running serially.
+
+A case that wants its physics evaluated in parallel overrides the batched level
+and does so on its own terms — which is also where it can cross into Python once
+for the whole grid instead of once per point, as ``manta.jax`` does. The solver's
+own cell loops are threaded either way, so the assembly and the linear solve are
+parallel regardless of which level a case implements.
+
+A case may override either level. Overriding the batched level is how a
+vectorised implementation — a JAX case, say — avoids being called once per point.
+``ComputePhysics`` and ``ComputePhysicsDerivatives`` are the whole-state entry
+points, and because they loop over ``states.size()`` rather than a fixed count,
+they do not care how many points they are handed. That is what allows
+``Superconvergent`` to evaluate the physics at :math:`k+2` points per cell
+instead of :math:`k+1` without any physics case changing.
+
+.. _evaluation-plans:
+
+Evaluation plans
+----------------
+
+A case that compiles once per batch shape — a JAX case — or that tabulates an
+:math:`x`-dependent profile on the points it will be evaluated at needs to know
+those points *before* the first call. ``prepareEvaluation(plan)`` tells it, from
+``SystemSolver::initialize()`` and before any physics call of the run, with an
+``EvaluationPlan`` (``EvaluationPlan.hpp``): one ``EvaluationSite`` per kind of
+evaluation, entry point and cadence, each carrying the abscissae it will pass. The
+plan carries the grid and the degree too, so it is everything a case is told about
+where it is. The default does nothing, and ``evaluationPlan()`` returns the last
+plan delivered.
+
+It arrives at ``initialize()`` rather than at construction because a case is built
+from ``(config, grid)`` before any solver exists, and the degree,
+``Superconvergent`` and the tau scaling are the solver's configuration rather than
+the case's.
+
+**It is called only when the plan changes**: on the first run an instance takes
+part in, and afterwards only if a run would evaluate it differently from the last
+plan it was handed. A rerun on the same mesh, degree and configuration says
+nothing. That is possible because a plan depends only on the discretisation and the
+configuration, never on the run — a site only some runs reach, such as the mass
+matrix a solver's first run integrates or the initial-condition sweeps a restart
+skips, is listed always, with its count as an upper bound — so ``==`` is plain
+equality: the same evaluations at the same points.
+
+The kinds, for :math:`N` cells at degree :math:`k`:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 30 14 38
+
+   * - Kind
+     - Entry point
+     - Points
+     - Cadence
+   * - ``Residual``
+     - ``ComputePhysics``
+     - :math:`N(k+1)`, or :math:`N(k+2)` superconvergent
+     - per residual
+   * - ``Jacobian``
+     - ``ComputePhysicsDerivatives`` (and ``ComputeSourceTimeDerivatives`` if a
+       source reads ``udot``)
+     - as ``Residual``
+     - per Jacobian build; once more at the start of a run whose sources read
+       ``udot``
+   * - ``InitialCondition``
+     - ``ComputePhysics``
+     - as ``Residual``
+     - once per run, at most: once to build ``sigma`` (skipped on a copied
+       restart), once for the initial :math:`du/dt` (not on a steady solve)
+   * - ``TauNodes``
+     - ``ComputePhysicsDerivatives``
+     - as ``Residual``
+     - only with ``tauScaling = "Diffusive"`` and ``TauKappa = "Nodal"`` (the
+       default): per residual and :math:`3n_{vars} + n_{aux}` per Jacobian build
+       under ``tauUpdate = "Residual"``, plus one for a time march's initial
+       :math:`du/dt`; once per run under the frozen updates, which otherwise read
+       :math:`\kappa` off the Jacobian build's own derivatives
+   * - ``TauFaces``
+     - ``ComputePhysicsDerivatives``
+     - :math:`2N`, both faces of each cell, one-sided
+     - only with ``tauScaling = "Diffusive"`` and ``TauKappa = "Face"``: per
+       residual and :math:`1 + 3n_{vars} + n_{aux}` per Jacobian build under
+       ``tauUpdate = "Residual"``, plus one for a time march's initial
+       :math:`du/dt`; per continuation step under the frozen updates, and per
+       Jacobian build too under ``"JacobianBuild"``
+   * - ``ScalarConstraint``, ``ScalarJacobian``
+     - ``ScalarG`` (one call per scalar), ``ScalarGPrime``;
+       ``InitialScalarDerivative``
+     - :math:`N(k+1)` whatever ``Superconvergent`` says
+     - per residual, per Jacobian build; once per run per differential scalar
+   * - ``ScalarCoupling``, ``FieldCoupling``
+     - pointwise ``dSources_dScalars``; the three ``*_dGeometry`` hooks
+     - as ``Residual``
+     - per Jacobian build
+   * - ``Adjoint``
+     - ``ComputePhysicsDerivatives``, one call per objective
+     - as ``Residual``
+     - per adjoint solve, including the objective estimate a steady solve makes
+   * - ``InitialProjection``
+     - pointwise ``InitialValue``, ``InitialDerivative``, ``InitialAuxValue``
+     - :math:`30N` Gauss points
+     - once per run, on a cold start only; :math:`k+1` visits per point
+   * - ``MassMatrix``
+     - pointwise ``aFn``
+     - :math:`30N` Gauss points
+     - the first run of a solver only, :math:`(k+1)^2` visits per point
+
+Five cells at :math:`k = 4` therefore hand ``ComputePhysics`` batches of 25
+points, and ``ComputePhysicsDerivatives`` batches of 25 — plus 10 with a Diffusive
+tau. With ``Superconvergent`` the residual, Jacobian and adjoint batches become 30
+while the initial condition stays at 25. ``plan.batchSizes(entry)`` lists the
+distinct shapes of an entry; ``plan.points(kind)`` the abscissae of a kind.
+
+**A cadence is not a count.** How many residuals or Jacobian builds a run takes is
+decided by Newton and IDA as it goes, so the plan says what happens *when*, not
+how often in total. **The plan is complete**: every batched call the solver makes
+is at a point set it announced for that entry, and ``EvaluationPlanTests.cpp``
+records what a case is actually handed across the solver's configurations and
+fails on any call outside the plan. A case that wants to be told rather than trust
+that can assert ``plan.announces(entry, abscissae)`` in its own hooks. Outside the
+plan altogether: ``LowerBoundary``/``UpperBoundary``, which take no position;
+``writeDiagnostics``, which is the case's own; and a field model's hooks, which
+belong to the model.
+
+From Python the plan is a ``manta.EvaluationPlan`` whose point sets are numpy
+arrays, and a case overrides the hook like any other:
+
+.. code-block:: python
+
+   class MyCase(manta.TransportSystem):
+       def prepareEvaluation(self, plan):
+           self.shapes = plan.batchSizes(manta.EvaluationEntry.ComputePhysics)
+           self.profile = tabulate(plan.points(manta.EvaluationKind.Residual))
+
+Regridding
+~~~~~~~~~~
+
+Once a case has been handed a plan, a *different* plan is a regrid: a new mesh, or
+a new degree, which adds nodes and moves the old ones. The adaptation drivers —
+``MeshAdaptation``, ``DegreeAdaptation`` and the ladders — make them, and so does
+reconfiguring a Python ``Runner`` onto another grid with the same case object.
+Whether a case can follow one is its own declaration, ``SystemSpec::regrid``:
+
+``RegridPolicy::Fixed`` (the default)
+   The case is evaluated by its first plan only. A changed plan is refused with
+   ``std::invalid_argument`` (``RuntimeError`` from ``Runner.configure``), before
+   the solve that would need it — and a driver that may change the plan refuses
+   before its first solve.
+``RegridPolicy::InPlace``
+   The case takes a changed plan through ``prepareEvaluation`` and rebuilds there
+   whatever depended on the old one. A case that keeps nothing from its grid or its
+   plan declares it and need do nothing more. In Python it is a class attribute,
+   ``regrid = manta.Regrid.InPlace``, honoured whether the spec is built from class
+   attributes or passed explicitly.
+
+For a case written before plans existed there is a fallback, and the
+*configuration* turns it on: ``RebuildPhysicsOnRegrid = true``. A driver meeting a
+changed plan on a case that is not ``InPlace`` then destroys the case and builds a
+new instance for the new grid from the registry — ``InstantiateProblem`` with the
+name and table it was first built from — re-obtains the adjoint problem from the
+new instance, and moves the warm-start restart state onto it. The new instance is
+handed its first plan as usual. Only a registered case can be rebuilt this way:
+``MaNTA`` with a config file, and a ``Runner`` constructed with a case *name*. A
+case object handed to ``Runner`` cannot, and the key is refused at ``configure()``
+for one; such a case declares ``InPlace`` instead.
+
+The drivers refuse a ``Fixed`` case without the key up front whenever they *may*
+change the plan, rather than at the moment they would: ``MeshAdaptation`` always,
+``DegreeAdaptation`` whenever ``MaxPolynomialDegree`` leaves room above the
+starting degree, and a ladder always. Whether a change happens depends on what the
+solves find — the grading decision, the degree loop converging at once — and a
+refusal after a sampling solve would cost the run it was meant to save. A run with
+no adaptation never changes the plan, and a ``Fixed`` case is never refused there.
+
+Every C++ case in this tree declares ``InPlace``. Most read nothing from their
+grid; the rest take only the domain ends from it — ``NonlinDiffTest``,
+``NeumannTest`` and the ``AutodiffTransportSystem`` cases — and take them again
+from each plan in ``prepareEvaluation`` (for the autodiff cases, in
+``AutodiffTransportSystem``'s). ``RebuildPhysicsOnRegrid`` is for cases outside the
+tree that predate plans.
+
+Diagnostics
+-----------
+
+``initialiseDiagnostics`` and ``writeDiagnostics`` let a case add derived
+quantities to the netCDF file alongside the solution. Names, descriptions and
+units come from the spec and need no hooks.
+
+Registration
+------------
+
+Two macros connect a class name to the string used in a config file:
+
+.. code-block:: cpp
+
+   // in the header, inside the class
+   REGISTER_PHYSICS_HEADER(MyProblem)
+
+   // in the .cpp, at file scope
+   REGISTER_PHYSICS_IMPL(MyProblem)
+
+These declare and define a ``PhysicsCaseRegister<MyProblem>`` whose constructor
+inserts a factory into a process-global map during static initialisation. Two
+consequences worth knowing:
+
+* **A case only appears if its object file is linked in.** Nothing references it
+  directly, so a missing entry in the build is a link-line problem that produces
+  **no compile error**. An unrecognised ``TransportSystem`` name now throws with
+  the list of what *is* registered, which is usually enough to spot it. Every
+  ``.cpp`` in ``PhysicsCases/`` is globbed into the build, so a new file in that
+  directory needs no build edit; anywhere else, build the case
+  :doc:`out of tree <out_of_tree>`.
+* **A duplicate name is an error.** Registration used to be a silent no-op that
+  kept the first registration, leaving the second case unreachable with nothing
+  said; it throws now.
+
+The constructor takes the parsed config and the grid:
+
+.. code-block:: cpp
+
+   explicit MyProblem(toml::value const &config, Grid const &grid);
+
+so a case can read its own table out of the config file. Remember that unknown
+keys are silently ignored; a typo in your own parameter name will leave you with
+the default.
+
+Debugging a new case
+--------------------
+
+The failure modes here are unusual enough to be worth stating plainly.
+
+A wrong **derivative** hook does not give a wrong answer. Because the Jacobian is
+never assembled, an error there costs Newton iterations, not accuracy — so the
+run may simply be slow, or fail to converge, with no incorrect output to inspect.
+The test that catches it is the one that finite-differences the residual and
+requires :math:`J\,\delta y = g`. For a scalar constraint, ``checkScalarDerivative``
+in ``Tests/UnitTests/ScalarJacobianTests.cpp`` does the same for any case and is
+the first thing to run when a scalar system converges slowly.
+
+A wrong **sign** on the flux does give a wrong answer, but a plausible-looking
+one that converges at the correct rate to the wrong function. Only a comparison
+against a closed-form solution finds it. See :doc:`testing` for both, and
+:ref:`the sign convention <sign-convention>` for why.

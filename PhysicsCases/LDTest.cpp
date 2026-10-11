@@ -8,17 +8,19 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(LDTest);
 
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 LDTest::LDTest(toml::value const &config, Grid const& )
+	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
+					   .regrid = RegridPolicy::InPlace})
 {
-	// Always set nVars in a derived constructor
-	nVars = 1;
-
 	auto const& DiffConfig = config.at( "DiffusionProblem" );
 	kappa = toml::find_or(DiffConfig, "Kappa", 1.0);
 	EdgeValue = 0.3;
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value LDTest::LowerBoundary(Index, Time) const
 {
 	return EdgeValue;
@@ -29,12 +31,9 @@ Value LDTest::UpperBoundary(Index, Time) const
 	return EdgeValue;
 }
 
-bool LDTest::isLowerBoundaryDirichlet(Index) const { return true; };
-bool LDTest::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Value LDTest::SigmaFn(Index, const State &s, Position x, Time)
 {
-	return kappa * s.Derivative[0];
+	return kappa * s.q(0);
 }
 
 Value LDTest::Sources(Index, const State &, Position x, Time)

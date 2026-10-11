@@ -20,9 +20,15 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(AuxVarADTest);
 
-AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid, 1, 0, 1)
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
+AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid,
+                          {.variables = {{"u", "reaction-diffusion variable", ""}},
+                           .aux = {{"a", "the auxiliary a = u * u", ""}},
+                           .regrid = RegridPolicy::InPlace})
 {
-    // Construst your problem from user-specified config
+    // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
     // here we need the actual value of the diffusion coefficient, and the shape of the initial gaussian
 
@@ -37,7 +43,7 @@ AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : Autodi
     Centre = toml::find_or(DiffConfig, "Centre", 0.0);
 }
 
-// Dirichlet Boundary Conditon
+// Dirichlet Boundary Condition
 Value AuxVarADTest::LowerBoundary(Index, Time t) const
 {
     return 0.0;
@@ -48,9 +54,6 @@ Value AuxVarADTest::UpperBoundary(Index, Time t) const
     return 0.0;
 }
 
-bool AuxVarADTest::isLowerBoundaryDirichlet(Index) const { return true; };
-bool AuxVarADTest::isUpperBoundaryDirichlet(Index) const { return true; };
-
 Real AuxVarADTest::Flux(Index i, RealVector, RealVector q, Real, Time)
 {
     return kappa * q(i);
@@ -58,8 +61,20 @@ Real AuxVarADTest::Flux(Index i, RealVector, RealVector q, Real, Time)
 
 Real AuxVarADTest::Source(Index, RealVector u, RealVector, RealVector, RealVector phi, Real x, Time)
 {
+    // a + f(x), with f = -kappa U'' - U^2 and U = cos(pi x / 2), so that
+    // -kappa U'' = kappa (pi/2)^2 U. This is AuxVarTest::Sources term for term,
+    // which is the point: the two cases are now the same problem written twice,
+    // once with hand-coded derivatives and once through autodiff.
+    //
+    // The `phi(0) - U*U` half used to be absent, and nothing noticed -- because
+    // the two missing terms cancel at the steady state, where a = u^2 -> U^2.
+    // The run still converged to U (measured: 9.9e-05), still satisfied its own
+    // constraint a = u^2 (2.3e-08), and left every phi-coupling block
+    // identically zero. So dSources_dPhi -- the autodiff gradient at
+    // AutodiffTransportSystem.cpp:171 -- was never evaluated by anything, and a
+    // right answer was not evidence the coupling had been exercised.
     Real U = cos(M_PI_2 * x);
-    return kappa * M_PI_2 * M_PI_2 * U;
+    return phi(0) + kappa * M_PI_2 * M_PI_2 * U - U * U;
 }
 
 Real AuxVarADTest::GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position, Time t)

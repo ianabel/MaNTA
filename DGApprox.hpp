@@ -2,6 +2,7 @@
 #define DGAPPROX_HPP
 
 #include "gridStructures.hpp"
+#include <print>
 
 #include <map>
 #include <memory>
@@ -112,7 +113,8 @@ template<class BasisType> class DGApproxImpl
                 if (I.first.contains(x))
                     return Basis.Evaluate(I.first, I.second, x);
             }
-            std::cerr << "x = " << x << ", grid bounds = [" << grid.lowerBoundary() << ", " << grid.upperBoundary() << "]" << std::endl;
+            std::println(stderr, "x = {:g}, grid bounds = [{:g}, {:g}]", x,
+                         grid.lowerBoundary(), grid.upperBoundary());
             throw std::logic_error("Evaluation outside of grid");
         };
 
@@ -140,9 +142,13 @@ template<class BasisType> class DGApproxImpl
         {
             for (auto const &x : coeffs)
             {
-                std::cerr << x.second << std::endl;
+                // Eigen types have no std::formatter, so print element by
+                // element rather than relying on operator<<.
+                for (Index i = 0; i < x.second.size(); ++i)
+                    std::println(stderr, "{:g}", x.second(i));
+                std::println(stderr, "");
             }
-            std::cerr << std::endl;
+            std::println(stderr, "");
         }
 
         double maxCoeff()
