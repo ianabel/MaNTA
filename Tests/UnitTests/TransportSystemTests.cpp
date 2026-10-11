@@ -260,7 +260,11 @@ BOOST_AUTO_TEST_CASE(compute_physics_fills_every_slot_and_caches_the_sources)
 
     // The cached sources must be the ones just computed, not the fluxes.
     for (Index i = 0; i < nVars; ++i)
-        BOOST_TEST((sys.getSourceCache(i) - out[1][i]).norm() < 1e-14);
+    {
+      // will throw if source cache doesn't exist
+      Values Source_vals = sys.getSourceCache(i).value();
+      BOOST_TEST((Source_vals - out[1][i]).norm() < 1e-14);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(compute_physics_derivatives_fills_the_right_state_slices)

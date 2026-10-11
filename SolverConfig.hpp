@@ -37,15 +37,22 @@ struct SolverConfig
 {
     bool                     restart;
     std::string              RestartFile;
-    bool                     High_Grid_Boundary;
-    double                   Lower_Boundary_Fraction;
-    double                   Upper_Boundary_Fraction;
-    unsigned                 Polynomial_degree;
-    int                      Grid_size;
-    std::vector<double>      Grid_points;
-    double                   Lower_boundary;
-    double                   Upper_boundary;
+    double                   LowerBoundaryFraction;
+    double                   UpperBoundaryFraction;
+    bool                     GradedGridBoundary;
+    double                   GradingRatio;
+    int                      GradingCells;   // 0 means "derive from GridSize"; see gradingCellsFor
+    std::string              GradingEnd;     // "Lower", "Upper" or "Both"
+    unsigned                 PolynomialDegree;
+    int                      GridSize;
+    std::vector<double>      GridPoints;
+    double                   LowerBoundary;
+    double                   UpperBoundary;
     double                   tau;
+    std::string              tauScaling;
+    std::string              tauUpdate;
+    double                   tauFloor;
+    std::string              TauKappa;
     double                   delta_t;
     double                   t_initial;
     double                   Relative_tolerance;
@@ -55,27 +62,67 @@ struct SolverConfig
     int                      OutputPoints;
     std::string              OutputFilename;
     bool                     solveAdjoint;
-    double                   ObjectiveDecreaseTolerance;
     bool                     WriteOutput;
     bool                     WriteDatFile;
     bool                     WriteDebugDatFiles;
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
     bool                     SuppressAlgebraicError;
+    bool                     ForceConsistentIC;
     std::string              SteadyStateSolver;
     double                   PseudoTransientInitialStep;
     double                   PseudoTransientMaxStep;
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
+    bool                     EstimateObjectiveOnFinish;
+    unsigned int             MaxContinuationSteps;
+    unsigned int             NewtonMaxIterations;
+    unsigned int             NewtonJacobianReuse;
+    double                   NewtonStepTolerance;
+    std::string              NewtonScaling;
     bool                     SteadyStateDiagnostics;
+    bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;
+    unsigned int             MaxRejectedSteps;
+    // Intermediate rungs to solve at before the configured resolution, each
+    // warm-starting the next. Empty means no ladder. Deliberately a route to
+    // Polynomial_degree/Grid_size and not a replacement for them, so adding a
+    // ladder cannot change the answer -- only what it costs to reach it.
+    std::vector<unsigned>    DegreeLadder;
+    std::vector<unsigned>    GridLadder;
+    std::string              GridLadderRescaling;   // "None" or "Map"
     bool                     DegreeAdaptation;
     double                   DegreeTolerance;
     unsigned int             MaxPolynomialDegree;
     unsigned int             MaxDegreeIncrement;
     double                   DegreeAdaptationBase;
+    bool                     MeshAdaptation;
+    double                   MeshAdaptationThreshold;
+    double                   MeshAdaptationNeighbourMargin;
+    unsigned int             MeshAdaptationAttempts;
+    // Read by whoever builds the adaptation driver's PhysicsInstance -- runManta
+    // and PyRunner -- not by applySolverConfig: it is about the case, not the
+    // solver.
+    bool                     RebuildPhysicsOnRegrid;
+    // Read by the adaptation controllers, and by runManta and PyRunner for the
+    // starting point's warning; see ParallelFill.hpp.
+    unsigned int             PhysicsParallelism;
+    // Read by applySolverConfig, which arms the solver's own refusal, and by the
+    // adaptation controllers, which choose no level past it. 0 is no cap.
+    unsigned int             MaxPhysicsBatch;
     std::string              TransportSystem;
     std::vector<std::string> PhysicsPlugins;
+
+    // The magnetic-field coupling. FieldModel names a registered model and is
+    // applied by runManta rather than by applySolverConfig, which has neither
+    // the parsed config a model reads its own table from nor the grid; the
+    // other three are plain solver options and go through applySolverConfig
+    // like everything else.
+    std::string              FieldModel;
+    std::string              FieldSolve;
+    double                   FieldSolveTolerance;
+    int                      FieldSolveMaxSweeps;
+    int                      FieldSolveMaxAdjointSweeps;
 
     // Presence, not value, carries the meaning for these two.
     //
@@ -94,6 +141,25 @@ struct SolverConfig
     // distinction is impossible to draw from a plain bool carrying the schema's
     // default.
     std::optional<bool> Superconvergent;
+
+    // Whether LowerBoundaryFraction / UpperBoundaryFraction were given. The manual
+    // GradedGridBoundary path reads the values with their schema default either
+    // way; MeshAdaptation does not, and sizes its layer from the sampling mesh
+    // unless told otherwise -- so for it the absent key and the default value have
+    // to be told apart.
+    bool LowerBoundaryFractionGiven = false;
+    bool UpperBoundaryFractionGiven = false;
+
+    // Which parts of the mesh the configuration itself describes, for a restart:
+    // there the file already holds a mesh, and only what the configuration says
+    // replaces it. With neither GridSize nor GridPoints the run keeps the file's
+    // mesh, cell for cell, whatever its spacing; with GridSize but no
+    // LowerBoundary or UpperBoundary, the missing end is the file's. Both are
+    // impossible to read off the parsed values, whose schema defaults (0 cells,
+    // the domain [0, 1]) are indistinguishable from a config that wrote them.
+    bool CellsGiven = false;           // GridSize or GridPoints
+    bool LowerBoundaryGiven = false;
+    bool UpperBoundaryGiven = false;
 };
 
 // The one thing that differs between the two surfaces.
@@ -134,18 +200,60 @@ private:
 // type, a key given alongside its own alias, or a violated conditional rule.
 SolverConfig loadSolverConfig(ConfigSource const &source, ConfigSchema::Reader reader);
 
-// The grid the configuration asks for. `restart` is the opened restart file
-// when config.restart is set, nullptr otherwise; k is written with the
-// polynomial degree the *file* was written at, which is also the degree it must
-// be read back at -- see restartRunOrder for the degree the run then uses.
+// The mesh the restart file holds, or -- when not restarting -- the one the
+// configuration asks for. `restart` is the opened restart file when
+// config.restart is set, nullptr otherwise; k is written with the polynomial
+// degree the *file* was written at, which is also the degree it must be read
+// back at.
+//
+// On a restart this is the mesh the stored state is laid out on, which is what
+// the DOF check and setRestartValues need, and **not** necessarily the mesh the
+// run uses -- see restartRunGrid, exactly as restartRunOrder gives the degree
+// the run uses.
 std::unique_ptr<Grid> makeGrid(SolverConfig const &config,
                                netCDF::NcFile *restart, unsigned int &k);
+
+// The mesh the configuration asks for, whether or not this is a restart.
+std::unique_ptr<Grid> configuredGrid(SolverConfig const &config);
+
+// Whether the mesh this configuration runs on is a list of boundaries rather
+// than a recipe that can be asked for another cell count: GridPoints, or a
+// restart that gives no cell count and so keeps its file's mesh.
+bool meshIsExplicit(SolverConfig const &config);
+
+// The cells in each graded layer of a GradedGridBoundary mesh: GradingCells when
+// given, otherwise derived from GridSize -- a third of it per layer when grading
+// both ends, half when grading one, and never fewer than the 2 a layer needs.
+// Resolved from the configuration at hand rather than once at load, so a ladder
+// rung built at a smaller GridSize derives its own count instead of inheriting
+// one sized for the final mesh.
+int gradingCellsFor(SolverConfig const &config);
+
+// The mesh a restarted run should be solved on, given the mesh its restart file
+// was written on. The counterpart of restartRunOrder, and it exists for the
+// same reason: makeGrid used to return the file's mesh and the run used that,
+// so Grid_size was read, validated, required of every config on both readers --
+// and then silently discarded. A ladder written as "solve coarse, restart
+// finer, solve again" therefore re-solved the coarse problem at every rung and
+// reported it converged, which is indistinguishable from success.
+//
+// A configuration that gives neither GridSize nor GridPoints describes no mesh,
+// and the run keeps the file's -- which is the only way a restart can resume on
+// a non-uniform mesh no configuration rule produces. One that gives GridSize
+// without an end of the domain takes that end from the file.
+//
+// An equal mesh returns the file's own, so every existing restart takes the
+// copy path in setInitialConditions and is bit for bit unchanged. A different
+// one warns and wins; setInitialConditions then projects the stored element
+// polynomials onto the new cells and rebuilds the trace, since lambda lives on
+// faces that have moved.
+std::unique_ptr<Grid> restartRunGrid(SolverConfig const &config, Grid const &fileGrid);
 
 // The polynomial degree a restarted run should use, given the degree its restart
 // file was written at.
 //
 // A restart used to take its degree from the file and ignore
-// Polynomial_degree outright, even though the schema makes that key required of
+// PolynomialDegree outright, even though the schema makes that key required of
 // every config on both readers -- so a user was obliged to write a number that
 // was then silently discarded. This honours it, and warns when the two differ,
 // because the state is projected across the degree change rather than copied.

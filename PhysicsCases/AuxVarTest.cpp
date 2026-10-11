@@ -29,10 +29,14 @@
 REGISTER_PHYSICS_IMPL(AuxVarTest);
 
 const double AuxNorm = 1.0;
+// RegridPolicy::InPlace: the constructor reads nothing from its grid and the
+// case keeps nothing from an evaluation plan, so a new plan changes nothing it
+// built.
 AuxVarTest::AuxVarTest(toml::value const &config, Grid const &)
     : TransportSystem({.variables = {{"u", "reaction-diffusion variable", ""},
                                      {"v", "plain diffusion variable", ""}},
-                       .aux = {{"a", "the auxiliary a = u * u", ""}}})
+                       .aux = {{"a", "the auxiliary a = u * u", ""}},
+                       .regrid = RegridPolicy::InPlace})
 {
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
@@ -168,6 +172,11 @@ void AuxVarTest::dSigma_dPhi(Index i, VectorRef v, const State &st, Position, Ti
         v[0] = AuxNorm * 1.0;
         return;
     case 1:
+        // SigmaFn adds (a - u*u) to *both* variables' fluxes, so variable 1
+        // depends on the auxiliary too and this block is not zero. Declaring the
+        // derivative rather than removing the term from SigmaFn keeps the physics
+        // -- and so the reference solution -- exactly as it was.
+        v[0] = AuxNorm * 1.0;
         return;
     }
 

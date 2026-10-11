@@ -88,6 +88,64 @@ static ffi::Error run_ffi_ss_impl(PyRunner *runner) {
   }
   return ffi::Error::Success();
 };
+// A steady solve taken one slice at a time.
+//
+// The outcome is *returned*, not signalled as an error. OutOfSteps means the
+// MaxContinuationSteps budget was spent and nothing is wrong -- the state and
+// the pseudo-time step are both good and the next slice resumes from them --
+// which is a distinction the driver makes on every iteration, and one
+// ffi::Error would flatten into a single runtime error indistinguishable from a
+// dead solve. A genuine failure still throws, and becomes that error.
+static inline ffi::Error steady_slice(PyRunner *runner, bool resume,
+                                      bool estimate,
+                                      ffi::Result<ffi::BufferR0<i_dtype>> out) {
+  try {
+    const auto outcome = resume ? runner->continue_steady(estimate)
+                                : runner->start_steady(estimate);
+    *out->typed_data() = static_cast<int32_t>(outcome);
+  } catch (const std::exception &e) {
+    return ffi::Error::Internal(e.what());
+  }
+  return ffi::Error::Success();
+};
+
+static ffi::Error start_steady_ffi_impl(PyRunner *runner,
+                                        ffi::Buffer<i_dtype> estimate,
+                                        ffi::Result<ffi::BufferR0<i_dtype>> out) {
+  py::gil_scoped_acquire gil;
+  return steady_slice(runner, false, *estimate.typed_data() != 0, out);
+};
+
+static ffi::Error continue_steady_ffi_impl(
+    PyRunner *runner, ffi::Buffer<i_dtype> estimate,
+    ffi::Result<ffi::BufferR0<i_dtype>> out) {
+  py::gil_scoped_acquire gil;
+  return steady_slice(runner, true, *estimate.typed_data() != 0, out);
+};
+
+// Ends the solve: the output files, the restart file, the adjoint solve, then
+// teardown. Separate from abandon_steady, which frees the same objects and
+// writes nothing.
+static ffi::Error finish_steady_ffi_impl(PyRunner *runner) {
+  py::gil_scoped_acquire gil;
+  try {
+    runner->finish_steady();
+  } catch (const std::exception &e) {
+    return ffi::Error::Internal(e.what());
+  }
+  return ffi::Error::Success();
+};
+
+static ffi::Error abandon_steady_ffi_impl(PyRunner *runner) {
+  py::gil_scoped_acquire gil;
+  try {
+    runner->abandon_steady();
+  } catch (const std::exception &e) {
+    return ffi::Error::Internal(e.what());
+  }
+  return ffi::Error::Success();
+};
+
 static ffi::Error get_g_val(PyRunner *runner,
                             ffi::Result<ffi::BufferR1<fp_dtype>> Gout) {
   py::gil_scoped_acquire gil;
@@ -241,6 +299,26 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(get_adjoint_gradients_ffi_ops,
                                   .Ret<ffi::BufferR1<fp_dtype>>()
                                   .Ret<ffi::BufferR2<fp_dtype>>()
                                   .OptionalRet<ffi::BufferR1<fp_dtype>>());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(start_steady_ffi_ops, start_steady_ffi_impl,
+                              ffi::Ffi::Bind()
+                                  .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .Arg<ffi::Buffer<i_dtype>>()
+                                  .Ret<ffi::BufferR0<i_dtype>>());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(continue_steady_ffi_ops, continue_steady_ffi_impl,
+                              ffi::Ffi::Bind()
+                                  .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .Arg<ffi::Buffer<i_dtype>>()
+                                  .Ret<ffi::BufferR0<i_dtype>>());
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    finish_steady_ffi_ops, finish_steady_ffi_impl,
+    ffi::Ffi::Bind().Attr<ffi::Pointer<PyRunner>>("obj"));
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    abandon_steady_ffi_ops, abandon_steady_ffi_impl,
+    ffi::Ffi::Bind().Attr<ffi::Pointer<PyRunner>>("obj"));
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(get_g_val_ffi_ops, get_g_val,
                               ffi::Ffi::Bind()

@@ -1,0 +1,92 @@
+{
+  "//": [
+    "Copy this to CMakeUserPresets.json and edit it for your machine. That file",
+    "is gitignored and is the direct replacement for the old Makefile.local:",
+    "the place where machine-specific paths live, kept out of the repository.",
+    "",
+    "You do not need one at all if every dependency is where the compiler and",
+    "pkg-config already look -- a package-manager install of Boost, Eigen,",
+    "netCDF and BLAS needs nothing here, and only SUNDIALS usually does, since",
+    "distributions rarely package v7.",
+    "",
+    "Anything here can also be given on the command line, which wins:",
+    "    cmake --preset default -DSUNDIALS_ROOT=/opt/sundials",
+    "",
+    "`inherits` points at the presets in CMakePresets.json (default, debug,",
+    "coverage, portable), so you get their build type and binaryDir and add only",
+    "what your machine needs."
+  ],
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "local",
+      "inherits": "default",
+      "displayName": "Release, this machine",
+      "cacheVariables": {
+        "//": "SUNDIALS 7.1.0 or newer. build_sundials puts one in ./sundials/install.",
+        "SUNDIALS_ROOT": "$env{HOME}/projects/sundials/install",
+
+        "//compiler": [
+          "g++ 15 or newer, or clang++ 18 or newer. Avoid g++ 14: it miscompiles",
+          "this tree at the release flags and the symptom is a wrong number.",
+          "The configure step warns if it sees one."
+        ],
+        "CMAKE_CXX_COMPILER": "g++-15",
+
+        "//eigen": [
+          "Only for an Eigen the compiler would not find on its own. Distributions",
+          "put it in a subdirectory, hence eigen3. Either 3.4.x or 5.0.x works.",
+          "Eigen3_ROOT wants the prefix, not the directory holding Eigen/."
+        ],
+        "Eigen3_ROOT": "/usr",
+
+        "//netcdf-and-boost": [
+          "Neither normally needs anything. For an install pkg-config does not",
+          "know about -- a brew/conda pair, an HPC module -- add its prefix to",
+          "CMAKE_PREFIX_PATH, which takes a semicolon-separated list:",
+          "  \"CMAKE_PREFIX_PATH\": \"/opt/netcdf;/opt/boost\"",
+          "BOOST_ROOT still works for a hand-unpacked Boost."
+        ],
+
+        "//blas": [
+          "Generic means a plain -lblas, which is what the Makefile linked and",
+          "what the distribution's alternatives symlink points at. Change it only",
+          "deliberately -- see cmake/MantaDependencies.cmake for why a threaded",
+          "vendor layer is not a free choice for the Python module."
+        ],
+        "MANTA_BLAS_VENDOR": "Generic"
+      }
+    },
+    {
+      "//": [
+        "A Cray/HPC example, replacing Makefile.local.perlmutter. Load the modules",
+        "first -- these presets read the environment they are configured in:",
+        "",
+        "  module load PrgEnv-gnu/8.5.0 gcc-native/13.2 cray-hdf5 cray-netcdf python",
+        "  export SUNDIALS_ROOT=/global/cfs/cdirs/mp217/iabel/sundials/install",
+        "  export BOOST_ROOT=/global/cfs/cdirs/mp217/iabel/boost/boost_1_90_0",
+        "",
+        "cray-netcdf exports NETCDF_DIR into the environment; CMAKE_PREFIX_PATH",
+        "below picks it up so pkg-config is not needed."
+      ],
+      "name": "perlmutter",
+      "inherits": "default",
+      "displayName": "Release, Perlmutter",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "CC",
+        "CMAKE_PREFIX_PATH": "$env{NETCDF_DIR};$env{BOOST_ROOT}",
+        "MANTA_OPENMP": "ON"
+      },
+      "environment": {
+        "SUNDIALS_ROOT": "$env{SUNDIALS_ROOT}"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "local", "configurePreset": "local" }
+  ],
+  "testPresets": [
+    { "name": "local", "configurePreset": "local", "output": { "outputOnFailure": true } }
+  ]
+}

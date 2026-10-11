@@ -299,7 +299,13 @@ BOOST_AUTO_TEST_CASE(store_grid_info_round_trips_to_an_identical_grid)
     const std::vector<Case> cases{
         {"uniform", Grid(0.0, 1.0, 8)},
         {"shifted", Grid(-2.5, 3.5, 5)},
-        {"clustered", Grid(0.0, 1.0, 9, true, 0.2, 0.2)},
+        // Geometrically graded, which is what the retired `highGridBoundary` flag
+        // used to supply here. The round trip has to reproduce it *bitwise* --
+        // StoreGridInfo writes one boundary per face and Grid::operator== compares
+        // exactly -- so a graded mesh is a harder case than the cosine one was: its
+        // widths span 22x rather than a few, and gradedMeshPoints pins its endpoints
+        // after building for precisely this reason.
+        {"graded", Grid(gradedMeshPoints(0.0, 1.0, 9, 3, 0.2, 0.2, 0.3, GradedEnd::Both))},
     };
 
     for (auto const &[name, grid] : cases)

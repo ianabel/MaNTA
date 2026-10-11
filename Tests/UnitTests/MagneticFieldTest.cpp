@@ -1,7 +1,8 @@
 // Tests for the magnetic-geometry classes (PhysicsCases/MagneticFields.hpp).
 //
 // This file was committed alongside a Bfield.ref.nc fixture but was never
-// listed in TEST_SOURCES, so it never compiled and had bit-rotted: it called a
+// listed in the build's test-source list, so it never compiled and had
+// bit-rotted: it called a
 // Bz_R() member declared nowhere, and R() with one argument where the override
 // takes two.
 //

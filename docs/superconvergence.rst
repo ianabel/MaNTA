@@ -9,7 +9,7 @@ discretisation.
 ``u_star``
 ----------
 
-For any run with ``Polynomial_degree`` :math:`\ge 1`, each variable's output group
+For any run with ``PolynomialDegree`` :math:`\ge 1`, each variable's output group
 gains a field ``u_star``: the postprocessed solution
 :math:`u^\star \in P_{k+1}`, reconstructed cell by cell from :math:`(u_h, q_h)`.
 
@@ -57,6 +57,12 @@ freedom layout, the static condensation, the restart format and the Python type
 casters are all untouched. **No physics case needs changing** to run under the
 flag, in C++, Python or JAX — the batched hooks loop over however many points they
 are given.
+
+The initial condition is built on the same nodes. :math:`\sigma` is solved out of
+the residual's own :math:`\sigma` row, and the initial :math:`du/dt` out of its
+:math:`u` row, so both hold exactly at :math:`t_0` and the cell physics is never
+sampled anywhere but the :math:`k+2` star nodes: a case that prepares per point
+(see :ref:`evaluation-plans`) has one cell point set per level, not two.
 
 The flag defaults to ``false``, and with it off the discretisation is exactly
 what it was before the option existed.
@@ -116,6 +122,42 @@ With the flag on, :math:`u^\star` reaches :math:`k+2` in every case and
    :math:`k+2` with the flag on and that :math:`u_h` does not regress. They do not
    assert that the flag improves on the flag-off rate, because for these problems
    there is not always anything to improve.
+
+What it costs a hard solve
+--------------------------
+
+.. warning::
+
+   **The flag narrows the Newton basin on a flux whose tangent diffusivity
+   varies quickly, and can turn a converging steady solve into a failing one.**
+   On ``python-examples/jardin-critical-gradient`` started from a perturbed
+   initial condition, the flag-off method converges at every degree from 1 to 5
+   and by both residual-driven solvers; with the flag on, all ten fail, the
+   pseudo-time step damping to :math:`10^{-107}` while the residual stalls near
+   :math:`4\times10^{-2}`.
+
+   It is not a defect in the chain rule. Differencing the residual at exactly
+   that state gives :math:`\lVert J\,\delta y - g\rVert / \lVert g \rVert`
+   of :math:`6\times10^{-8}` to :math:`2\times10^{-7}` with the flag on,
+   matching the flag-off Jacobian to the last digit, at :math:`c_j = 0` as well
+   as :math:`c_j \neq 0`
+   (``the_superconvergent_jacobian_is_right_where_its_own_solve_fails``). The
+   linearisation is right; what shrinks is the region it is a good model over.
+
+   The controlling quantity is the **curvature** of :math:`\hat\sigma` in
+   :math:`q`, not the size of its derivative. With Jardin's
+   :math:`\chi = \chi_0 + \kappa(\lvert q\rvert - q_c)^\alpha` the flag-on
+   solve fails for :math:`\alpha \le 0.6` and converges from :math:`0.7` up,
+   while :math:`\alpha = 1` is untroubled at a tangent diffusivity of 474 —
+   because there the second derivative vanishes.
+
+   **The remedy is damping, and it is free.** Pseudo-transient continuation with
+   a genuinely small ``PseudoTransientInitialStep`` converges with the flag on
+   at the same cost as without it. Note that the default of ``0`` means "use
+   ``delta_t``", which for a steady solve is usually enormous and so is no
+   damping at all — naming a small first step is the thing to try. The same
+   applies to ``DegreeAdaptation``, which implies this flag and so inherits the
+   narrower basin. ``PERFORMANCE.md`` has the measurements.
 
 What is not covered
 -------------------

@@ -20,9 +20,13 @@
 // Needed to register the class
 REGISTER_PHYSICS_IMPL(AuxVarADTest);
 
+// RegridPolicy::InPlace: the domain ends are all the constructor takes from its
+// grid, and AutodiffTransportSystem::prepareEvaluation takes them again from
+// each plan.
 AuxVarADTest::AuxVarADTest(toml::value const &config, Grid const &grid) : AutodiffTransportSystem(config, grid,
                           {.variables = {{"u", "reaction-diffusion variable", ""}},
-                           .aux = {{"a", "the auxiliary a = u * u", ""}}})
+                           .aux = {{"a", "the auxiliary a = u * u", ""}},
+                           .regrid = RegridPolicy::InPlace})
 {
     // Construct your problem from user-specified config
     // throw an exception if you can't. NEVER leave a part-constructed object around
@@ -67,7 +71,7 @@ Real AuxVarADTest::Source(Index, RealVector u, RealVector, RealVector, RealVecto
     // The run still converged to U (measured: 9.9e-05), still satisfied its own
     // constraint a = u^2 (2.3e-08), and left every phi-coupling block
     // identically zero. So dSources_dPhi -- the autodiff gradient at
-    // AutodiffTransportSystem.cpp:148 -- was never evaluated by anything, and a
+    // AutodiffTransportSystem.cpp:171 -- was never evaluated by anything, and a
     // right answer was not evidence the coupling had been exercised.
     Real U = cos(M_PI_2 * x);
     return phi(0) + kappa * M_PI_2 * M_PI_2 * U - U * U;

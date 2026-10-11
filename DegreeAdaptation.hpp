@@ -8,6 +8,7 @@
 
 class AdjointProblem;
 class Grid;
+class PhysicsInstance;
 class SystemSolver;
 class TransportSystem;
 
@@ -48,7 +49,22 @@ class TransportSystem;
 // progress; returns 0 when the target is already met.
 unsigned int degreeIncrement(double E, double eps, double base);
 
-// Solve `problem`, adapting the global polynomial degree between solves, and
+// `config` with the pseudo-transient step a finished solve reached as the next
+// solve's first one, for a solve warm-started from that one's state.
+//
+// A cold solve climbs the SER ramp from PseudoTransientInitialStep. A warm one has
+// no ramp to climb -- it starts next to the answer -- and re-climbing is most of
+// what it costs: on the wall-layer case of MESH-REFINEMENT.md section 12, a graded
+// solve warm-started from the uniform sample took 12 continuation steps at the
+// configured 1e-3 and 2 with the sample's final step (~1e6), for the same answer
+// to 1e-10. A tenth or a hundredth of that step measured the same, so the step is
+// carried as it is rather than through a factor nobody could justify.
+//
+// Capped at PseudoTransientMaxStep. Unchanged in Newton mode, where the step is
+// already infinite, or when the previous step is not a finite positive number.
+SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous);
+
+// Solve `physics`, adapting the global polynomial degree between solves, and
 // return the solver that produced the final answer.
 //
 // Builds and destroys one SystemSolver per level and is careful never to have
@@ -65,16 +81,72 @@ unsigned int degreeIncrement(double E, double eps, double base);
 // *next* run on the same configuration resume from the last level instead of
 // from InitialValue.
 //
-// `adjoint` may be null; when it is not, it is re-attached to each new solver,
-// which a fresh one does not inherit.
+// Each level after the first is a new evaluation plan -- the degree adds nodes
+// and moves the old ones -- and goes through PhysicsInstance::solverFor: a case
+// declaring RegridPolicy::InPlace is handed the new plan; under
+// RebuildPhysicsOnRegrid any other case is replaced by a new instance, which
+// takes over the restart state; and without either the run is refused before
+// its first solve whenever MaxPolynomialDegree leaves room to raise k. The
+// adjoint problem, if there is one, is re-attached to each solver, and
+// re-obtained from each rebuilt case.
 //
-// Only the caller's grid and problem outlive this. The returned solver holds a
+// The case must have been built against `grid`. Only the caller's grid and the
+// case physics holds outlive this. The returned solver holds a
 // reference to that grid, so it must not outlive it.
+//
+// `solvedFirstLevel`, when given, *is* level 0: a solver already configured from
+// `config`, built on `grid` at `k0` and run, whose answer the loop measures rather
+// than solving that level again. MeshAdaptation passes the solve it has just made
+// on the mesh it settled on, which is exactly the level this loop would otherwise
+// open with -- same mesh, same degree, from the same initial condition -- so
+// without it every adapted run paid for that solve twice.
+//
+// An overload rather than a defaulted parameter: SystemSolver is incomplete here,
+// and clang instantiates unique_ptr's destructor for a default argument at the
+// declaration, which needs the complete type. gcc defers it, so only the clang
+// legs saw this.
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                TransportSystem &problem,
-                                                AdjointProblem *adjoint,
+                                                PhysicsInstance &physics,
+                                                Grid const &grid,
+                                                unsigned int k0,
+                                                double tFinal,
+                                                std::unique_ptr<SystemSolver> solvedFirstLevel);
+std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
+                                                PhysicsInstance &physics,
                                                 Grid const &grid,
                                                 unsigned int k0,
                                                 double tFinal);
+
+// Solve at a sequence of discretisations the *configuration* names, each rung
+// warm-starting the next, ending at the configured Polynomial_degree and
+// Grid_size.
+//
+// The sibling of runAdaptiveDegree and deliberately the dumb one: no error
+// estimate, so no superconvergence, and the rungs are whatever DegreeLadder and
+// GridLadder say. What it buys is the Newton basin, not accuracy -- on a
+// nonlinear problem started far from its answer the target rung can go from
+// tens of iterations to one or two, and PERFORMANCE.md measures between 1.4x
+// and 7.2x. On a *linear* problem it is a straight loss, because Newton is
+// exact in one step from any guess and every rung below the last is overhead.
+//
+// The last rung is always the configured resolution, so adding a ladder cannot
+// change the answer -- only the cost of reaching it. That is what makes it safe
+// to try: remove the key and you get the same numbers.
+//
+// The state crosses each rung the way runAdaptiveDegree's does, through
+// setRestartValues, and setInitialConditions then projects across whichever of
+// the mesh and the degree has changed. The case is built by the caller against
+// the *final* grid, and every rung is a different plan from it, so the case
+// follows its RegridPolicy at each rung as runAdaptiveDegree describes -- and a
+// Fixed one is refused before the first.
+//
+// Only the caller's grid and the case physics holds outlive this, and
+// the returned solver is the last rung's, which is built on the caller's grid
+// precisely so it may.
+std::unique_ptr<SystemSolver> runLadder(SolverConfig const &config,
+                                        PhysicsInstance &physics,
+                                        Grid const &grid,
+                                        unsigned int kFinal,
+                                        double tFinal);
 
 #endif // DEGREEADAPTATION_HPP

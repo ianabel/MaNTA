@@ -38,8 +38,9 @@ def test_module_file_resolves_relative_to_the_config_not_the_cwd(tmp_path):
     config = _write_case(tmp_path, PythonModuleName="casemod",
                          PythonModuleFile="case.py")
 
-    # conftest.py runs every test with cwd = python/Tests, so a cwd-relative
-    # reading of "case.py" cannot possibly succeed here. That is the point.
+    # conftest.py runs every test in one shared scratch directory, never in
+    # tmp_path, so a cwd-relative reading of "case.py" cannot possibly succeed
+    # here. That is the point.
     load_physics_modules(config)
 
     assert sys.modules["casemod"].LOADED

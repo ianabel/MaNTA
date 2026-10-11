@@ -12,7 +12,7 @@ by both through ``loadSolverConfig``. A key has the same name, the same type and
 the same default whichever way it arrives. The few places the two surfaces still
 differ are deliberate, and are listed in :ref:`config-divergences` below.
 
-``./MaNTA --list-options`` prints the current schema — every key, its type, its
+``build/MaNTA --list-options`` prints the current schema — every key, its type, its
 default and a line of description — straight from the table this page is written
 from.
 
@@ -25,10 +25,10 @@ A minimal file
 
    TransportSystem = "LinearDiffusion"
 
-   Polynomial_degree = 3
-   Grid_size = 30
-   Lower_boundary = -1.0
-   Upper_boundary =  1.0
+   PolynomialDegree = 3
+   GridSize = 30
+   LowerBoundary = -1.0
+   UpperBoundary =  1.0
 
    t_final = 1.0
    delta_t = 0.1
@@ -78,22 +78,23 @@ Problem definition
      - ``[]``, *file only*
      - Shared objects to ``dlopen`` before instantiating, for cases built
        outside this tree. See :doc:`out_of_tree`.
-   * - ``Polynomial_degree``
+   * - ``PolynomialDegree``
      - *required*
      - The degree :math:`k` of the per-cell polynomial basis; each field carries
        :math:`k+1` coefficients per cell. ``Superconvergent`` requires
        :math:`k \ge 1`.
-   * - ``Grid_size``
+   * - ``GridSize``
      - *required*
-     - Number of cells.
-   * - ``Lower_boundary``, ``Upper_boundary``
+     - Number of cells. Required unless ``GridPoints`` is given or the run is a
+       restart; see :ref:`restarting` for what giving it on a restart does.
+   * - ``LowerBoundary``, ``UpperBoundary``
      - *required*
-     - The ends of the domain. Required unless ``Grid_points`` is given or the
+     - The ends of the domain. Required unless ``GridPoints`` is given or the
        run is a restart, both of which supply the cell boundaries themselves.
-   * - ``Grid_points``
+   * - ``GridPoints``
      - ``[]``
-     - Explicit cell boundaries, as an array. Supersedes ``Lower_boundary``,
-       ``Upper_boundary`` and ``Grid_size``.
+     - Explicit cell boundaries, as an array. Supersedes ``LowerBoundary``,
+       ``UpperBoundary`` and ``GridSize``.
    * - ``zeroFlux``
      - ``false``
      - What a **Neumann** boundary condition constrains: with this off the case's
@@ -104,13 +105,140 @@ Problem definition
        :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
-   * - ``High_Grid_Boundary``
+   * - ``FieldModel``
+     - ``""``, *file only*
+     - Name of a registered magnetic-field model to couple to, as registered by
+       ``REGISTER_FIELD_MODEL_IMPL``. Absent — the default — means no coupling,
+       and an uncoupled run's ``.nc`` is bit-for-bit what it was before the
+       feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
+       ``RestartData/nField`` is written on every run, and reads back as ``0``.
+       An unrecognised name is an error listing what *is* registered;
+       note that no field model is registered in this tree yet. Like
+       ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
+       ``Runner.configure`` is an error rather than being ignored. See
+       :doc:`field_coupling`.
+   * - ``GradedGridBoundary``
      - ``false``
-     - Refine the grid towards both ends instead of spacing cells uniformly.
-   * - ``Lower_Boundary_Fraction``, ``Upper_Boundary_Fraction``
+     - Grade the grid *geometrically* towards the ends of the domain instead of
+       spacing cells uniformly. See :ref:`graded-meshes` — on a problem whose
+       solution is singular at an end this is worth orders of magnitude at an
+       unchanged cell count. Replaces ``High_Grid_Boundary``, which spaced the same
+       boundary layers by a cosine rule; that spelling still works and warns, but
+       **the mesh it builds has changed**.
+   * - ``GradingRatio``
+     - ``0.3``
+     - Width ratio between neighbouring cells in a graded layer, strictly between
+       0 and 1. Smaller grades harder.
+   * - ``GradingCells``
+     - ``0``
+     - Cells in *each* graded layer; at least 2, and few enough to leave one cell
+       outside them. ``0`` means a third of ``GridSize`` per layer for ``"Both"``,
+       half for a single end, and never fewer than 2. It is worked out for each
+       mesh built, so each ``GridLadder`` rung gets its own; a nonzero value is
+       the same on every rung.
+   * - ``GradingEnd``
+     - ``"Both"``
+     - Which end ``GradedGridBoundary`` refines into: ``"Both"``, ``"Lower"`` or
+       ``"Upper"``.
+   * - ``LowerBoundaryFraction``, ``UpperBoundaryFraction``
      - ``0.2``
-     - With ``High_Grid_Boundary``, the fraction of the domain at each end that
-       is refined.
+     - The fraction of the domain at each end that is refined. Only the one
+       belonging to a graded end is read, so the other may be left alone.
+
+.. _graded-meshes:
+
+Grading the mesh towards the ends
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``GradedGridBoundary`` puts ``GradingCells`` cells over the layer of width
+``LowerBoundaryFraction × (UpperBoundary − LowerBoundary)`` against each graded
+end, each ``GradingRatio`` times the width of its inward neighbour, and spaces the
+remaining cells uniformly over what is left. ``GradingEnd`` chooses which ends
+get a layer; the default is both.
+
+.. warning::
+
+   The default, ``GradingEnd = "Both"``, is what ``High_Grid_Boundary`` meant and
+   is not tuned to any particular problem — it is a boundary-layer mesh, not an
+   optimised one. On Shestakov's problem, where the feature is at the lower end
+   alone, the defaults at ``GridSize = 10`` give a **worse** answer than a uniform
+   mesh (1.65e-02 against 4.91e-03) for two reasons worth knowing: half the graded
+   cells are spent at the regular upper end, and the four remaining bulk cells no
+   longer put a boundary on the source kink at :math:`x = 0.1`. Cell alignment with
+   a kink is worth a factor of 4–7 on its own.
+
+   So grading is a tool to aim, not a switch to flip. Name the end, and choose
+   ``LowerBoundaryFraction`` so a cell boundary lands on any interior feature.
+
+Grading one end, which is the configuration the measurements below were taken on:
+
+.. code-block:: toml
+
+   [configuration]
+   GridSize = 10
+   GradedGridBoundary = true
+   GradingEnd = "Lower"
+   GradingCells = 9              # nine cells inside the layer, one outside
+   GradingRatio = 0.3
+   LowerBoundaryFraction = 0.1   # the layer is the lower 10% of the domain
+
+On ``[0, 1]`` that gives cell boundaries at 0, 6.56e-06, 2.19e-05, 7.29e-05,
+2.43e-04, 8.10e-04, 2.70e-03, 9.00e-03, 0.03, 0.1, 1 — ten cells, the narrowest
+against the axis and 137000 times narrower than the widest.
+
+**The cell touching a graded end is the whole point, and its width is**
+
+.. math::
+
+   h_0 = \mathtt{fraction} \times (\mathtt{Upper} - \mathtt{Lower})
+         \times \mathtt{GradingRatio}^{\,\mathtt{GradingCells} - 1}
+
+Note this is *not* a pure geometric progression. That closing cell runs all the
+way to the end, so it is :math:`1/(1-r)` wider than continuing the progression
+would give; the first width ratio inside the layer is :math:`(1-r)/r` and every
+later one is :math:`1/r`. That is what makes :math:`h_0` the clean expression
+above, and it is what
+``a_graded_mesh_puts_the_layer_cells_in_a_geometric_progression`` pins.
+
+**Why bother.** On Shestakov's problem — an ``x^{4/3}`` singularity at the axis —
+the error was measured to be :math:`0.0487\,h_0` and to depend on **nothing else**,
+not even on the cell count, over a 4600× range of :math:`h_0` and across both
+uniform and graded meshes. At a fixed 10 cells and ``PolynomialDegree = 5``, i.e.
+an unchanged 60 degrees of freedom, that takes the relative error from 4.91e-03 to
+3.29e-07: a factor of **14900**, for 1.5× the physics evaluations. For comparison,
+*quadrupling* the budget to 40 uniform cells buys 4.0×. Redistributing cells is
+worth far more here than adding them. ``MESH-REFINEMENT.md`` has the measurements.
+
+.. note::
+
+   **This replaced** ``High_Grid_Boundary``, which put a cosine-spaced layer
+   against each end. That spelling is a deprecated alias of
+   ``GradedGridBoundary`` and still loads, keeping its layer widths and its
+   one-third-of-the-cells-per-layer split — but the cells *inside* each layer are
+   now spaced geometrically, so **a file that used it will produce a different
+   answer than it did before**. The run says so at ``WARNING``. Give
+   ``GridPoints`` to reproduce a specific old mesh exactly.
+
+Three things to expect:
+
+* **A polynomial degree of about 4 or more is a prerequisite.** At ``k = 2`` the
+  law above breaks once :math:`h_0` is small — an 11× reduction bought 1.19× —
+  because the cells that are *not* the innermost stop resolving the singularity
+  well enough to stay negligible.
+* **The time integrator is the ceiling, not the discretisation.** Past roughly
+  :math:`h_0 / \mathrm{span} = 10^{-6}` IDA's corrector starts failing at
+  ``|h| = MinStepSize``, whose default is ``1e-7``; lowering it to ``1e-12`` bought
+  one further level. Below about :math:`10^{-7}` nothing got through — neither
+  ``MinStepSize``, nor ``SuppressAlgebraicError``, nor the tolerances, nor either
+  continuation mode — and below :math:`10^{-8}` ``IDACalcIC`` cannot build a
+  consistent initial condition at all. A warning is logged past
+  :math:`10^{-6}` saying so, because the failure that follows points at IDA rather
+  than at the mesh.
+* **Grading into the upper end is slightly less exact than into the lower**, and
+  irreducibly so: the boundary next to ``UpperBoundary`` is a number near it, so
+  the narrowest cell's *width* is a difference of nearly equal numbers and carries
+  a relative error of about :math:`\varepsilon / h_0`. It is 3e-11 at the grading
+  above and only matters at far harder ones.
 
 Time integration
 ----------------
@@ -156,6 +284,18 @@ Time integration
        when the transient is not the interesting part, at the cost of making IDA
        more likely to overshoot and retry. ``aggressiveTimesteps`` is a
        deprecated spelling of this and still works, with a warning.
+   * - ``ForceConsistentIC``
+     - ``false``
+     - Run ``IDACalcIC`` on a run that would otherwise skip it. A steady solve
+       skips it because it discards the answer; a restart skips it because it
+       resumes from a state already on the constraint manifold. **A cold
+       time-marching run always runs it and this cannot turn that off** — if you
+       do not care about the transient, use ``SteadyStateSolver =
+       PseudoTransient`` or ``Newton`` rather than an uncorrected time march. The
+       key is therefore one-directional: it only ever adds the call back. The
+       case that needs it is a restart onto a *different* discretisation, which
+       is projected rather than copied and so is not a consistent state. See
+       :ref:`warm-starts`.
    * - ``SteadyStateSolve``
      - ``false``
      - Terminate when :math:`\mathrm{d}y/\mathrm{d}t` becomes small rather than at
@@ -166,9 +306,13 @@ Time integration
      - *unset*
      - The same, naming the tolerance. It is the key's **presence** that arms
        termination, not its value, on both surfaces; giving it alongside
-       ``SteadyStateSolve`` simply sets the tolerance.
-       ``Runner.run_ss()`` arms it whether or not either key was given, and falls
-       back to ``1e-3``.
+       ``SteadyStateSolve`` simply sets the tolerance. ``Runner.run_ss()`` arms it
+       whether or not either key was given, and falls back to ``1e-3``.
+
+       What it is compared against depends on ``SteadyStateSolver``:
+       :math:`\mathrm{d}y/\mathrm{d}t` under ``TimeMarch``, and a
+       mesh-independent weighted norm of the steady residual under the two
+       continuation modes — see :ref:`steady-merit-function`.
    * - ``ObjectiveDecreaseTolerance``
      - ``0.0`` — off
      - If nonzero, the run is abandoned before the time loop when
@@ -181,7 +325,27 @@ Time integration
        error rather than a quiet "off". See :doc:`adjoints`.
    * - ``tau``
      - ``1.0``
-     - The HDG stabilisation parameter. Constant across the domain.
+     - The HDG stabilisation parameter: constant across the domain, or under
+       ``tauScaling = "Diffusive"`` a dimensionless multiplier on
+       :math:`\kappa/h`.
+   * - ``tauScaling``
+     - ``"Constant"``
+     - ``"Constant"`` or ``"Diffusive"``. See :ref:`tau-scaling`.
+   * - ``tauUpdate``
+     - ``"Residual"``
+     - Under ``"Diffusive"``, when :math:`\tau` is re-evaluated: ``"Residual"``,
+       ``"ContinuationStep"`` or ``"JacobianBuild"`` (the last two for steady
+       solves only). See :ref:`tau-scaling`.
+   * - ``tauFloor``
+     - ``1e-3``
+     - Under ``"Diffusive"``, the floor on :math:`\kappa/h` as a fraction of its
+       largest value on the grid. Must be positive.
+   * - ``TauKappa``
+     - ``"Nodal"``
+     - Under ``"Diffusive"``, where :math:`\kappa` at a face comes from:
+       ``"Nodal"``, the cell's :math:`\partial\hat\sigma/\partial q` at the
+       nodes the physics is already evaluated at, extrapolated to the face; or
+       ``"Face"``, evaluated at the face from the trace. See :ref:`tau-scaling`.
 
 Output
 ------
@@ -200,7 +364,7 @@ Output
    * - ``OutputPoints``
      - ``301``
      - Number of **spatial** points at which the solution is sampled for output.
-       Independent of ``Grid_size``: the solution is a polynomial per cell, so it
+       Independent of ``GridSize``: the solution is a polynomial per cell, so it
        can be sampled as finely as you like.
    * - ``WriteOutput``
      - ``true``
@@ -213,7 +377,8 @@ Output
    * - ``WriteDebugDatFiles``
      - ``false``
      - Also write ``<stem>.dydt.dat`` and ``<stem>.res.dat``. Additionally
-       requires a ``PHYSICS_DEBUG`` build (``make DEBUG=on``).
+       requires a ``PHYSICS_DEBUG`` build (``cmake --preset debug``, or
+       ``-DMANTA_PHYSICS_DEBUG=ON``).
 
 ``<stem>`` throughout is ``OutputFilename``. The two ``.dat`` options are
 deliberately **not** nested under ``WriteOutput``: they are opt-in already, so a
@@ -222,6 +387,8 @@ config that asks only for ``WriteDatFile`` gets what it asked for.
 Output lands in the **current working directory** whatever directory
 ``OutputFilename`` names — only the file-name part of it is used, so
 ``OutputFilename = "runs/case7"`` writes ``./case7.nc``. See :doc:`running`.
+
+.. _restarting:
 
 Restarting
 ----------
@@ -243,11 +410,25 @@ Restarting
 
 .. note::
 
-   On a restart the grid is read from the restart file, not from the config
-   file — ``Grid_size``, ``Grid_points``, ``Lower_boundary`` and
-   ``Upper_boundary`` are ignored on that path.
+   On a restart the mesh is the restart file's unless the configuration gives
+   a cell count:
 
-   ``Polynomial_degree`` is honoured. It defaults to the degree the file was
+   * **Neither** ``GridSize`` **nor** ``GridPoints``: the file's mesh, cell for
+     cell, whatever its spacing. This is the way to resume on a mesh no
+     configuration rule produces — one ``MeshAdaptation`` graded, say. Giving
+     ``LowerBoundary``, ``UpperBoundary`` or ``GradedGridBoundary`` without a
+     cell count is refused, since it would otherwise be ignored.
+   * ``GridSize``: that many cells, uniform or graded as the grading keys say,
+     over the file's domain unless ``LowerBoundary`` or ``UpperBoundary`` moves
+     an end.
+   * ``GridPoints``: exactly those boundaries.
+
+   A mesh equal to the file's resumes on the copy path, bit for bit. A
+   different one is projected onto, with a warning naming both meshes —
+   including whether each is uniform, since a uniform remesh of a graded file
+   has the same count and domain.
+
+   ``PolynomialDegree`` is honoured. It defaults to the degree the file was
    written at, and a different value resumes at that degree, projecting the
    stored state across the change and logging a warning. See
    :doc:`running` for what refining and coarsening each cost.
@@ -305,6 +486,84 @@ Adjoints and superconvergence
      - How much error one extra degree is assumed to buy, in
        :math:`\Delta k = \lceil \log_b(E/\epsilon) \rceil`. Between 10 and 100;
        larger is more aggressive and so asks for fewer degrees.
+   * - ``RebuildPhysicsOnRegrid``
+     - ``false``
+     - Let an adaptation driver destroy the physics case and build a new instance
+       from the registry for each new mesh or degree, when the case does not
+       declare that it follows a new evaluation plan in place. For cases written
+       before evaluation plans; a Python case object handed to ``Runner`` cannot
+       be rebuilt and is refused. See :ref:`evaluation-plans`.
+   * - ``PhysicsParallelism``
+     - ``1``
+     - How many points the physics evaluates at once, so that a batch of M points
+       takes ceil(M / N) rounds. The adaptation controllers fill each level they
+       choose to the largest that costs no more rounds, and a configured level
+       that leaves rounds part empty is warned about. 1 changes nothing. See
+       :ref:`adaptivity-parallelism`.
+   * - ``MaxPhysicsBatch``
+     - ``0``
+     - Most points the physics is asked for in one batched call that recurs —
+       per residual, per Jacobian build, per continuation step. The adaptation
+       controllers never choose or fill a level past it, and a configured level
+       past it is refused before its first evaluation. 0 sets no cap. See
+       :ref:`adaptivity-batch-cap`.
+
+Coupling to a magnetic-field model
+----------------------------------
+
+These four are read whether or not a model is attached, and do nothing at all
+without one — ``FieldModel``, under *Problem definition* above, is what turns
+the coupling on.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 12 58
+
+   * - Key
+     - Default
+     - Meaning
+   * - ``FieldSolve``
+     - ``"iterative"``
+     - How the coupled Jacobian is solved. ``iterative`` is block Gauss–Seidel
+       between the transport and field blocks with Irons–Tuck acceleration, at
+       one transport solve per sweep. ``exact`` forms the Schur complement onto
+       the field block, at :math:`\texttt{nField}+1` transport solves per
+       Jacobian solve.
+   * - ``FieldSolveTolerance``
+     - ``1e-8``
+     - Where the sweep stops — **one key, two tests**, because the two
+       directions have different things available to measure. Forward, it is a
+       relative *change*: the sweep stops once
+       :math:`\|\delta\psi\| \le \texttt{tol}\,\|\psi\|` for the unaccelerated
+       iterate. In the adjoint it is a relative *backward error*: the field row
+       of the transposed system holds identically at every iterate, so the
+       residual of the pair returned is exactly
+       :math:`A_2^{T}\,\delta z_\psi`, and the sweep stops once that is below
+       ``tol`` times the norm of the right-hand side. Both are scale
+       equivariant, so neither has an absolute floor, and neither returns an
+       under-converged answer — reaching the cap escalates to the exact solve.
+   * - ``FieldSolveMaxSweeps``
+     - ``20``
+     - Sweep cap for the forward solve. Reaching it escalates to the exact
+       solve; it does not return an under-converged answer.
+   * - ``FieldSolveMaxAdjointSweeps``
+     - ``100``
+     - The same cap for the adjoint solve. Separate, and larger, because the
+       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest —
+       five field unknowns have been measured needing 13–38 sweeps.
+
+.. important::
+
+   **``FieldSolve = exact`` is a verification tool, not a slow mode.** It is what
+   makes the coupled system checkable by finite-differencing the residual and
+   requiring :math:`J\,\delta y = g`, and it is the oracle the iterative path is
+   measured against.
+
+   And the choice between them is a **cost** choice, never an accuracy one: the
+   sweep escalates to the exact solve in both directions rather than guessing, so
+   ``iterative`` can be slower than ``exact`` and can never be less accurate. On
+   every fixture in this tree it *is* slower — see :doc:`field_coupling` for the
+   break-even and the measured numbers.
 
 .. The label is `config-divergences` for historical reasons: it named a section
    listing how the two readers disagreed, and docs/python.rst links to it.
@@ -386,6 +645,6 @@ binary's exit status and ``manta.run``'s return value. ``Runner.configure``,
 which has no exit status to hand back, raises ``RuntimeError`` for the restart
 file too.
 
-Finally, ``./MaNTA --list-options`` prints the schema as it actually stands —
+Finally, ``build/MaNTA --list-options`` prints the schema as it actually stands —
 every key, its type, its default and a line of description. Prefer it to this
 page when the two disagree, and fix the page.

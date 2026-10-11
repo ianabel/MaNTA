@@ -44,6 +44,8 @@ public:
 	Value InitialValue(Index, Position) const override;
 	Value InitialDerivative(Index, Position) const override;
 
+	void prepareEvaluation(EvaluationPlan const &plan) override { xR = plan.grid.upperBoundary(); }
+
 private:
 	// Put class-specific data here
 	double n,t0;

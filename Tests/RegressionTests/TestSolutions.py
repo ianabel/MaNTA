@@ -9,18 +9,27 @@ import sys
 import os
 import argparse
 import shutil
+import subprocess
 import re
 import scipy
 
-# SOLVER is exported by the top-level Makefile. Default to the usual name so
-# `make -C Tests/RegressionTests` and running ./TestSolutions.py directly work
-# too -- previously either died with KeyError: 'SOLVER'.
-# Resolve against this script's location, not the caller's cwd.
+# SOLVER names the solver binary; CTest sets it to the built executable. Unset,
+# the MaNTA on PATH is used -- an installed one, say.
+#
+# The inputs -- the .conf files and the .ref.nc references -- are siblings of
+# this script and are read from here. Everything a run writes, including the
+# config variants the restart checks generate, goes to the cwd, which CTest makes
+# the build tree's Tests/RegressionTests. Run by hand, run it from a scratch
+# directory: the solver names its output after the config's stem, so a
+# run from here would write beside the references.
 _here = os.path.dirname(os.path.abspath(__file__))
-manta_file = os.path.join(_here, "..", "..", os.environ.get("SOLVER", "MaNTA"))
-# All the .conf inputs and .ref.nc references are siblings of this script, and
-# the solver writes its output into the cwd -- so anchor there.
-os.chdir(_here)
+manta_file = os.environ.get("SOLVER") or shutil.which("MaNTA")
+if not manta_file:
+    sys.exit("No solver: set SOLVER to the MaNTA binary, or put one on PATH.")
+
+
+def data(name):
+    return os.path.join(_here, name)
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Run the MaNTA regression suite.",
@@ -42,7 +51,7 @@ TOLERANCE = ARGS.tolerance
 
 
 def run_manta( config_file ):
-    code = os.system( manta_file + " " + config_file + " >/dev/null" )
+    code = subprocess.call( [ manta_file, config_file ], stdout = subprocess.DEVNULL )
     if( code != 0 ):
         print("Failed to run test simulation with configuration in " + config_file)
         sys.exit(code)
@@ -208,9 +217,9 @@ def cleanup( prefix ):
 
 def check_ref_case( prefix ):
     print("Checking Reference Solution for "+prefix+".conf")
-    run_manta( prefix + ".conf" )
+    run_manta( data( prefix + ".conf" ) )
     ncFileName = prefix + ".nc"
-    ncRefFile  = prefix + ".ref.nc"
+    ncRefFile  = data( prefix + ".ref.nc" )
     test_ref_soln_l2( ncFileName, ncRefFile, TOLERANCE )
     cleanup( prefix )
     
@@ -220,7 +229,7 @@ def ld_soln( x, t ):
 
 print("Testing Analytic Solutions")
 
-run_manta( "ld.conf" )
+run_manta( data( "ld.conf" ) )
 test_analytic_soln( "ld.nc", ld_soln, TOLERANCE )
 cleanup( "ld" )
 
@@ -230,7 +239,7 @@ def nonlin_soln( x, t ):
     eta = x / np.sqrt( t0 + t )
     return pow( 1 - eta, 1/n )
 
-run_manta( "nonlin.conf" )
+run_manta( data( "nonlin.conf" ) )
 test_analytic_soln( "nonlin.nc", nonlin_soln, TOLERANCE )
 cleanup( "nonlin" )
 
@@ -245,7 +254,7 @@ def nonlin_ss( x ):
     u2 = 1.0/np.sqrt(u1) - G
     return 1.0/(u2**2)
 
-run_manta( "nonlin_ss.conf" )
+run_manta( data( "nonlin_ss.conf" ) )
 test_steady_state( "nonlin_ss.nc", nonlin_ss, TOLERANCE )
 cleanup( "nonlin_ss" )
 
@@ -267,9 +276,9 @@ cleanup( "nonlin_ss" )
 def auxvar_ad_ss( x ):
     return np.cos( np.pi * x / 2 )
 
-run_manta( "AuxVarADTest.conf" )
+run_manta( data( "AuxVarADTest.conf" ) )
 test_steady_state( "AuxVarADTest.nc", auxvar_ad_ss, TOLERANCE )
-test_ref_soln_l2( "AuxVarADTest.nc", "AuxVarADTest.ref.nc", TOLERANCE )
+test_ref_soln_l2( "AuxVarADTest.nc", data( "AuxVarADTest.ref.nc" ), TOLERANCE )
 cleanup( "AuxVarADTest" )
 
 print("Checking Reference Solutions")
@@ -309,7 +318,7 @@ def config_variant( source_prefix, target_prefix, **overrides ):
     distinct name writes distinct .nc/.dat/.restart.nc files and cannot collide
     with the checked-in references.
     """
-    text = open( source_prefix + ".conf" ).read()
+    text = open( data( source_prefix + ".conf" ) ).read()
 
     # Everything before the first [section] after [configuration] is the general
     # section; keys are inserted there.
@@ -369,19 +378,18 @@ def check_restart_round_trip( prefix, t_split, rtol = 1.0e-6, atol = 1.0e-8 ):
     All three runs are done at `rtol`/`atol` rather than at whatever the case
     normally uses. That is not cosmetic: a restart re-initialises the
     integrator, so the two routes take genuinely different step sequences, and
-    at AuxVarTest's usual 1e-2 tolerances they legitimately disagree by about
-    0.7% -- more than the comparison tolerance, and not a defect. Tightening
-    until the answer is determined well below the comparison threshold is what
-    makes the round trip a test of the restart mechanism rather than of the
-    time integrator's step choices.
+    at a loose tolerance they legitimately disagree by more than the comparison
+    threshold without either being wrong. Tightening until the answer is
+    determined well below that threshold is what makes the round trip a test of
+    the restart mechanism rather than of the time integrator's step choices.
 
-    The tolerance cannot be tightened without limit, though: see the table
-    beside the calls below.
+    The tolerance cannot be tightened without limit, and the limit is now the
+    *case*, not the restart: see the table beside the calls below.
     """
     print( "Checking restart round trip for " + prefix + ".conf (split at t = "
            + str( t_split ) + ")" )
 
-    source = open( prefix + ".conf" ).read()
+    source = open( data( prefix + ".conf" ) ).read()
     t_final = float( re.search( r"^\s*t_final\s*=\s*(\S+)", source, re.MULTILINE ).group( 1 ) )
 
     whole   = prefix + "_restart_whole"
@@ -427,32 +435,43 @@ print( "Checking Restart Round Trips" )
 # One variable, two variables, and one auxiliary variable: the three shapes the
 # restart DOF arithmetic has to get right.
 #
-# KNOWN LIMITATION -- each case is run at the tightest tolerance at which the
-# restart actually completes, and those differ. Measured, holding everything
-# else fixed, as (uninterrupted run) / (restart and continue):
+# All three now survive 1e-6 / 1e-8. Measured as (uninterrupted run) / (restart
+# and continue), with the final-slice agreement the round trip actually checks:
 #
-#   rtol / atol      LinearDiffusion   MatTest        AuxVarTest
-#   1e-3 / 1e-5      ok / ok           ok / ok        ok / ok
-#   1e-4 / 1e-6      ok / ok           ok / ok        ok / IDASolve -4
-#   1e-6 / 1e-8      ok / ok           ok / -6        ok / IDASolve -4
+#   rtol / atol      LinearDiffusion   MatTest         AuxVarTest
+#   1e-3 / 1e-5      ok / 8.5e-6       ok / 2.3e-6     ok / 2.1e-4
+#   1e-4 / 1e-6      ok / 1.7e-5       ok / 2.2e-7     ok / 2.2e-5
+#   1e-6 / 1e-8      ok / 6.4e-8       ok / 2.7e-10    ok / 6.4e-7
+#   1e-8 / 1e-10     ok / IDASolve -3  -3 / --         ok / IDASolve -3
 #
-# The uninterrupted run succeeds in every cell of that table, so this is the
-# restart path specifically, not the cases being hard to integrate. After a
-# restart IDACalcIC needs an order of magnitude more residual evaluations than
-# from a cold start (~1400 vs ~100 for AuxVarTest), so the state the restart
-# hands it is a long way from consistent -- most likely because
-# setInitialConditions recomputes sigma and lambda from the restored u and q
-# and discards the restored dY/dt entirely.
+# That table used to read "ok / IDASolve -4" for AuxVarTest at 1e-4 and 1e-6 and
+# "ok / -6" for MatTest at 1e-6. Two fixes closed it, and neither was in the
+# restart machinery:
 #
-# The failure signature on the aux case, "the corrector convergence failed
-# repeatedly", is the same one JAXAuxTest is xfail on. That may or may not be
-# the same underlying problem.
+#   * setInitialConditions used to finish every restart with EvaluateLambda(),
+#     throwing away the converged trace the file carried and replacing it with
+#     {{u}}, which solves nothing. That is what made a restart need ~10x the
+#     residual evaluations of a cold start, and it is what this comment used to
+#     blame -- correctly -- on sigma and lambda being recomputed.
+#   * AuxVarTest::SigmaFn adds (a - u*u) to *both* variables' fluxes while
+#     dSigma_dPhi declared the derivative for variable 0 only. On the manifold
+#     a = u*u the term vanishes; a warm start is precisely the state off the
+#     manifold, and there Newton diverged. This was the whole of the aux case's
+#     "corrector convergence failed repeatedly", which had been suspected of
+#     sharing a cause with the JAXAuxTest xfail. It did not.
 #
-# Tighten these once the above is fixed; the numbers here are a floor, not a
-# target.
+# The wall is now the *case*, not the restart. At 1e-8 / 1e-10 MatTest's
+# uninterrupted run fails too, so the restart is not implicated there at all;
+# LinearDiffusion and AuxVarTest resume-fail with IDA_ERR_FAIL (-3) rather than
+# the corrector failure (-4) that used to appear.
+#
+# Cost is why MatTest is not tightened with the others: at 1e-6 / 1e-8 its three
+# runs take 101 s against 6.0 s at 1e-4, for agreement (2.7e-10) that nothing
+# needs. AuxVarTest tightens for free -- 0.5 s against 0.4 s -- and buys a
+# factor of 330, so it is tightened.
 check_restart_round_trip( "LinearDiffusion", 0.25, rtol = 1.0e-6, atol = 1.0e-8 )
 check_restart_round_trip( "MatTest", 0.25, rtol = 1.0e-4, atol = 1.0e-6 )
-check_restart_round_trip( "AuxVarTest", 0.6, rtol = 1.0e-3, atol = 1.0e-5 )
+check_restart_round_trip( "AuxVarTest", 0.6, rtol = 1.0e-6, atol = 1.0e-8 )
 
 
 print("\n\n----------------")
