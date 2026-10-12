@@ -80,8 +80,8 @@ Module contents
    * - ``run()``
      - Integrates to the configuration's ``t_final``; an error if it had none.
    * - ``run_ss()``
-     - Integrates until :math:`\mathrm{d}y/\mathrm{d}t` falls below
-       ``SteadyStateTolerance``.
+     - Solves for the steady state with ``SteadyStateSolver`` (pseudo-transient
+       continuation by default), stopping on ``SteadyStateTest``.
    * - ``getSolution()``
      - The solution fields.
    * - ``getPostprocessedSolution()``

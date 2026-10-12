@@ -114,6 +114,10 @@ solver_config = {
     "MinStepSize": 1e-12,
     "SteadyStateSolver": "PseudoTransient",
     "SteadyStateTolerance": 1e-5,
+    # The residual test: the NewtonStep default stalls here at the round-off
+    # floor of the correction, which on the graded wall layer sits at IDA's
+    # threshold for Absolute_tolerance = 1e-6 (1e-5 converges).
+    "SteadyStateTest": "Residual",
     "delta_t": 1.0,
     "restart": False,
 }

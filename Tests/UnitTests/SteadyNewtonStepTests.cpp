@@ -199,6 +199,7 @@ BOOST_AUTO_TEST_CASE(newton_step_converges_the_channel_the_residual_test_cannot_
         sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
         sys.setPseudoTransientInitialStep(1e-2);
         sys.setSteadyStateTolerance(1e-3);
+        sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     });
     const Answer newtonStep = solveTwoScale("newton_step_two_scale_ns", [](SystemSolver &sys)
     {
@@ -231,6 +232,7 @@ BOOST_AUTO_TEST_CASE(newton_step_agrees_with_a_tight_residual_solve)
         sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
         sys.setPseudoTransientInitialStep(1e-2);
         sys.setSteadyStateTolerance(1e-13);
+        sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     });
     BOOST_REQUIRE(reference.converged);
 
@@ -261,12 +263,13 @@ BOOST_AUTO_TEST_CASE(the_test_passes_at_the_tolerance_it_is_given)
     // far below it, which is what says the test fired rather than being jumped
     // past. A hundredfold tighter tolerance (IDACalcIC's against the
     // corrector's) then buys a correspondingly smaller error. Measured:
-    // ss|d| 0.14 and 7.7e-4, errors 8.4e-8 and 4.6e-10.
+    // ss|d| 0.11 and 6.3e-4, errors 1.5e-8 and 8.2e-11.
     const Answer reference = solveTwoScale("newton_step_tol_reference", [](SystemSolver &sys)
     {
         sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
         sys.setPseudoTransientInitialStep(1e-2);
         sys.setSteadyStateTolerance(1e-13);
+        sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     });
 
     double lastError = std::numeric_limits<double>::infinity();

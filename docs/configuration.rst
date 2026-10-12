@@ -309,10 +309,13 @@ Time integration
        ``SteadyStateSolve`` simply sets the tolerance. ``Runner.run_ss()`` arms it
        whether or not either key was given, and falls back to ``1e-3``.
 
-       What it is compared against depends on ``SteadyStateSolver``:
-       :math:`\mathrm{d}y/\mathrm{d}t` under ``TimeMarch``, and a
-       mesh-independent weighted norm of the steady residual under the two
-       continuation modes — see :ref:`steady-merit-function`.
+       What its value is compared against depends on the method:
+       :math:`\mathrm{d}y/\mathrm{d}t` under ``SteadyStateSolver = TimeMarch``,
+       and a mesh-independent weighted norm of the steady residual under
+       ``SteadyStateTest = "Residual"`` — see :ref:`steady-merit-function`. The
+       default test, ``"NewtonStep"``, does not read it: it converges to
+       ``Relative_tolerance`` and ``Absolute_tolerance`` — see
+       :ref:`steady-state-test`.
    * - ``ObjectiveDecreaseTolerance``
      - ``0.0`` — off
      - If nonzero, the run is abandoned before the time loop when

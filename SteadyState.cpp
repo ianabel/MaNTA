@@ -278,7 +278,15 @@ int SystemSolver::nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, 
             nlsLastTest = std::numeric_limits<double>::infinity();
             return SUN_NLS_CONTINUE;
         }
-        nlsSS = rate / (1.0 - rate);
+        // Never less than 1: the distance left is taken to be at least the
+        // last correction, as in Deuflhard's error-oriented Newton termination.
+        // IDA can trust a rate measured from one ratio because its predictor
+        // starts it near the answer; a steady solve from a cold start need not
+        // be in Newton's asymptotic regime after two iterations. Measured on
+        // two-temperature-critical-gradient: corrections of 1883 then 22.6
+        // tolerance units gave rate 0.012, so ss * |d| = 0.27 passed -- with
+        // T_e still 13 tolerance units (RMS) from the converged state.
+        nlsSS = std::max(rate / (1.0 - rate), 1.0);
     }
 
     nlsLastTest = nlsSS * delnrm;

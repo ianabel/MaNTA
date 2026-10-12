@@ -1245,6 +1245,7 @@ BOOST_AUTO_TEST_CASE(a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_o
         configure(sys, stem);
         sys.setSteadyMode(mode);
         sys.setSteadyStateTolerance(1e-10);
+        sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
         if (!newton)
             sys.setPseudoTransientInitialStep(1.0);
 
@@ -1377,6 +1378,7 @@ BOOST_AUTO_TEST_CASE(a_steady_solve_says_what_it_is_about_to_do)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
 
     std::string log;
     {
@@ -1411,6 +1413,7 @@ BOOST_AUTO_TEST_CASE(the_steady_diagnostics_count_the_whole_solve_not_the_last_s
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setSteadyStateDiagnostics(true);
 
     std::string log;
@@ -1486,6 +1489,7 @@ BOOST_AUTO_TEST_CASE(the_per_step_records_sum_to_the_totals)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
 
     {
         CapturedOutput quiet;
@@ -1627,6 +1631,7 @@ BOOST_AUTO_TEST_CASE(newton_max_iterations_caps_every_inner_solve)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setNewtonMaxIterations(1);
 
     {
@@ -1683,6 +1688,7 @@ BOOST_AUTO_TEST_CASE(the_per_step_diagnostics_print_without_the_summary)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setSteadyStateStepDiagnostics(true);
 
     std::string log;
@@ -1726,6 +1732,7 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-30);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     // Out of the way: a stalled solve rejects step after step, and the
     // rejected-step budget would otherwise stop it first -- which returns rather
     // than throws, and is the next test's subject.
@@ -1801,6 +1808,7 @@ BOOST_AUTO_TEST_CASE(running_out_of_rejected_steps_returns_the_last_accepted_sta
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-30);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setMaxRejectedSteps(5);
 
     {
@@ -2501,6 +2509,7 @@ BOOST_AUTO_TEST_CASE(KINSOL_measures_the_same_thing_the_continuation_loop_does)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::Newton);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
 
     {
         CapturedOutput quiet;
