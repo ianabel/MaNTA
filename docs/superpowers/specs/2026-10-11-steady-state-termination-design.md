@@ -1,7 +1,9 @@
 # Steady-state termination on the Newton correction
 
 Date: 2026-10-11
-Status: design; nothing implemented. Branch `gp-toy-model`.
+Status: phases 0-2 built on branch `gp-toy-model`, opt-in
+(`SteadyStateTest = "NewtonStep"`); phases 3 and 4 not started. "As built",
+below, records where the implementation departs from this design and why.
 
 ## Why
 
@@ -196,17 +198,75 @@ different answer:
 Each of these is measured on `python-examples/toy-model/noise_study.py` and
 `python-examples/t3d-relu/noise_benchmark.py` before it is kept.
 
+## As built (2026-10-12)
+
+**Phase 0 held.** `SteadyStateMeasureCorrection` reports `||J0^-1 F||_ewt` at the
+end of a `Residual` solve. On the T3D benchmark at rtol = atol = 1e-8, the
+noiseless `||F|| < 3` stop -- n out by 2.6% -- measures 2.2e6 tolerance units,
+i.e. 2.2e-2 relative: the quantity sees exactly the error `||F||` missed.
+
+**The inner solver is `SUNNonlinSol_Newton`**, SUNDIALS' generic Newton, with this
+test as its `ConvTestFn` -- the hook IDA itself uses -- rather than a loop of
+MaNTA's own. KINSOL stays for `Residual`. `2026-10-12-kinsol-convergence-test-hook-design.md`
+is the upstream KINSOL change that would let `NewtonStep` return to KINSOL.
+Jacobian reuse within a solve (`NewtonJacobianReuse`) is done in the `LSolve`
+callback, since `SUNNonlinSol_Newton` sets up only at the start of a solve.
+
+Departures from IDA's test, each measured on the T3D benchmark:
+
+* **No divergence test on a continuation step.** IDA's `rate > RATEMAX = 0.9`
+  rejected the first four steps at dt = 1e-2 at their second correction and cut
+  dt to 4e-5, and so did CVODE's gentler `delta > 2 delta_prev`; KINSOL, which
+  has none, converged those steps in 8-10 iterations. A continuation step is
+  capped by `NewtonMaxIterations` alone, and a non-finite correction fails it.
+  `RATEMAX` is kept for the undamped probes, which should fail fast.
+* **The rate is `max(IDA's, the last ratio)`.** IDA's geometric mean since the
+  first correction suits its four iterations; over twenty, a fast first drop
+  and a slow linear tail make it underestimate the current rate. The guard took
+  p_H's error at the stop from 10% to 4.5% at rtol 1e-2 (exact derivatives) and
+  p_e's from 6.5% to 3.3% (T3D's Jacobian), for at most 4 more box calls.
+
+Departures from section 3:
+
+* **SER reads the steady residual, not the first correction.** The correction
+  `(J0 + M/dt)^-1 F` grows with dt for a fixed F, so its ratio across a dt change
+  is not a progress measure. The steady residual is free: the first evaluation
+  of every solve is at ycor = 0, where the damping vanishes. It is known only at
+  the start of a step, so the growth lags one step.
+* **The undamped solve is a probe, attempted from a damped step**, not a switch
+  at a dt threshold, which would need a dimensional key. A probe is made once a
+  damped step's first correction is within one tolerance unit (or dt is at
+  `PseudoTransientMaxStep`); a failed one costs two residuals and two builds,
+  and the next waits for dt to grow sixteenfold.
+
+**`SuppressAlgebraicError` is required under noise.** sigma is an algebraic
+unknown equal to the flux, so a noisy flux puts its noise into sigma's
+correction at full strength, undamped by dt: with sigma in the norm no damped
+step converged and dt fell to 1e-14. With it masked -- what IDA's key does --
+the noisy benchmark converges. This answers the q/sigma question below for the
+noisy case.
+
+**Measured** (`python-examples/t3d-relu/README.md` has the tables). Noiseless,
+NewtonStep converges what `Residual` cannot see: 1.5e-3 in n at rtol 3e-3 in 29
+box calls, against 2.6% at `||F|| < 3`. With +-20% noise at rtol 1e-2 it
+converges eight seeds of eight, in a median 11 calls with exact derivatives and
+65 with T3D's Jacobian, against T3D's own 68. At rtol 3e-3 with exact
+derivatives no seed converges: the test asks for less than the noise floor,
+which is phase 4. In its own norm the test is conservative with exact
+derivatives and up to 6x optimistic with T3D's Jacobian; max-norm errors reach
+2.4 tolerance units, as an RMS test allows.
+
 ## Phases
 
-0. **Measure.** Report `ss * ||J0^-1 F||_ewt` in the steady stats at the end of
+0. **Measure.** *Done.* Report `ss * ||J0^-1 F||_ewt` in the steady stats at the end of
    every solve -- one build and solve, or none where `estimateObjective` has
    already formed the correction, which then shares it. On the T3D benchmark
    this must read large at every noisy stopping point and at the noiseless
    `||F|| < 3` stop, and small at the converged solution. If it does not, this
    design is wrong and stops here.
-1. **`NewtonStep` in Newton mode**: MaNTA's own corrector loop, the test, the
+1. *Done.* **`NewtonStep` in Newton mode**: MaNTA's own corrector loop, the test, the
    config keys, `Residual` kept bit for bit. Default still `Residual`.
-2. **Pseudo-transient continuation** under the new test: acceptance, SER on the
+2. *Done.* **Pseudo-transient continuation** under the new test: acceptance, SER on the
    correction, the switch to an undamped correction.
 3. **Flip the default**, with the migration sweep in the same change.
 4. **Noise**: `NoiseLimited`, averaging, the noise hook.

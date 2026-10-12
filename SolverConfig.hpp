@@ -80,6 +80,9 @@ struct SolverConfig
     unsigned int             NewtonJacobianReuse;
     double                   NewtonStepTolerance;
     std::string              NewtonScaling;
+    std::string              SteadyStateTest;
+    double                   SteadyStateStepTolerance;
+    bool                     SteadyStateMeasureCorrection;
     bool                     SteadyStateDiagnostics;
     bool                     SteadyStateStepDiagnostics;
     bool                     SteadyStateSolve;

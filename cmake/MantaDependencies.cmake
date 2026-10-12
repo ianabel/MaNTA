@@ -210,9 +210,10 @@ if(NOT DEFINED SUNDIALS_ROOT AND NOT DEFINED ENV{SUNDIALS_ROOT}
 endif()
 
 find_package(SUNDIALS 7.1.0 REQUIRED
-             COMPONENTS core ida kinsol nvecserial)
+             COMPONENTS core ida kinsol nvecserial sunnonlinsolnewton)
 target_link_libraries(manta_deps INTERFACE
-  SUNDIALS::core SUNDIALS::ida SUNDIALS::kinsol SUNDIALS::nvecserial)
+  SUNDIALS::core SUNDIALS::ida SUNDIALS::kinsol SUNDIALS::nvecserial
+  SUNDIALS::sunnonlinsolnewton)
 
 # --------------------------------------------------------------------- Eigen --
 #

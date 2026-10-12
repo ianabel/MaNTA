@@ -44,6 +44,7 @@
 #include <kinsol/kinsol.h>
 #include <kinsol/kinsol_ls.h>   /* KINGetNumJacEvals */
 #include <nvector/nvector_serial.h>
+#include <sunnonlinsol/sunnonlinsol_newton.h>
 
 #include <algorithm>
 #include <cmath>
@@ -73,7 +74,281 @@ namespace
         return 0;
     }
 
+    // SUNNonlinSol's callbacks for a NewtonStep solve. `mem` is what
+    // SUNNonlinSolSolve is handed, which is the solver.
+    int NlsSys(N_Vector ycor, N_Vector F, void *mem)
+    {
+        return static_cast<SystemSolver *>(mem)->nlsSys(ycor, F);
+    }
+
+    int NlsLSetup(sunbooleantype /* jbad */, sunbooleantype *jcur, void *mem)
+    {
+        // Every setup builds at the current iterate, so the Jacobian is always
+        // current afterwards -- which is also what stops SUNNonlinSol retrying a
+        // failed solve with a "fresh" Jacobian it already has.
+        *jcur = SUNTRUE;
+        return static_cast<SystemSolver *>(mem)->nlsLSetup();
+    }
+
+    int NlsLSolve(N_Vector b, void *mem)
+    {
+        return static_cast<SystemSolver *>(mem)->nlsLSolve(b);
+    }
+
+    int NlsConvTest(SUNNonlinearSolver NLS, N_Vector /* ycor */, N_Vector del,
+                    sunrealtype tol, N_Vector ewt, void *data)
+    {
+        return static_cast<SystemSolver *>(data)->nlsConvTest(NLS, del, tol, ewt);
+    }
+
+    // IDA's constants (ida_nls.c, ida.c), so that the steady test is IDA's
+    // corrector test and not a lookalike.
+    constexpr double NLS_SS_FIRST = 20.0; // ss on the first iteration after a setup
+    constexpr double NLS_RATEMAX = 0.9;   // a slower contraction is a convergence failure
+    // IDA's RATEMAX suits a corrector started from a good predictor. A
+    // continuation step starts from the last state, often far from its own
+    // solution, and Newton commonly needs several iterations to reach its
+    // quadratic basin, with corrections that grow on the way. Measured on the
+    // T3D ReLU benchmark at dt = 1e-2: KINSOL, which has no divergence test,
+    // converged every step in 8-10 iterations, while RATEMAX rejected the first
+    // four outright at their second correction, and so did CVODE's gentler
+    // test (a correction more than twice the last), cutting dt to 4e-5 either
+    // way. So a continuation step has no divergence test, as under KINSOL:
+    // NewtonMaxIterations is its cap, and only a non-finite correction fails
+    // it at once. RATEMAX is kept for the undamped probes, which should fail
+    // fast.
+    constexpr double NLS_PASS_OUTRIGHT = 1.0e-8; // 0.0001 * toldel, toldel = 0.0001 * epsNewt
+
+    // An undamped solve is attempted from a damped step only once that step's
+    // first correction is within one tolerance unit -- the state has stopped
+    // moving at this dt -- and, after an attempt fails, only once dt has grown
+    // by this much since. A failed attempt costs two residuals and two builds
+    // (the rate test stops a diverging Newton at its second correction), so the
+    // backoff bounds what probing costs while dt climbs.
+    constexpr double UNDAMPED_ATTEMPT_CORRECTION = 1.0;
+    constexpr double UNDAMPED_ATTEMPT_BACKOFF = 16.0;
+
 } // namespace
+
+double SystemSolver::errorWeightedNorm(N_Vector v, N_Vector ewt) const
+{
+    return suppressAlgebraicError ? N_VWrmsNormMask(v, ewt, id) : N_VWrmsNorm(v, ewt);
+}
+
+void SystemSolver::allocateNewtonStepScratch()
+{
+    if (steadyNLS != nullptr)
+        return;
+
+    nlsYcor = N_VClone(Y);
+    nlsU = N_VClone(Y);
+    nlsEwt = N_VClone(Y);
+    nlsTmp = N_VClone(Y);
+    if (nlsYcor == nullptr || nlsU == nullptr || nlsEwt == nullptr || nlsTmp == nullptr)
+        throw std::runtime_error("N_VClone failed in solveSteadyState");
+
+    steadyNLS = SUNNonlinSol_Newton(Y, ctx);
+    if (steadyNLS == nullptr)
+        throw std::runtime_error("SUNNonlinSol_Newton failed");
+
+    if (SUNNonlinSolSetSysFn(steadyNLS, NlsSys) != SUN_SUCCESS ||
+        SUNNonlinSolSetLSetupFn(steadyNLS, NlsLSetup) != SUN_SUCCESS ||
+        SUNNonlinSolSetLSolveFn(steadyNLS, NlsLSolve) != SUN_SUCCESS ||
+        SUNNonlinSolSetConvTestFn(steadyNLS, NlsConvTest, this) != SUN_SUCCESS)
+        throw std::runtime_error("Configuring SUNNonlinSol_Newton failed");
+}
+
+int SystemSolver::nlsSys(N_Vector ycor, N_Vector F)
+{
+    const bool atStart = nlsAtStart;
+    nlsAtStart = false;
+    N_VLinearSum(1.0, uPrev, 1.0, ycor, nlsU);
+    try
+    {
+        const int retval = steadyResidual(nlsU, F);
+        if (atStart && retval == 0)
+            nlsStartNorm = N_VWL2Norm(F, resScale);
+        return retval;
+    }
+    catch (...)
+    {
+        // At ycor = 0 the state is one a previous step accepted, so a case
+        // throwing there is not a step to damp away; anywhere else it is the
+        // ordinary sign of a step that left the case's domain, and a
+        // recoverable failure is the answer, as static_residual gives IDA.
+        if (atStart)
+        {
+            nlsException = std::current_exception();
+            return -1;
+        }
+        return 1;
+    }
+}
+
+int SystemSolver::nlsLSetup()
+{
+    try
+    {
+        steadyJacSetup(nlsU);
+    }
+    catch (...)
+    {
+        nlsException = std::current_exception();
+        return -1;
+    }
+    nlsSolvesSinceBuild = 0;
+    nlsSS = NLS_SS_FIRST;
+    return 0;
+}
+
+int SystemSolver::nlsLSolve(N_Vector b)
+{
+    try
+    {
+        // Jacobian reuse within the solve. SUNNonlinSol only sets up at the
+        // start (and on a retry), so a fresher Jacobian -- every iteration
+        // under the default NewtonJacobianReuse = 1, full Newton -- is built
+        // here, at the iterate Sys has just evaluated.
+        if (nlsSolvesSinceBuild >= newtonJacReuse)
+        {
+            steadyJacSetup(nlsU);
+            nlsSolvesSinceBuild = 0;
+        }
+        solveJacEq(b, nlsTmp);
+    }
+    catch (std::exception &e)
+    {
+        std::println("Caught exception in the linear solve : {} ; Retrying. ", e.what());
+        return 1;
+    }
+    N_VScale(1.0, nlsTmp, b);
+    ++nlsSolvesSinceBuild;
+    return 0;
+}
+
+// idaNlsConvTest (ida_nls.c), with MaNTA's masked norm, IDA's RATEMAX only where
+// it suits (see NLS_RATEMAX), and a rate estimate guarded for long iterations.
+int SystemSolver::nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, N_Vector ewt)
+{
+    const double delnrm = errorWeightedNorm(del, ewt);
+    nlsLastNorm = delnrm;
+
+    int m = 0;
+    if (SUNNonlinSolGetCurIter(NLS, &m) != SUN_SUCCESS)
+        return -1;
+
+    if (m == 0)
+    {
+        nlsOldNorm = delnrm;
+        nlsPrevNorm = delnrm;
+        nlsFirstNorm = delnrm;
+        if (delnrm <= NLS_PASS_OUTRIGHT * tol)
+        {
+            nlsLastTest = nlsSS * delnrm;
+            return SUN_SUCCESS;
+        }
+    }
+    else
+    {
+        // IDA's rate is the geometric mean contraction since the first
+        // correction, which is the right estimate over IDA's four iterations
+        // at most. Over the twenty a continuation step may take, a fast first
+        // drop followed by a slow linear tail -- an approximate Jacobian's
+        // signature -- makes the mean underestimate the rate the iteration
+        // has *now*, and the test then stops early. So the rate is the larger
+        // of IDA's and the last ratio, CVODE's estimate. Measured on the T3D
+        // ReLU benchmark at rtol = atol = 1e-2: p_H's error at the stop fell
+        // from 10% to 4.5% with exact derivatives, p_e's from 6.5% to 3.3%
+        // with T3D's finite-differenced ones, for at most 4 more box calls.
+        // Where IDA's estimate is accurate the two agree.
+        const double meanRate = std::pow(delnrm / nlsOldNorm, 1.0 / m);
+        const double rate = std::max(meanRate, delnrm / nlsPrevNorm);
+        nlsPrevNorm = delnrm;
+        // RATEMAX is IDA's test, on IDA's rate.
+        const bool diverging = nlsStrictDivergence ? meanRate > NLS_RATEMAX : !std::isfinite(delnrm);
+        if (diverging)
+        {
+            nlsLastTest = std::numeric_limits<double>::infinity();
+            return SUN_NLS_CONV_RECVR;
+        }
+        // Not yet contracting overall: no estimate of the distance left, so no
+        // claim of convergence either.
+        if (rate >= 1.0)
+        {
+            nlsLastTest = std::numeric_limits<double>::infinity();
+            return SUN_NLS_CONTINUE;
+        }
+        nlsSS = rate / (1.0 - rate);
+    }
+
+    nlsLastTest = nlsSS * delnrm;
+    return nlsLastTest <= tol ? SUN_SUCCESS : SUN_NLS_CONTINUE;
+}
+
+int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
+{
+    // The error weights at the step's starting state, fixed for the solve, as
+    // IDA fixes ewt for a step.
+    getErrorWeights(Y, nlsEwt);
+    N_VScale(1.0, Y, uPrev);
+    N_VConst(0.0, nlsYcor);
+
+    nlsAtStart = true;
+    nlsStartNorm = std::numeric_limits<double>::quiet_NaN();
+    nlsFirstNorm = nlsLastNorm = nlsLastTest = std::numeric_limits<double>::quiet_NaN();
+    nlsException = nullptr;
+
+    SUNNonlinSolSetMaxIters(steadyNLS, static_cast<int>(newtonMaxIters));
+    SUNNonlinSolSetup(steadyNLS, nlsYcor, this);
+    const int retval = SUNNonlinSolSolve(steadyNLS, uPrev, nlsYcor, nlsEwt, steadyStepTol,
+                                         SUNTRUE, this);
+
+    long iters = 0;
+    SUNNonlinSolGetNumIters(steadyNLS, &iters);
+    rec.newtonIters = iters;
+    rec.nlsRetval = retval;
+    rec.residualNorm = nlsStartNorm;
+    rec.firstCorrection = nlsFirstNorm;
+    rec.correctionNorm = nlsLastNorm;
+    rec.correctionTest = nlsLastTest;
+
+    if (nlsException)
+    {
+        std::exception_ptr e = nlsException;
+        nlsException = nullptr;
+        std::rethrow_exception(e);
+    }
+
+    if (retval == SUN_SUCCESS)
+        N_VLinearSum(1.0, uPrev, 1.0, nlsYcor, Y);
+    return retval;
+}
+
+double SystemSolver::steadyCorrectionNorm()
+{
+    allocateNewtonStepScratch();
+
+    // Restored on the way out, as estimateObjective does: alpha belongs to
+    // whatever is driving the solver.
+    const double alphaOnEntry = alpha;
+
+    N_Vector zeroDeriv = N_VClone(Y);
+    N_VConst(0.0, zeroDeriv);
+
+    setJacTime(t0);
+    setAlpha(0.0);
+    setJacEvalY(Y, zeroDeriv);
+    updateBoundaryConditions(t0);
+    updateMatricesForJacSolve();
+    residual(t0, Y, zeroDeriv, nlsTmp);
+    solveJacEq(nlsTmp, nlsU);
+    getErrorWeights(Y, nlsEwt);
+    const double norm = errorWeightedNorm(nlsU, nlsEwt);
+
+    N_VDestroy(zeroDeriv);
+    setAlpha(alphaOnEntry);
+    return norm;
+}
 
 int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
 {
@@ -279,6 +554,12 @@ void SystemSolver::solveSteadyState(bool resume)
     if (!initialised)
         throw std::runtime_error("solveSteadyState called before initialize()");
 
+    if (steadyTest == SteadyTest::NewtonStep)
+    {
+        solveSteadyStateNewtonStep(resume);
+        return;
+    }
+
     allocateSteadyScratch();
 
     // u_scale is unit unless NewtonScaling = ErrorWeights fills it below, per
@@ -433,6 +714,11 @@ void SystemSolver::solveSteadyState(bool resume)
         // driver deciding whether to go on estimating needs to see.
         if (estimateObjectiveOnFinish)
             objectiveEstimate = estimateObjective();
+
+        // The NewtonStep test's quantity at the state this solve stopped in,
+        // so the two tests can be compared on one run.
+        if (measureSteadyCorrection)
+            stats.correctionNorm = steadyCorrectionNorm();
 
         stats.steps = steps;
         stats.rejected = rejected;
@@ -745,4 +1031,238 @@ void SystemSolver::solveSteadyState(bool resume)
         "against a tolerance of {:g}, with dt = {:g}. The residual is not "
         "falling; SteadyStateSolver = \"TimeMarch\" is the fallback.",
         maxContinuationSteps, Fprev, steady_state_tol, ptcStep));
+}
+
+// The NewtonStep path: IDA's corrector test on the undamped Newton correction,
+// pseudo-transient continuation accepting any step whose inner solve converged.
+//
+// Each continuation step is one SUNNonlinSol solve from Y, damped at the step's
+// dt, and kept if the solve converged on the error-weighted correction test.
+// Only an *undamped* solve -- dt = infinity -- can end the run, because at a
+// finite dt the correction is (J0 + M/dt)^-1 F, and a small enough dt makes it
+// small whatever F is: the damping hides exactly the slow modes (a density whose
+// flux vanishes) that the test exists to see. So once a damped step has stopped
+// moving the state, an undamped solve is attempted from it; if it converges the
+// solve is done, and if not the state is put back and continuation carries on.
+//
+// The SER schedule reads the steady residual, which costs nothing here: the
+// first evaluation of every solve is at ycor = 0, where the damping term is
+// identically zero. It is therefore known at the *start* of a step, and the
+// growth applied after accepted step n is the reduction step n-1 achieved --
+// one step behind. The floor keeps dt growing regardless, which is what lets a
+// slow channel relax under a noisy residual whose ratio hovers around 1.
+void SystemSolver::solveSteadyStateNewtonStep(bool resume)
+{
+    allocateSteadyScratch();
+    allocateNewtonStepScratch();
+
+    const double fallback = (dt0 > 0.0) ? dt0 : dt;
+    if (!(resume && ptcStep > 0.0))
+    {
+        ptcStep = (steadyMode == SteadyMode::Newton)
+                      ? std::numeric_limits<double>::infinity()
+                      : (ptcInitialStep > 0.0 ? ptcInitialStep : fallback);
+        nsFprev = std::numeric_limits<double>::quiet_NaN();
+        nsNextUndampedDt = 0.0;
+        // Undamped from the start in Newton mode; otherwise when a damped step
+        // asks for it.
+        nsUndampedNext = !std::isfinite(ptcStep);
+    }
+
+    if (!(ptcStep > 0.0))
+        throw std::runtime_error(
+            "Pseudo-transient continuation needs a positive initial step and "
+            "could not find one: set PseudoTransientInitialStep, initialTimestep "
+            "or delta_t.");
+
+    N_VScale(1.0, Y, uPrev);
+
+    bool tauAtY = false;
+    auto refreshTau = [&]()
+    {
+        DGSoln Yh(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+        freezeTauAt(Yh, t0);
+        tauAtY = true;
+    };
+
+    SteadyStats stats;
+    const long residualEvals0 = nResidualEvals, jacBuilds0 = nJacBuilds,
+               jacSolves0 = nJacSolves;
+    steadyStepStats.clear();
+    steadyOutcome = SteadyOutcome::NotRun;
+
+    // The steady residual at the start of the last step, for the stats: the
+    // final state itself is never evaluated, as IDA never evaluates its
+    // converged corrector iterate.
+    double lastStartNorm = std::numeric_limits<double>::quiet_NaN();
+
+    auto finish = [&](std::string_view outcome, int steps, int rejected, SteadyOutcome why)
+    {
+        steadyOutcome = why;
+        if (estimateObjectiveOnFinish)
+            objectiveEstimate = estimateObjective();
+
+        stats.steps = steps;
+        stats.rejected = rejected;
+        stats.residualNorm = lastStartNorm;
+        stats.residualEvals = nResidualEvals - residualEvals0;
+        stats.jacBuilds = nJacBuilds - jacBuilds0;
+        stats.jacSolves = nJacSolves - jacSolves0;
+        steadyStats = stats;
+        reportSteadyStats(outcome, stats);
+    };
+
+    std::println("Steady solve: {} on {} cells at k = {}, NewtonStep test at {:g}",
+                 steadyMode == SteadyMode::Newton ? "Newton" : "PseudoTransient",
+                 nCells, k, steadyStepTol);
+    std::println("  dt = {:g}, SER rate {:g}, floor {:g}, max step {:g}",
+                 ptcStep, ptcSERRate, ptcSERFloor, ptcMaxStep);
+
+    // ||F|| is the steady residual at the start of the step; |d1| and |d| the
+    // step's first and last corrections, and ss|d| the tested quantity, all
+    // WRMS in the error weights.
+    if (steadyStepDiagnostics)
+        std::println("  {:>4}  {:>10}  {:>10}  {:>5}  {:>5}  {:>5}  {:>6}  {:>10}  {:>10}  {}",
+                     "step", "dt", "||F||", "iters", "res", "jac", "solves", "|d1|",
+                     "ss|d|", "outcome");
+
+    int step = 0;
+    unsigned int rejected = 0;
+    for (; step < maxContinuationSteps; ++step)
+    {
+        SteadyStepStats rec;
+        rec.step = step;
+        rec.undamped = nsUndampedNext;
+        rec.dt = nsUndampedNext ? std::numeric_limits<double>::infinity() : ptcStep;
+        const long stepResidualEvals0 = nResidualEvals, stepJacBuilds0 = nJacBuilds,
+                   stepJacSolves0 = nJacSolves;
+
+        auto closeRecord = [&](bool accepted, std::string_view outcome)
+        {
+            rec.accepted = accepted;
+            rec.residualEvals = nResidualEvals - stepResidualEvals0;
+            rec.jacBuilds = nJacBuilds - stepJacBuilds0;
+            rec.jacSolves = nJacSolves - stepJacSolves0;
+            stats.add(rec);
+            steadyStepStats.push_back(rec);
+            if (steadyStepDiagnostics)
+                std::println("  {:>4}  {:>10.3e}  {:>10.3e}  {:>5}  {:>5}  {:>5}  {:>6}  {:>10.3e}  {:>10.3e}  {}",
+                             rec.step, rec.dt, rec.residualNorm, rec.newtonIters,
+                             rec.residualEvals, rec.jacBuilds, rec.jacSolves,
+                             rec.firstCorrection, rec.correctionTest, outcome);
+        };
+
+        if (tauFrozenPerStep() && !tauAtY)
+            refreshTau();
+
+        // steadyResidual and steadyJacSetup damp with ptcStep, so an undamped
+        // attempt from a damped continuation sets it to infinity for the solve
+        // and puts it back afterwards.
+        const double dampedStep = ptcStep;
+        ptcStep = rec.dt;
+        // IDA's divergence test for an undamped probe from a damped
+        // continuation, whose failure should be cheap; none for a solve that is
+        // the continuation itself (see NLS_RATEMAX).
+        nlsStrictDivergence = rec.undamped && std::isfinite(dampedStep);
+        int retval = 0;
+        try
+        {
+            retval = steadyNewtonSolve(rec);
+        }
+        catch (...)
+        {
+            ptcStep = dampedStep;
+            throw;
+        }
+        ptcStep = dampedStep;
+        lastStartNorm = rec.residualNorm;
+
+        // Negative is unrecoverable: a callback reported a failure it could not
+        // turn into a damped retry.
+        if (retval < 0)
+        {
+            closeRecord(false, std::format("FAILED ({})", retval));
+            finish(std::format("FAILED: SUNNonlinSolSolve returned {}", retval), step + 1,
+                   rejected, SteadyOutcome::SolverFailed);
+            throw std::runtime_error(std::format(
+                "Steady solve failed: the Newton solve returned {} at continuation step {} "
+                "with dt = {:g}. Consider SteadyStateSolver = \"TimeMarch\", or a smaller "
+                "PseudoTransientInitialStep.",
+                retval, step, rec.dt));
+        }
+
+        const bool converged = (retval == SUN_SUCCESS);
+
+        if (converged && rec.undamped)
+        {
+            stats.correctionNorm = rec.correctionNorm;
+            stats.correctionTest = rec.correctionTest;
+            closeRecord(true, "converged");
+
+            // As the Residual path: yJac is what outlives the solve, and dy/dt
+            // vanishes at a steady state by definition.
+            N_VConst(0.0, ptcDYdt);
+            setJacEvalY(Y, ptcDYdt);
+            N_VConst(0.0, dYdt);
+
+            std::println("  converged: ss|d| = {:g} after {} steps.", rec.correctionTest,
+                         step + 1);
+            finish("converged", step + 1, rejected, SteadyOutcome::Converged);
+            return;
+        }
+
+        if (converged)
+        {
+            // An accepted damped step. Y has moved, so a held tau is stale.
+            closeRecord(true, "accepted");
+            tauAtY = false;
+
+            const double Fnow = rec.residualNorm;
+            double growth = ptcSERFloor;
+            if (std::isfinite(nsFprev) && Fnow > 0.0)
+                growth = std::max(std::pow(nsFprev / Fnow, ptcSERRate), ptcSERFloor);
+            nsFprev = Fnow;
+            ptcStep = std::min(ptcStep * growth, ptcMaxStep);
+
+            nsUndampedNext = (rec.firstCorrection <= UNDAMPED_ATTEMPT_CORRECTION ||
+                            ptcStep >= ptcMaxStep) &&
+                           ptcStep >= nsNextUndampedDt;
+            continue;
+        }
+
+        // Not converged. Y was never moved -- the solve iterates on its own
+        // correction -- so there is nothing to put back.
+        if (rec.undamped && std::isfinite(ptcStep))
+        {
+            // A probe from a damped continuation failed: carry on damped from
+            // the same state and dt, and wait for dt to grow before probing again.
+            closeRecord(false, "undamped attempt failed");
+            nsNextUndampedDt = ptcStep * UNDAMPED_ATTEMPT_BACKOFF;
+            nsUndampedNext = false;
+            continue;
+        }
+
+        // A rejected step. In Newton mode there is no dt to damp, so drop to a
+        // finite one and continue as pseudo-transient, as the Residual path does.
+        closeRecord(false, "rejected");
+        ptcStep = std::isfinite(ptcStep) ? ptcStep * 0.25 : fallback;
+        nsUndampedNext = false;
+        ++rejected;
+        if (rejected > maxRejectedSteps)
+        {
+            finish("stopped: MaxRejectedSteps reached", step + 1, rejected,
+                   SteadyOutcome::OutOfSteps);
+            logmsg<LOG_LEVEL::WARNING>(
+                "Steady solve stopped after {} rejected continuation steps "
+                "(MaxRejectedSteps = {}); the last accepted state is the result.",
+                rejected, maxRejectedSteps);
+            return;
+        }
+    }
+
+    finish("FAILED: ran out of continuation steps", step, rejected, SteadyOutcome::OutOfSteps);
+    throw std::runtime_error(std::format(
+        "Steady solve did not converge in {} continuation steps (NewtonStep test at {:g}), "
+        "with dt = {:g}. SteadyStateSolver = \"TimeMarch\" is the fallback.",
+        maxContinuationSteps, steadyStepTol, ptcStep));
 }

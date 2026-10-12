@@ -2,8 +2,10 @@
 #define SYSTEMSOLVER_HPP
 
 #include <sundials/sundials_linearsolver.h> /* Generic Liner Solver Interface */
+#include <sundials/sundials_nonlinearsolver.h>
 #include <sundials/sundials_types.h>		/* defs of sunrealtype, sunindextype  */
 #include <nvector/nvector_serial.h>
+#include <exception>
 #include <filesystem>
 
 #include "PyIntegrator.hpp"
@@ -276,6 +278,45 @@ class SystemSolver
         enum class NewtonScaling { Unit, ErrorWeights };
         void setNewtonScaling(NewtonScaling scaling) { newtonScaling = scaling; };
 
+        // What decides that a steady solve has converged, and with it which
+        // continuation steps are kept.
+        //
+        //  * Residual: ||F||_resScale < SteadyStateTolerance, with KINSOL as the
+        //    inner solver and a step kept only if ||F|| fell.
+        //  * NewtonStep: IDA's corrector test applied to the *undamped* Newton
+        //    correction, ss * ||J0^-1 F||_WRMS(ewt) <= SteadyStateStepTolerance,
+        //    with ewt the error weights IDA uses and ss IDA's rate factor. The
+        //    inner solver is SUNDIALS' generic Newton (SUNNonlinSol_Newton) with
+        //    MaNTA's test plugged in, as IDA plugs in its own, because KINSOL has
+        //    no hook for one. A continuation step is kept whenever its inner
+        //    solve converged, as in Kelley & Keyes.
+        //
+        // Residual weighs every row of every channel in one sum, so a channel
+        // whose rows are small at steady state -- a density whose flux vanishes
+        // -- converges invisibly; and under a noisy flux ||F|| floors, so the
+        // acceptance rule rejects every step near it. NewtonStep measures the
+        // distance to the solution per component, in units of the run's own
+        // tolerances. docs/superpowers/specs/2026-10-11-steady-state-termination-
+        // design.md has the measurements behind both claims.
+        enum class SteadyTest { Residual, NewtonStep };
+        void setSteadyTest(SteadyTest test) { steadyTest = test; };
+        SteadyTest getSteadyTest() const { return steadyTest; };
+
+        // epsNewt for the NewtonStep test. 0.33 is IDA's corrector constant
+        // (ida.c, epcon); IDACalcIC uses a hundredth of it.
+        void setSteadyStateStepTolerance(double tol)
+        {
+            if (!(tol > 0.0))
+                throw std::logic_error("SteadyStateStepTolerance must be positive.");
+            steadyStepTol = tol;
+        };
+
+        // Measure the undamped correction ||J0^-1 F||_WRMS at the end of a
+        // Residual solve too, for comparing the two tests on one run. One
+        // residual, one Jacobian build and one solve per solve; a NewtonStep
+        // solve reports it for nothing, since the test is made of it.
+        void setMeasureSteadyCorrection(bool on) { measureSteadyCorrection = on; };
+
         // Report the work a steady solve did: continuation steps, KINSOL Newton
         // iterations, residual evaluations, Jacobian builds and Jacobian solves.
         // Off by default, unlike the time loop's equivalent summary, which is
@@ -364,6 +405,17 @@ class SystemSolver
             long residualEvals = 0; // every residual call the step made, merit included
             long jacBuilds = 0;     // updateMatricesForJacSolve calls, this step
             long jacSolves = 0;     // solveJacEq calls, this step
+
+            // NewtonStep only. A step is one SUNNonlinSol solve; `undamped` marks
+            // one taken at dt = infinity, the only kind that can end the solve.
+            // The norms are WRMS in the error weights: the step's first
+            // correction, its last, and ss times the last -- the number
+            // compared with SteadyStateStepTolerance.
+            bool undamped = false;
+            int nlsRetval = 0;
+            double firstCorrection = std::numeric_limits<double>::quiet_NaN();
+            double correctionNorm = std::numeric_limits<double>::quiet_NaN();
+            double correctionTest = std::numeric_limits<double>::quiet_NaN();
         };
 
         // What one steady solve cost. The two halves are gathered differently
@@ -393,6 +445,14 @@ class SystemSolver
             long residualEvals = 0; // every residual call, KINSOL's and the merit function's
             long jacBuilds = 0;     // updateMatricesForJacSolve calls
             long jacSolves = 0;     // solveJacEq calls
+
+            // The last undamped Newton correction, as NewtonStep tests it: its
+            // WRMS norm in the error weights, and ss times that. A NewtonStep
+            // solve fills both from its last undamped solve; a Residual solve
+            // fills the norm only under SteadyStateMeasureCorrection, from one
+            // extra solve at the state it stopped in. NaN otherwise.
+            double correctionNorm = std::numeric_limits<double>::quiet_NaN();
+            double correctionTest = std::numeric_limits<double>::quiet_NaN();
 
             // Fold one finished continuation step into the totals. The KINSOL
             // fields are the only ones that must come through here: the three
@@ -483,6 +543,14 @@ class SystemSolver
         // SteadyState.cpp reach them through the user_data pointer.
         int steadyResidual(N_Vector u, N_Vector fval);
         void steadyJacSetup(N_Vector u);
+
+        // The four SUNNonlinSol callbacks of a NewtonStep solve, public for the
+        // same reason. Each catches what it calls, since SUNDIALS reaches them
+        // through C function pointers.
+        int nlsSys(N_Vector ycor, N_Vector F);
+        int nlsLSetup();
+        int nlsLSolve(N_Vector b);
+        int nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, N_Vector ewt);
 
         // The merit function the whole steady solve is measured against: the
         // *undamped* residual at the current Y, so it does not vanish simply by
@@ -1274,6 +1342,60 @@ class SystemSolver
         // genuinely different functions, and never consulted there.
         double kinSteadyNorm = std::numeric_limits<double>::quiet_NaN();
         long kinSteadyNormStamp = 0;
+
+        // The NewtonStep path. solveSteadyState dispatches to it; the Residual
+        // path above is untouched by it.
+        SteadyTest steadyTest = SteadyTest::Residual;
+        double steadyStepTol = 0.33;
+        bool measureSteadyCorrection = false;
+        void solveSteadyStateNewtonStep(bool resume);
+
+        // One SUNNonlinSol solve from Y at the current ptcStep, which is
+        // infinite for an undamped one. On success Y holds the converged
+        // iterate, which -- as in IDA -- is never evaluated. Fills the NewtonStep
+        // fields of `rec`. Returns SUNNonlinSolSolve's code; anything a callback
+        // caught that it could not recover from is rethrown.
+        int steadyNewtonSolve(SteadyStepStats &rec);
+
+        // ||J0^-1 F(Y)||_WRMS(ewt(Y)): one residual, one build at alpha = 0, one
+        // solve. What SteadyStateMeasureCorrection reports.
+        double steadyCorrectionNorm();
+
+        // N_VWrmsNorm, masked to the differential components under
+        // SuppressAlgebraicError exactly as IDA masks its own norm.
+        double errorWeightedNorm(N_Vector v, N_Vector ewt) const;
+
+        SUNNonlinearSolver steadyNLS = nullptr;
+        N_Vector nlsYcor = nullptr; // the correction SUNNonlinSol iterates on
+        N_Vector nlsU = nullptr;    // uPrev + ycor: the state Sys last evaluated
+        N_Vector nlsEwt = nullptr;  // error weights at the step's starting state
+        N_Vector nlsTmp = nullptr;  // solveJacEq's output, copied back into b
+        void allocateNewtonStepScratch();
+
+        // IDA's convergence-test state (ida_nls.c, idaNlsConvTest), per solve.
+        double nlsSS = 20.0;
+        double nlsOldNorm = 0.0;
+        double nlsPrevNorm = 0.0;
+        bool nlsStrictDivergence = false;
+        double nlsFirstNorm = std::numeric_limits<double>::quiet_NaN();
+        double nlsLastNorm = std::numeric_limits<double>::quiet_NaN();
+        double nlsLastTest = std::numeric_limits<double>::quiet_NaN();
+        long nlsSolvesSinceBuild = 0;
+        // Sys at ycor = 0 evaluates the steady residual: the damping term is
+        // id * (uPrev - uPrev)/dt, exactly zero. Its norm is recorded there for
+        // the SER schedule, which then costs no evaluation of its own.
+        bool nlsAtStart = false;
+        double nlsStartNorm = std::numeric_limits<double>::quiet_NaN();
+        // An exception a callback could not turn into a recoverable failure,
+        // rethrown once SUNNonlinSolSolve has returned.
+        std::exception_ptr nlsException;
+
+        // Carried across slices, like ptcStep: the steady residual at the start
+        // of the last accepted damped step, for SER, and the least dt at which
+        // the next undamped attempt may be made.
+        double nsFprev = std::numeric_limits<double>::quiet_NaN();
+        double nsNextUndampedDt = 0.0;
+        bool nsUndampedNext = false;
 
         // KINSOL's own settings. Every default here is what the code hardcoded
         // before they were configurable, so an unconfigured run is unchanged.

@@ -739,6 +739,74 @@ solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
    Explicitly time-dependent data — boundary values, sources — is frozen at
    ``t_initial``. There is no time axis to evaluate it on.
 
+.. _steady-state-test:
+
+Stopping on the Newton correction: ``SteadyStateTest``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The residual norm above weighs every row of every channel in one sum. A channel
+whose rows are small at steady state — a density whose flux vanishes there —
+hardly enters it, so the test fires on the other channels and returns that one
+wherever continuation had got to. On T3D's ReLU benchmark
+(``python-examples/t3d-relu/``) a solve stopped at ``||F|| < 3`` leaves the
+density 2.6% out, and still 1.9% at ``||F|| = 0.03``. Under a noisy flux it is
+worse: ``||F||`` floors, and a tolerance below the floor rejects every step.
+
+``SteadyStateTest = "NewtonStep"`` stops the way IDA's corrector does. It tests
+the *undamped* Newton correction :math:`\delta = J_0^{-1} F` in IDA's
+error-weighted norm,
+
+.. math::
+
+   s \, \|\delta\|_\mathrm{WRMS} \le \epsilon, \qquad
+   w_i = \frac{1}{\mathrm{rtol}\,|y_i| + \mathrm{atol}_i},
+
+with :math:`\epsilon` = ``SteadyStateStepTolerance`` (default 0.33, IDA's
+corrector constant; ``IDACalcIC`` uses 0.0033) and :math:`s = r/(1-r)` the
+distance left that a contraction rate :math:`r` implies, 20 on a first iteration.
+The correction is a distance to the solution per component, in units of the
+run's own ``Relative_tolerance`` and ``Absolute_tolerance``, so every channel is
+judged on its own scale and ``SteadyStateTolerance``'s value is not read (its
+presence still arms the solve). ``"Residual"``, the default, is the test above.
+
+What changes with it:
+
+* **The inner solver** is SUNDIALS' generic Newton, ``SUNNonlinSol_Newton``, with
+  this test plugged in, as IDA plugs in its own — KINSOL has no hook for one.
+  ``NewtonMaxIterations`` and ``NewtonJacobianReuse`` keep their meanings;
+  ``NewtonStepTolerance`` and ``NewtonScaling`` are KINSOL's and are not read.
+* **A continuation step is kept whenever its inner solve converged** (Kelley and
+  Keyes), on the same test at the step's ``dt``. No requirement that ``||F||``
+  fall, which is what made a noisy residual reject every step.
+* **Only an undamped solve can end the run.** At finite ``dt`` the correction is
+  :math:`(J_0 + M/dt)^{-1} F`, which a small enough ``dt`` makes small whatever
+  :math:`F` is. Once a damped step's first correction is within one tolerance
+  unit, an undamped solve is tried from it; if it fails the state is put back
+  and continuation goes on, trying again only after ``dt`` has grown sixteenfold.
+* **SER reads the steady residual at the start of each step**, which the inner
+  solve evaluates anyway, so the schedule costs nothing and lags by one step.
+* **The converged iterate is never evaluated**, as IDA never evaluates its
+  converged corrector: a ``Newton`` solve costs one flux sweep plus one flux and
+  one derivative sweep per Newton iteration.
+
+``SuppressAlgebraicError = true`` means here what it means to IDA: only ``u`` is
+tested. Under a **noisy flux it is required** — ``sigma`` is an algebraic unknown
+equal to the flux, so its correction carries the noise at full strength and no
+``dt`` damps it. On the ReLU benchmark with ±20% noise, at ``rtol = atol =
+1e-2``, it takes eight seeds of eight to convergence in a median 11 box calls
+(exact derivatives) or 65 (T3D's finite-differenced Jacobian). A tolerance below
+the correction's noise floor cannot be met, and such a solve runs out of steps;
+``python-examples/t3d-relu/README.md`` has the numbers.
+
+The norm is a root mean square, IDA's, so a converged state can be several
+tolerance units out at its worst point — up to 2.4 on that benchmark — and
+with the algebraic rows masked the mean is still over every row, as IDA's is.
+``SteadyStateMeasureCorrection = true`` reports :math:`\|\delta\|` at the end of
+a ``Residual`` solve as well (one residual, one build, one solve), for comparing
+the two tests on one run; both solves return it as ``correction_norm`` in
+``steadyStats()``, and a ``NewtonStep`` solve also returns the tested
+:math:`s\|\delta\|` as ``correction_test``.
+
 Output from a steady solve
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
