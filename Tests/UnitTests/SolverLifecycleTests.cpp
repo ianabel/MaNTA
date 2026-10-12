@@ -1351,8 +1351,8 @@ BOOST_AUTO_TEST_CASE(the_SER_rate_and_floor_change_the_cost_and_not_the_answer)
                << plain << "; it is meant to be the cheaper of the two");
 
     // And a steeper rate is cheaper than plain SER for the same reason, by a
-    // different route: measured 1704 against 3540 here, where the floor gets it
-    // to 552. Both knobs reach the schedule, which is the claim.
+    // different route: measured 1236 against 2448 here, where the floor gets it
+    // to 336. Both knobs reach the schedule, which is the claim.
     BOOST_TEST(steeper < plain,
                "SER rate 2 cost " << steeper << " evaluations against rate 1's " << plain
                << "; leaning harder on the residual ratio should grow dt faster");

@@ -55,18 +55,19 @@ The initial condition is Jardin's initial gradient, 1, in each channel.
 
 Visits per point to reach the steady state; one visit is the model at one point,
 both channels at once. The worst-channel L1 error is at round-off
-(4e-16 to 3e-14) in every cell of this table:
+(3.5e-16 to 1.5e-15) for PseudoTransient and TimeMarch; Newton stops at 2.7e-8
+without exchange and 4.8e-11 with it, set by its test on the Newton correction:
 
 | exchange | cells | k | Newton | PseudoTransient | TimeMarch |
 |---|---|---|---|---|---|
-| no | 4 | 2 | 15 | 22 | 174 |
-| no | 10 | 3 | 15 | 22 | 189 |
-| no | 10 | 5 | 15 | 24 | 190 |
-| yes | 4 | 2 | 11 | 16 | 144 |
-| yes | 10 | 3 | 11 | 16 | 151 |
-| yes | 10 | 5 | 11 | 16 | 151 |
+| no | 4 | 2 | 11 | 15 | 174 |
+| no | 10 | 3 | 11 | 15 | 189 |
+| no | 10 | 5 | 11 | 15 | 190 |
+| yes | 4 | 2 | 7 | 11 | 144 |
+| yes | 10 | 3 | 7 | 11 | 151 |
+| yes | 10 | 5 | 7 | 11 | 151 |
 
-Jardin's single-channel problem costs 15 (Newton) and 22 (PseudoTransient)
+Jardin's single-channel problem costs 11 (Newton) and 15 (PseudoTransient)
 visits at 4 cells, `k = 2–5` (`../reference-algorithms/`). So adding a second
 channel coupled through the thresholds costs nothing extra per point: the
 coupled Jacobian is analytic and assembled whole.
@@ -79,18 +80,19 @@ exchange:
 
 | H | g - qc | Newton | PseudoTransient | TimeMarch |
 |---|---|---|---|---|
-| (1, 2) | (0.0054, 0.015) | 662 | 1168 | 209 |
-| (1.5, 2.5) | (0.024, 0.025) | 19 | 26 | 208 |
-| (2, 3) | (0.051, 0.037) | 15 | 22 | 174 |
+| (1, 2) | (0.0054, 0.015) | 269 | 229 | 209 |
+| (1.5, 2.5) | (0.024, 0.025) | 13 | 17 | 208 |
+| (2, 3) | (0.051, 0.037) | 11 | 15 | 174 |
 
-Every run reaches round-off. At `H = (1, 2)`, though, the steady-state solvers
-pay 40–50 times their usual cost; time marching does not notice.
+PseudoTransient and TimeMarch reach round-off in every row, and Newton does at
+`H = (1, 2)`; further out it stops at 3.5e-7 and 2.7e-8, on its test on the
+Newton correction. At `H = (1, 2)`, though, the steady-state solvers pay 15–25
+times their usual cost, more than time marching, which does not notice.
 
 Starting the `H = (1, 2)` case from the constant-`chi` steady state (initial
-gradients 1 and 2) instead, both steady-state solvers stall. KINSOL exhausts
-its iterations and 200 continuation steps end at a relative error of 9e-3, while
-time marching still converges. Jardin's single-channel answer sits 0.009 above
-its threshold, and that problem has no such trouble.
+gradients 1 and 2) instead, every solver still reaches round-off: Newton in 315
+visits, PseudoTransient in 275 and time marching in 205. Jardin's single-channel
+answer sits 0.009 above its threshold, and that problem pays no such cost.
 
 ### The starting point
 
