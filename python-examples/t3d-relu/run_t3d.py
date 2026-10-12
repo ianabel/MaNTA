@@ -22,7 +22,6 @@ import t3d.Geometry as geometry
 import t3d.Profiles as pf
 from scipy.interpolate import interp1d
 from t3d.__main__ import main
-from t3d.geometry_models.VMEC import VmecReader
 
 
 def fix_axis_grho():
@@ -30,7 +29,9 @@ def fix_axis_grho():
 
     def fixed(self, inputs, grid, *a, **k):
         init(self, inputs, grid, *a, **k)
-        vm = VmecReader(self.vmec_wout)
+        # The reader T3D kept: building another costs a second VMEC read, and
+        # one read peaks at ~3.6 GB for this equilibrium.
+        vm = self.VmecReader
         interp = interp1d(vm.rho[1:], vm.grad_rho[1:], fill_value="extrapolate")
         self.grho = pf.FluxProfile(interp(grid.midpoints) * self.a_minor_vmec, grid)
         self.grho_grid = pf.GridProfile(interp(grid.rho) * self.a_minor_vmec, grid)
