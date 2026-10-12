@@ -677,8 +677,10 @@ changing what the number means.
 
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — flux and derivative evaluations per point — by
-``python-examples/paper-figures/steady_modes.py`` with ``MANTA_STEADY_TOL=1e-11``
-(``Relative_tolerance = 1e-6``, ``Absolute_tolerance = 1e-3``). The resolution
+the reuse-1 columns of ``python-examples/paper-figures/steady_modes.py`` with
+``MANTA_STEADY_TOL=1e-11``, and again with ``MANTA_STEADY_TEST=Residual`` for
+the ``Residual`` entries (``Relative_tolerance = 1e-6``,
+``Absolute_tolerance = 1e-3``). The resolution
 is stated because the counts depend on it: ``park-convergence`` at 4 cells, the
 other two at 10, all three at :math:`k = 3`. ``TimeMarch`` reads neither test.
 Every answer agrees with the converged one in every digit printed, except
