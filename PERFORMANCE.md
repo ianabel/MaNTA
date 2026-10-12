@@ -25,33 +25,45 @@ Newton's 5-15.
 Where only the steady state is wanted, `SteadyStateSolver` chooses how it is
 reached, and the choice is worth an order of magnitude -- but only once
 `NewtonJacobianReuse` is out of the way, which on these fluxes matters more than
-the choice of method does. Visits per collocation point, measured 2026-09-23 at
-`SteadyStateTolerance = 1e-2` -- see below for why that and not something
-tighter -- with the relative L1 error each setting actually reached:
+the choice of method does. Visits per collocation point, measured 2026-10-12 by
+`python-examples/paper-figures/steady_modes.py`, the steady methods stopping on
+the Newton correction at the default `SteadyStateStepTolerance = 0.33` and
+`TimeMarch` at `SteadyStateTolerance = 1e-2` -- see below for why those and not
+something tighter -- with the relative L1 error each setting actually reached:
 
 | benchmark | `TimeMarch` | `PseudoTransient` 10 / 1 | `Newton` 10 / 1 |
 |---|---|---|---|
-| `park-convergence` | 120 | 6 / 6 | 5 / **5** |
-| `jardin-critical-gradient` | 183 | 116 / 12 | 140 / **10** |
-| `shestakov-nonlinear` | 257 | 442 / 28 | 467 / **27** |
+| `park-convergence` | 120 | 9 / 11 | **4** / 5 |
+| `jardin-critical-gradient` | 183 | 110 / 15 | 132 / **11** |
+| `shestakov-nonlinear` | 257 | 346 / 35 | 368 / **29** |
 | | | | |
-| `park` error | 7.6e-5 | 1.2e-4 / 1.2e-4 | 7.6e-5 / 7.6e-5 |
-| `jardin` error | 3.8e-16 | 3.3e-3 / 1.7e-3 | 3.3e-3 / 1.7e-3 |
-| `shestakov` error | 7.2e-3 | 1.6e-2 / 3.6e-3 | 1.6e-2 / 3.5e-3 |
+| `park` error | 7.6e-5 | 7.6e-5 / 7.6e-5 | 7.6e-5 / 7.6e-5 |
+| `jardin` error | 3.8e-16 | 8.1e-16 / 4.1e-16 | 8.1e-16 / 1.5e-8 |
+| `shestakov` error | 7.2e-3 | 7.2e-3 / 7.2e-3 | 7.2e-3 / 6.5e-3 |
 
-**Two of those ratios flatter the steady solvers, and the error rows say by how
-much.** `SteadyStateTolerance` is not a common currency between the columns. For
-`PseudoTransient` and `Newton` it bounds `||F||`; for `TimeMarch` it is only the
-*relative* weight in a test on `dlambda/dt * dt` whose absolute floor is
-hardcoded at 1e-3 (`Solver.cpp`), so that column barely moves with the key and
-cannot be asked for a cheaper, less accurate answer -- see `TODO`.
+**0.33 is the equivalent of the `1e-2` the `Residual` test would be run at, not
+a tighter setting.** Every entry stops within 6.4e-4 of the converged discrete
+solution and all but one within 2e-8, which is inside the `5e-3` argued for
+below; at 1.0, `shestakov` by `Newton` at a reuse of one stops 9.5e-3 from it,
+so nothing looser serves all three. Newton's method converges too fast near a
+solution for the test to stop anywhere in between, which is also why the
+`shestakov` errors all read the discretisation's 7.2e-3. The same table under
+`SteadyStateTest = "Residual"` at `1e-2` (`MANTA_STEADY_TEST=Residual`) stops
+up to 1.7e-2 from that solution, for 6 / 5, 10 / 9 and 30 / 29 visits
+(`PseudoTransient` / `Newton`) at a reuse of one, and 484 / 509 on `shestakov`
+at ten.
 
-Compared instead at matched accuracy, each method run until it reaches the state
-`TimeMarch` reaches, the factors are **24, 11 and 7** against the table's 24, 15
-and 9. Those are the defensible numbers, and what is useful about them is how
-little they move: the same comparison at `1e-11`, nine orders tighter, gives 24,
-12 and 7. Where the tolerance is set does not decide whether solving for the
-steady state beats integrating to one.
+`TimeMarch`'s stopping test is a different quantity: the *relative* weight in a
+test on `dlambda/dt * dt` whose absolute floor is hardcoded at 1e-3
+(`Solver.cpp`), so that column barely moves with the key and cannot be asked
+for a cheaper, less accurate answer -- see `TODO`. It reaches the converged
+discrete solution to round-off. Run until they do too, at
+`SteadyStateStepTolerance = 1e-3`, the steady methods beat it by factors of
+**24, 14 and 7**, against the table's 24, 17 and 9 (`Newton`, reuse 1, the
+cheaper method each time). Those are the defensible numbers, and what is useful
+about them is how little they move: at `1e-6` they are 24, 12 and 7. Where the
+tolerance is set does not decide whether solving for the steady state beats
+integrating to one.
 
 The two numbers in each of the last two columns are `NewtonJacobianReuse = 10`,
 which is KINSOL's default, and `= 1`, a fresh Jacobian factorisation at every
@@ -61,10 +73,17 @@ each example's own `run.conf` resolution, which differs in `k`.
 `TimeMarch` sizes every step from a local error estimate on a transient that is
 then discarded, which is where the factor goes; Park's own solver reaches the
 same state in 9-15 iterations on the nonlinear problems he reports, which is
-where `Newton` lands.
+where `Newton` lands. On `park-convergence` itself, whose flux is linear, the
+reuse moves the count, 4 against 5: the test spends a second iteration
+measuring a correction at round-off to learn the first was exact, and at a
+reuse of one that iteration assembles a fresh Jacobian first.
 
-**What a steady solve spends, sweep by sweep**, since that is the budget the
-table is made of. Two sweeps are fixed -- one building `sigma` from the initial
+**What a steady solve spends, sweep by sweep.** Under the default `NewtonStep`
+test a `Newton` solve is one flux sweep building `sigma` and then one residual
+and one Jacobian per Newton iteration, the converged iterate never being
+evaluated: `park-convergence`'s 5 is three flux sweeps and two derivative
+sweeps, and its 4 at a reuse of ten is the same with the second Jacobian
+reused. Under `SteadyStateTest = "Residual"` two sweeps are fixed -- one building `sigma` from the initial
 condition, one evaluating the residual to test whether the initial state is
 already converged -- and then each continuation step costs KINSOL's residual at
 each end of it plus one Jacobian. A step at finite `dt` costs one more, because
@@ -72,7 +91,7 @@ KINSOL drives the *damped* residual to zero and the SER schedule needs the
 steady one, which has to be evaluated separately; at `dt = inf` the two are the
 same function at the same state and the second evaluation is served from what
 KINSOL already computed. So `Newton` is `2 + 3n` visits for `n` steps and
-`PseudoTransient` is `2 + 4n`, and `park-convergence`'s 5 is `2 + 3*1`.
+`PseudoTransient` is `2 + 4n`, and `park-convergence`'s 5 there is `2 + 3*1`.
 
 **Three of those five are irreducible for a Newton method and one is not
 overhead at all.** A scheme that does not know the problem is linear has to
@@ -247,8 +266,10 @@ that setting. The option to ask for them stays, for a transport problem of some
 other kind that needs the accuracy, but a default calibrated on a benchmark is
 calibrated on the wrong thing.
 
-The table at the top of this file is measured at `1e-2` for that reason, and
-`steady_modes.py` takes `MANTA_STEADY_TOL` if a different regime is wanted. The
+The table at the top of this file is measured at the equivalent of `1e-2` for
+that reason, and `steady_modes.py` takes `MANTA_STEP_TOL` (and
+`MANTA_STEADY_TOL` for `TimeMarch` and the `Residual` test) if a different
+regime is wanted. The
 **ladder** measurements in this section are still at `1e-11`, deliberately:
 their subject is the ladder rather than the tolerance, and holding the tolerance
 at a point where every rung converges fully is what isolates it. At `1e-2`
