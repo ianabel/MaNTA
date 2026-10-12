@@ -90,9 +90,11 @@ box calls:
 
 * **The residual has a floor at `||F|| = 5.5 eps`** (4.6-5.7 over every seed
   and level). A tolerance below it is never met: the solve runs to
-  `MaxRejectedSteps`, about 1000 calls, and stops at a noise error of
-  `0.1 eps` (at most `0.2 eps`). That is what the noise allows -- u integrates
-  sigma over many points, which averages independent draws -- and it is the
+  `MaxRejectedSteps`, about 1000 calls -- each rejection halves the
+  pseudo-time step, which ends near 1e-57 -- and stops at a noise error of
+  `0.1 eps` (at most `0.2 eps`). That is what the noise allows: one realisation
+  frozen at every point and solved to 1e-13 is out by 0.06-0.07 `eps`, since u
+  integrates sigma over many points and averages independent draws. It is the
   number every other row should be read against.
 * **A tolerance above the floor stops after 8-38 calls, but usually short of
   that accuracy.** Its noise error is anywhere from `0.1 eps` to `1.5 eps` at

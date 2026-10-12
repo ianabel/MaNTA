@@ -72,30 +72,61 @@ matches an independent solution of the zero-flux ODE to 5e-12. Each T3D iterate
 is four box calls -- the base and one perturbation per channel -- so T3D's
 1.8e-3 in T_e cost 1352 calls; MaNTA at 16 cells, k = 4 is at 1.7e-3 for 104.
 
-## The noisy benchmark in MaNTA
+## The noisy benchmark
 
-    python noise_benchmark.py         # 136 steady solves, ~1 min on 6 workers
+    python noise_benchmark.py         # MaNTA: 136 steady solves, ~1 min on 6 workers
 
 16 cells, k = 4 (discretisation error 1.7e-3 in p_e), eight seeds. The
 Jacobians are "control" (exact derivatives of the noiseless fluxes), "full"
 (forward differences in all six box inputs) and "t3d" (T3D's scheme: three
 kappa perturbations of max(f |kappa|, f), the box's explicit u-dependence and
 the prefactor's density derivative dropped, as T3D's psi matrices drop them).
-Errors are against the noiseless solution at the same discretisation.
 
-* **The residual floors at ||F|| = 2.46** (2.36-2.58). Reaching it costs ~1000
-  calls and leaves errors of 2.5% in n, 2.9% in p_H and 0.8% in p_e: what one
-  noise realisation allows.
-* **A tolerance just above it, 3, gets nearly all of that** in 33 calls
-  (control), 84 (t3d, f = 0.5) or 144 (full): 2.4-2.7% in n, 1.4-2.0% in p_e,
-  eight seeds of eight. Looser tolerances leave p_e unconverged -- 5% at 5, 11%
-  at 10-20 -- while n and p_H barely move, being noise-limited already.
+**What limits the accuracy here is the stopping test, not the noise.** MaNTA's
+steady solve stops on one mesh-weighted L2 norm of the whole residual. The
+density's rows hardly contribute to it -- at steady state Gamma_e is zero -- so
+the density converges invisibly: noiseless, a solve stopped at ||F|| < 3 is out
+by 2.6% in n and 2.2% in p_H, still 1.9% in n at ||F|| = 0.03, and below 1e-3
+only at ||F|| = 0.01. With noise, ||F|| floors at 2.46 (2.36-2.58 over eight
+seeds), set by the heat-flux rows, 250 times above where n converges. Every
+noisy solve therefore ends with n where the stopping test left it:
+
+* **A tolerance just above the floor**, 3, stops in 33 calls (control), 84
+  (t3d, f = 0.5) or 144 (full), eight seeds of eight, at 2.4-2.7% in n,
+  2.0-2.5% in p_H and 1.4-2.0% in p_e -- the noiseless solve's errors at the
+  same tolerance. Looser tolerances leave p_e unconverged too: 5% at 5, 11% at
+  10-20.
+* **A tolerance below the floor** is never met: near it every continuation
+  step's inner Newton solve fails, each rejection halves the pseudo-time step,
+  which falls to ~1e-59, and after ~1000 calls the last accepted state is
+  returned, with n still out by 2.5%.
+* `SteadyStateSolver = "Newton"` behaves the same, and so does `NewtonScaling
+  = "ErrorWeights"`, which reweights KINSOL's inner solve but not the loop's
+  test.
+
+**The error the noise itself causes is much smaller.** Frozen -- the same draw on
+every call -- a +-20% particle-flux error moves n by 3-4e-3, and a constant
++-20% heat-flux error moves p_H by 5-6% and p_e by 6-8%; live noise, drawn
+independently at each point, averages below that.
+
+Two more results hold whatever the stopping test:
+
 * **T3D's step, f = 0.5, is the right one for this noise; f = 0.2 is not.** At
   0.2 only 2-4 seeds of 8 converge, the definiteness guard fires ~1900 times a
   solve, and p_e is out by up to 38%.
 * **T3D's reduced Jacobian beats "full"**: the same Newton iterations (18 at
   tolerance 3) for three box calls a build instead of six.
-* **The density is the noisiest channel, and that is T3D's noise model.**
-  `Linear` is not vectorised, so its noise is one draw per call for the whole
-  profile: fully correlated across radius, with nothing for the solve to
-  average. The heat-flux noise is drawn per point.
+
+**T3D itself**, at N = 17 with the benchmark's own 5% thresholds, one-sided and
+axis-corrected, eight seeds run four at a time (one T3D process peaks at 3.6 GB
+reading VMEC): every seed takes 17 iterates, 68 box calls, with no reset, and
+ends 0.87% from the converged answer in n, 1.2% in p_H and 0.93% in p_e
+(worst seed 0.91%, 1.7%, 2.3%). Against the same run without noise the noise
+accounts for 6e-4 in n and 5e-3 in p_H and p_e; the rest is the 5% thresholds,
+which leave the noiseless run 8.8e-3 from converged. T3D's test is the relative
+change of each profile, which weighs the channels separately, and that is why
+its density converges where MaNTA's does not.
+
+T3D's particle-flux noise is one draw per call for the whole profile --
+`Linear` is not vectorised the way `ReLU` is -- so it is fully correlated across
+radius; the heat-flux noise is drawn per point. The port reproduces both.
