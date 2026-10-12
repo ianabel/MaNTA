@@ -534,9 +534,12 @@ bill of a case whose flux is expensive:
   for itself. Never consulted at finite `dt`, where the damped residual is a
   different function and any small enough `dt` makes it small.
 
-**All of the above is the `Residual` test's path. `SteadyStateTest = "NewtonStep"`
-is a second loop** (`solveSteadyStateNewtonStep`, `SteadyState.cpp`) that
-`solveSteadyState` dispatches to before touching KINSOL: IDA's corrector test,
+**All of the above is the `SteadyStateTest = "Residual"` path; the default,
+`"NewtonStep"`, is a second loop** (`solveSteadyStateNewtonStep`, `SteadyState.cpp`)
+that `solveSteadyState` dispatches to before touching KINSOL. A test of the KINSOL
+path's mechanics -- its sweep budget, its counters, the ||F||-based rejection --
+must therefore name `Residual`, as the ones in `SolverLifecycleTests.cpp` do.
+It is IDA's corrector test,
 `ss * ||J0^-1 F||_WRMS(ewt) <= SteadyStateStepTolerance`, on the undamped Newton
 correction, with `SUNNonlinSol_Newton` as the inner solver because KINSOL has no
 hook for a convergence test of the caller's own. Its budget is `1 + n` flux

@@ -95,6 +95,7 @@ solver_config = {
     "initialTimestep": 0.01,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-5,
+    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
@@ -209,6 +210,7 @@ solver_config = {
     "restart": True,
     "zeroFlux": True,
     "SteadyStateTolerance": 5e-5,
+    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "NewtonJacobianReuse": 4,
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,

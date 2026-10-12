@@ -127,7 +127,7 @@ def test_the_residual_falls_and_is_reported_per_slice(tmp_path):
     there.
     """
     runner = MaNTA.Runner(SineSource())
-    runner.configure(slice_config(tmp_path))
+    runner.configure(slice_config(tmp_path, SteadyStateTest="Residual"))
 
     outcome = runner.start_steady(False)
     norms = [runner.steadyStats()["residual_norm"]]
@@ -179,7 +179,8 @@ def test_out_of_steps_is_returned_and_a_failure_is_raised(tmp_path):
     # A tolerance nothing reaches still ends in OutOfSteps, not a raise: the
     # budget is what stops it.
     stubborn = MaNTA.Runner(SineSource())
-    stubborn.configure(slice_config(tmp_path / "stubborn", SteadyStateTolerance=1e-30))
+    stubborn.configure(slice_config(tmp_path / "stubborn", SteadyStateTolerance=1e-30,
+                                    SteadyStateTest="Residual"))
     outcome = stubborn.start_steady(False)
     for _ in range(6):
         if outcome != MaNTA.SteadyOutcome.OutOfSteps:

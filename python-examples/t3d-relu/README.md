@@ -112,19 +112,19 @@ density counts. Noiseless it reaches the answer the residual test cannot see:
 | Jacobian | rtol = atol | box calls | error n | p_H | p_e |
 |---|---|---|---|---|---|
 | control | 1e-2 | 11 | 2.2e-3 | 4.5e-2 | 8.1e-3 |
-| control | 3e-3 | 29 | 1.5e-3 | 1.5e-3 | 1.9e-4 |
-| control | 1e-3 | 39 | 1.8e-11 | 1.9e-11 | 2.5e-12 |
+| control | 3e-3 | 33 | 1.2e-3 | 1.2e-3 | 1.5e-4 |
+| control | 1e-3 | 45 | 2.1e-11 | 2.3e-11 | 3.0e-12 |
 | t3d, f = 0.5 | 1e-2 | 37 | 7.2e-3 | 4.9e-3 | 3.3e-2 |
-| t3d, f = 0.5 | 3e-3 | 73 | 1.7e-2 | 1.2e-2 | 5.6e-3 |
-| t3d, f = 0.5 | 1e-3 | 309 | 1.4e-3 | 1.7e-3 | 2.5e-4 |
+| t3d, f = 0.5 | 3e-3 | 101 | 1.7e-2 | 1.2e-2 | 6.0e-3 |
+| t3d, f = 0.5 | 1e-3 | 341 | 1.4e-3 | 1.6e-3 | 2.4e-4 |
 
 (errors against the converged solution at this discretisation, which the
 `Residual` test at `||F|| < 1e-10` reaches in 104 calls). The test's norm is an
 RMS over every row, IDA's, so the worst point can sit a few tolerance units
 out -- up to 2.4 here. Measured in its own norm the test is conservative with
-exact derivatives (true error 0.14 where it reports 0.19 at 1e-2, 0.08 against
-0.22 at 3e-3) and over-optimistic by up to 6x with T3D's Jacobian, whose
-corrections are not `J^-1 F` (0.81 against 0.14 at 3e-3).
+exact derivatives (true error 0.14 where it reports 0.21 at 1e-2, 0.06 against
+0.17 at 3e-3) and over-optimistic by up to 5x with T3D's Jacobian, whose
+corrections are not `J^-1 F` (0.83 against 0.18 at 3e-3).
 
 With noise, `SuppressAlgebraicError = true` is required, so that only u is
 tested: sigma is an algebraic unknown equal to the flux, its correction carries
@@ -132,18 +132,19 @@ the +-20% noise at full strength, and no step damps it. With it:
 
 | Jacobian | rtol = atol | converged | box calls, median (max) | noise error n | p_H | p_e |
 |---|---|---|---|---|---|---|
-| control | 1e-2 | 8/8 | 11 (20) | 4.9e-3 (8.5e-3) | 3.8e-2 (9.1e-2) | 1.3e-2 (2.2e-2) |
-| control | 3e-3 | 0/8 | 1530 (1542) | 2.6e-2 (3.4e-2) | 2.6e-2 (3.1e-2) | 6.4e-3 (1.8e-2) |
-| t3d, f = 0.5 | 1e-2 | 8/8 | 65 (148) | 1.6e-2 (1.9e-2) | 1.2e-2 (1.4e-2) | 1.9e-2 (2.8e-2) |
-| t3d, f = 0.5 | 3e-3 | 7/8 | 83 (6205) | 1.7e-2 (2.4e-2) | 1.3e-2 (2.5e-2) | 7.1e-3 (1.1e-2) |
+| control | 1e-2 | 7/8 | 11 (1555) | 5.4e-3 (2.6e-2) | 3.8e-2 (9.1e-2) | 1.4e-2 (2.2e-2) |
+| control | 3e-3 | 0/8 | 1536 (1546) | 2.6e-2 (2.9e-2) | 2.6e-2 (3.5e-2) | 7.0e-3 (1.0e-2) |
+| t3d, f = 0.5 | 1e-2 | 8/8 | 65 (197) | 1.6e-2 (1.7e-2) | 1.2e-2 (1.2e-2) | 1.5e-2 (2.8e-2) |
+| t3d, f = 0.5 | 3e-3 | 5/8 | 145 (6241) | 1.7e-2 (2.7e-2) | 1.3e-2 (2.2e-2) | 1.1e-2 (1.5e-2) |
 
-So at 1e-2 the noisy solve converges every seed for a third of T3D's 68 calls
-(exact derivatives) or about as many (T3D's own Jacobian), at errors of the
-order of T3D's below. At 3e-3 with exact derivatives the test asks for a
-correction below what the noise itself produces, and every seed runs out of
-steps -- the noise floor the design's phase 4 (a `NoiseLimited` outcome and
-iterate averaging) is for. T3D's Jacobian "converges" there only because its
-corrections understate the distance, as the noiseless row at 3e-3 shows.
+So at 1e-2 the noisy solve converges seven seeds of eight for a sixth of T3D's
+68 calls (exact derivatives), or every seed for about as many (T3D's own
+Jacobian), at errors of the order of T3D's below. At 3e-3 with exact
+derivatives the test asks for a correction below what the noise itself
+produces, and every seed runs out of steps -- the noise floor the design's
+phase 4 (a `NoiseLimited` outcome and iterate averaging) is for. T3D's Jacobian
+"converges" there in five seeds only because its corrections understate the
+distance, as the noiseless row at 3e-3 shows.
 
 **The error the noise itself causes is much smaller.** Frozen -- the same draw on
 every call -- a +-20% particle-flux error moves n by 3-4e-3, and a constant

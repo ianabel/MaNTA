@@ -93,9 +93,9 @@ const std::vector<Entry> &table()
         {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
          "Build the adjoint problem and solve for dG/dp after the integration."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
-         "Stop once the solution stops changing by this much; presence arms it. "
-         "Compared against dy/dt under TimeMarch, and against a mesh-independent "
-         "weighted norm of the steady residual otherwise."},
+         "Arms steady-state termination by its presence. Its value is compared against dy/dt "
+         "under TimeMarch, and against a mesh-independent weighted norm of the steady residual "
+         "under SteadyStateTest = Residual; the default NewtonStep test does not read it."},
         {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
          "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
          "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},
@@ -133,12 +133,12 @@ const std::vector<Entry> &table()
          "KINSOL's scaling vectors: Unit (default, what this has always used) or ErrorWeights, "
          "which fills them from the same 1/(rtol|y|+atol) weights IDA's WRMS norm uses. Unit "
          "scaling makes the convergence test dimensional, so it favours the largest variable."},
-        {"SteadyStateTest", {}, Type::String, Category::Solver, false, false, std::string{"Residual"},
-         "What decides a steady solve has converged: Residual (default) stops when the weighted "
-         "residual norm falls below SteadyStateTolerance and keeps a continuation step only if "
-         "that norm fell; NewtonStep stops when IDA's corrector test passes on the undamped "
-         "Newton correction, ss*||J^-1 F|| in the run's error weights at or below "
-         "SteadyStateStepTolerance, and keeps any step whose inner solve converged."},
+        {"SteadyStateTest", {}, Type::String, Category::Solver, false, false, std::string{"NewtonStep"},
+         "What decides a steady solve has converged: NewtonStep (default) stops when IDA's "
+         "corrector test passes on the undamped Newton correction, ss*||J^-1 F|| in the run's "
+         "error weights at or below SteadyStateStepTolerance, and keeps any step whose inner "
+         "solve converged; Residual stops when the weighted residual norm falls below "
+         "SteadyStateTolerance and keeps a continuation step only if that norm fell."},
         {"SteadyStateStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.33,
          "The NewtonStep test's threshold, in units of the run's error weights. 0.33 is IDA's "
          "corrector constant; IDACalcIC uses 0.0033. Must be positive."},

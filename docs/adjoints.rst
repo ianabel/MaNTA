@@ -157,7 +157,8 @@ that answer is worth. ``lastSteadyOutcome()`` says which exit it was.
 ``AdjointProblem``, and it costs nothing in that case.
 
 **Solve looser and correct, rather than converging harder.** Measured on
-``AdjointTestProblem``, against a reference two orders tighter:
+``AdjointTestProblem`` under ``SteadyStateTest = "Residual"``, against a
+reference two orders tighter:
 
 .. list-table::
    :header-rows: 1

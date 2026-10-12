@@ -1345,7 +1345,7 @@ class SystemSolver
 
         // The NewtonStep path. solveSteadyState dispatches to it; the Residual
         // path above is untouched by it.
-        SteadyTest steadyTest = SteadyTest::Residual;
+        SteadyTest steadyTest = SteadyTest::NewtonStep;
         double steadyStepTol = 0.33;
         bool measureSteadyCorrection = false;
         void solveSteadyStateNewtonStep(bool resume);

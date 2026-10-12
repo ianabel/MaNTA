@@ -363,6 +363,7 @@ BOOST_AUTO_TEST_CASE(the_corrected_objective_beats_the_tolerance_it_was_solved_a
     system.setMinStepSize(1e-12);
     system.setTolerances({1e-8}, 1e-6);
     system.setSteadyStateTolerance(steadyTol);
+    system.setSteadyTest(SystemSolver::SteadyTest::Residual);
     system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     system.setSolveAdjoint(true);
     system.setAdjointProblem(adjoint.get());

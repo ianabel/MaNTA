@@ -88,6 +88,7 @@ solver_config = {
     "initialTimestep": 1e-3,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 5e-5,
+    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "restart": False,
@@ -189,6 +190,7 @@ solver_config = {
     "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 5e-5,
+    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "AggressiveTimesteps": False,
     "solveAdjoint": False,
     "WriteDatFile": True,

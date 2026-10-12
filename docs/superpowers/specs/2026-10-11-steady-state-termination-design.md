@@ -1,9 +1,10 @@
 # Steady-state termination on the Newton correction
 
 Date: 2026-10-11
-Status: phases 0-2 built on branch `gp-toy-model`, opt-in
-(`SteadyStateTest = "NewtonStep"`); phases 3 and 4 not started. "As built",
-below, records where the implementation departs from this design and why.
+Status: phases 0-3 built on branch `gp-toy-model`, and `NewtonStep` is the
+default; phase 4 not started. "As built" records where the implementation
+departs from this design and why, and "The migration sweep" what flipping the
+default changed.
 
 ## Why
 
@@ -220,6 +221,14 @@ Departures from IDA's test, each measured on the T3D benchmark:
   has none, converged those steps in 8-10 iterations. A continuation step is
   capped by `NewtonMaxIterations` alone, and a non-finite correction fails it.
   `RATEMAX` is kept for the undamped probes, which should fail fast.
+* **`ss` is never below 1**: the distance left is taken to be at least the last
+  correction, as in Deuflhard's error-oriented Newton termination. IDA trusts a
+  rate from one ratio because its predictor starts it near the answer; a cold
+  steady solve need not be in Newton's asymptotic regime after two iterations.
+  Found by the migration sweep: on `two-temperature-critical-gradient`
+  corrections of 1883 then 22.6 tolerance units gave rate 0.012 and
+  `ss * |d| = 0.27`, with T_e still 13 tolerance units (RMS) from the converged
+  state. With the floor it takes 5 iterations and lands on it.
 * **The rate is `max(IDA's, the last ratio)`.** IDA's geometric mean since the
   first correction suits its four iterations; over twenty, a fast first drop
   and a slow linear tail make it underestimate the current rate. The guard took
@@ -247,14 +256,66 @@ the noisy benchmark converges. This answers the q/sigma question below for the
 noisy case.
 
 **Measured** (`python-examples/t3d-relu/README.md` has the tables). Noiseless,
-NewtonStep converges what `Residual` cannot see: 1.5e-3 in n at rtol 3e-3 in 29
+NewtonStep converges what `Residual` cannot see: 1.2e-3 in n at rtol 3e-3 in 33
 box calls, against 2.6% at `||F|| < 3`. With +-20% noise at rtol 1e-2 it
-converges eight seeds of eight, in a median 11 calls with exact derivatives and
-65 with T3D's Jacobian, against T3D's own 68. At rtol 3e-3 with exact
-derivatives no seed converges: the test asks for less than the noise floor,
-which is phase 4. In its own norm the test is conservative with exact
-derivatives and up to 6x optimistic with T3D's Jacobian; max-norm errors reach
-2.4 tolerance units, as an RMS test allows.
+converges seven seeds of eight in a median 11 calls with exact derivatives, and
+eight of eight in 65 with T3D's Jacobian, against T3D's own 68. At rtol 3e-3
+with exact derivatives no seed converges: the test asks for less than the noise
+floor, which is phase 4. (The `ss >= 1` floor cost one seed at 1e-2 and two at
+3e-3 with T3D's Jacobian; noiseless correctness comes first.) In its own norm
+the test is conservative with exact derivatives and up to 5x optimistic with
+T3D's Jacobian; max-norm errors reach 2.4 tolerance units, as an RMS test
+allows.
+
+## The migration sweep (2026-10-12)
+
+Every steady configuration in the tree, run with the default flipped and with
+`Residual` named, compared as the regression suite compares -- relative L2 of
+each variable's u, against 5e-3:
+
+* the five `python-examples/*/run.conf` through `manta.cli`;
+* every `python-examples` driver that reaches `run_ss`, with each solve's final
+  state captured and matched in order (a `sitecustomize` hook injecting the test
+  into every `Runner.configure` that named none): 17 drivers, 576 captured solves,
+  the FFI ones on an `XLA_FFI` build;
+* the unit and Python suites, which take the default wherever they do not name
+  a test.
+
+Results, after the `ss` floor above:
+
+* **Every compared solve agrees within 5e-3**, almost all to 1e-7 or better.
+  The largest, 3.9e-3 (Jardin in `paper-figures/steady_modes.py`), is the
+  `Residual` side stopping short at its loose `SteadyStateTolerance = 0.01`:
+  against the exact solution `Residual` is 1.7e-3 out and NewtonStep 1.5e-8.
+* **Cost** falls on the CLI configs (Park 10 residuals to 5, Jardin 13 to 8,
+  two-temperature 8 to 5, thermodiffusive 6 to 3) and on most drivers
+  (`reference-algorithms` 524 to 278, two-temperature's benchmark 1158 to 354),
+  and rises a little where continuation dominates (`adaptivity.py` 1985 to
+  2212). At 1e-11 the mode comparison in `docs/running.rst` was re-measured
+  under both tests; NewtonStep is cheaper or level on all six continuation
+  entries.
+* **Three drivers stall** -- `nc-toy-model/nc.py`, `nc-parallel/nc_parallel.py`,
+  `nc-parallel/nc_multigpu.py`: a graded wall layer (cells ~5e-4) puts the
+  round-off floor of the correction at IDA's threshold for atol 1e-6, so
+  continuation runs out of steps with `||F||` at 1e-9. They now name
+  `Residual`; atol 1e-5 also converges, and is the alternative.
+* **Pinned to `Residual` without a sweep**: the stellarator scripts
+  (`python-physics/stellarator`, an `XLA_FFI` build, DESC and yancc, and marked
+  unverified), whose `SteadyStateTolerance` of 1e-5 sits beside
+  `Relative_tolerance = 1e-2`, so the default would loosen them to 1%; and
+  `toy-model/noise_study.py`, which measures the residual test itself.
+  `t3d-relu/noise_benchmark.py` names its test per run already; the mirror
+  plasma never takes the steady path.
+* **Tests**: ten C++ tests and two Python ones exercise the KINSOL path's
+  mechanics (its sweep budget, counters, the ||F|| rejection rule, a tolerance
+  nothing reaches) and now name `Residual`. One is a real difference rather
+  than mechanics: `NewtonMaxIterations = 1` makes a Residual continuation work
+  harder, but leaves NewtonStep no damped step that converges.
+
+Found on the way, both pre-existing and independent of the test:
+`PyRunner::getSolution` segfaults for a variable index past the last, and after
+a steady solve that failed under `MeshAdaptation`.
+
 
 ## Phases
 
@@ -268,7 +329,7 @@ derivatives and up to 6x optimistic with T3D's Jacobian; max-norm errors reach
    config keys, `Residual` kept bit for bit. Default still `Residual`.
 2. *Done.* **Pseudo-transient continuation** under the new test: acceptance, SER on the
    correction, the switch to an undamped correction.
-3. **Flip the default**, with the migration sweep in the same change.
+3. *Done.* **Flip the default**, with the migration sweep in the same change.
 4. **Noise**: `NoiseLimited`, averaging, the noise hook.
 
 ## Tests
