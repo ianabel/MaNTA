@@ -61,10 +61,10 @@ exactly. The table therefore measures cost alone:
 
 | cells | k | points | flux calls | deriv pts | visits/point | error |
 |---|---|---|---|---|---|---|
-| 4 | 2 | 12 | 1896 | 456 | 196 | 3.0e-16 |
-| 4 | 3 | 16 | 3088 | 576 | 229 | 4.7e-16 |
-| 10 | 3 | 40 | 7160 | 1640 | 220 | 8.0e-16 |
-| 10 | 5 | 60 | 11700 | 2400 | 235 | 1.1e-15 |
+| 4 | 2 | 12 | 1740 | 456 | 183 | 3.0e-16 |
+| 4 | 3 | 16 | 2416 | 592 | 188 | 3.7e-16 |
+| 10 | 3 | 40 | 5840 | 1480 | 183 | 3.8e-16 |
+| 10 | 5 | 60 | 9480 | 2400 | 198 | 5.5e-16 |
 
 For comparison, on a problem of this kind:
 
@@ -86,7 +86,7 @@ all**. Supply that hook from `autodiff` or `jax.grad` and it stays free.
 **Where it loses is the same place as the other benchmark** — the `visits`
 column — and `SteadyStateSolver` closes some of it. Time marching needs 212
 visits per point here; pseudo-transient continuation needs **127** and Newton
-152, for the same round-off answer. Less of a win than Park's 113 → 11, because
+152, for the same round-off answer. Less of a win than Park's 120 → 5, because
 this problem's stiffness is real rather than an artefact of error control, but
 still most of a factor of two. See `docs/running.rst`.
 
@@ -112,8 +112,8 @@ What that looked like, before the cause was known, and what the case does now:
 
 | cells | k | `q(0) = 0` | `q(0) = -g` | `sigma(0) = 0` |
 |---|---|---|---|---|
-| 4 | 2 | 5.78e-3 | 3.0e-16 | 3.25e-16 |
-| 10 | 3 | 7.49e-4 | 8.0e-16 | 7.03e-16 |
+| 4 | 2 | 5.78e-3 | 3.0e-16 | 2.97e-16 |
+| 10 | 3 | 7.49e-4 | 6.0e-16 | 3.81e-16 |
 | 20 | 3 | 3.33e-4 | — | — |
 | 40 | 3 | 1.58e-4 | — | — |
 
@@ -123,7 +123,7 @@ second — both are at round-off, and on this problem nothing could be better.
 form, and a problem that had one would not need MaNTA; a real case would have to
 guess it, and guessing zero is the first column. `sigma(0) = 0` is a statement
 about the equations rather than about the answer, and the run recovers the axis
-gradient itself. It is also slightly cheaper — 182 visits per point against 220
+gradient itself. It is also slightly cheaper — 183 visits per point against 220
 at 10 cells `k = 3` — though that is a side effect rather than the point.
 
 Exactly first order in `h` and **independent of `k`** — `k = 5` bought no rate

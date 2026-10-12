@@ -589,13 +589,13 @@ transient *is* the answer.
         - evaluations
       * - 1
         - 2 *(defaults)*
-        - **552**
+        - **336**
       * - 1
         - 1 *(plain SER)*
-        - 3540
+        - 2448
       * - 2
         - 1
-        - 1704
+        - 1236
 
    The converged state is identical in every case; only the number of
    continuation steps differs. Growing ``dt`` faster is not free, though — on a

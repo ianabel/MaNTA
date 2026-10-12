@@ -20,7 +20,7 @@ algorithm is published completely enough to run,
 [`python-examples/reference-algorithms/`](python-examples/reference-algorithms/)
 runs it on the same problems in the same currency -- the published ASTRA scheme
 and TGYRO's iteration, at 56-84 and 32-391 visits per point against MaNTA
-Newton's 5-15.
+Newton's 5-11.
 
 Where only the steady state is wanted, `SteadyStateSolver` chooses how it is
 reached, and the choice is worth an order of magnitude -- but only once
