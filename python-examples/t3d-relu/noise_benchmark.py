@@ -5,17 +5,23 @@
     python noise_benchmark.py --csv runs.csv
 
 Every run is a steady solve of `relu_ke.ReluKeCase` with T3D's noise (uniform,
-+-`noise`, fresh every call) at one seed, one Jacobian and one
-`SteadyStateTolerance`:
++-`noise`, fresh every call) at one seed, one Jacobian and one stopping test:
+either `SteadyStateTest = "Residual"` at a `SteadyStateTolerance` (`--tol`), or
+`"NewtonStep"` at `Relative_tolerance = Absolute_tolerance` (`--ns-rtol`), with
+`SuppressAlgebraicError` so that only u is tested -- the noisy flux puts its
+noise straight into sigma, an algebraic unknown no step can damp. The
+Jacobians are:
 
 * "control" -- exact derivatives of the noiseless fluxes;
 * "full"    -- forward differences in all six box inputs;
 * "t3d"     -- T3D's own scheme: three kappa perturbations at T3D's step
                max(f |kappa|, f), for each factor f given (T3D's is 0.5).
 
-Tolerances are absolute -- ||F|| has no natural scale here -- and are best read
-against the residual floor, which one more run per seed measures: the control at
-a tolerance (1e-10) that no noisy solve meets, so it stops on MaxRejectedSteps.
+Residual tolerances are absolute -- ||F|| has no natural scale here -- and are
+best read against the residual floor, which one more run per seed measures: the
+control at a tolerance (1e-10) that no noisy solve meets, so it stops on
+MaxRejectedSteps. NewtonStep runs at the full Jacobian's arm are skipped: the
+Residual rows show it costs twice T3D's scheme for the same iterations.
 
 Errors are relative L_inf in n_e, p_H and p_e against the noiseless solution at
 the same discretisation (`noise`) and at 64 cells, k = 4 (`converged`). Cost is
@@ -35,17 +41,21 @@ FLOOR_TOL = 1.0e-10
 SAMPLES = np.linspace(0.0, 0.8, 401)
 
 
-def configuration(cells, degree, tolerance):
+def configuration(cells, degree, tolerance, test="Residual"):
+    newton_step = test == "NewtonStep"
     return {
         "OutputFilename": "noise_benchmark",
         "PolynomialDegree": degree,
         "GridSize": cells,
         "LowerBoundary": 0.0,
         "UpperBoundary": 0.8,
-        "Relative_tolerance": 1.0e-8,
-        "Absolute_tolerance": 1.0e-8,
+        "Relative_tolerance": tolerance if newton_step else 1.0e-8,
+        "Absolute_tolerance": tolerance if newton_step else 1.0e-8,
         "delta_t": 1.0e-2,
-        "SteadyStateTolerance": tolerance,
+        "SteadyStateTest": test,
+        "SuppressAlgebraicError": newton_step,
+        # Arms the steady solve; read only by the Residual test.
+        "SteadyStateTolerance": FLOOR_TOL if newton_step else tolerance,
         "WriteOutput": False,
     }
 
@@ -69,7 +79,7 @@ def solve(run):
     f = run["step"] or 0.5
     case = ReluKeCase(box, jacobian=run["jacobian"], rel_step=f, abs_step=f)
     runner = manta.Runner(case)
-    runner.configure(configuration(run["cells"], run["degree"], run["tolerance"]))
+    runner.configure(configuration(run["cells"], run["degree"], run["tolerance"], run["test"]))
     case.reset_counts()
     try:
         runner.run_ss()
@@ -86,7 +96,7 @@ def noiseless(cells, degree):
     import manta
     from relu_ke import ReluKeCase
     runner = manta.Runner(ReluKeCase(jacobian="control"))
-    runner.configure(configuration(cells, degree, FLOOR_TOL))
+    runner.configure(configuration(cells, degree, FLOOR_TOL, "Residual"))
     runner.run_ss()
     return profiles(runner)
 
@@ -94,7 +104,8 @@ def noiseless(cells, degree):
 def runs_for(args):
     runs = []
     for seed in range(args.seeds):
-        common = dict(cells=args.cells, degree=args.degree, noise=args.noise, seed=seed)
+        common = dict(cells=args.cells, degree=args.degree, noise=args.noise, seed=seed,
+                      test="Residual")
         runs.append(dict(common, kind="floor", jacobian="control", step=0.0,
                          tolerance=FLOOR_TOL))
         for tol in args.tol:
@@ -103,6 +114,10 @@ def runs_for(args):
             runs.append(dict(at, jacobian="full", step=args.step[0]))
             for f in args.step:
                 runs.append(dict(at, jacobian="t3d", step=f))
+        for rtol in args.ns_rtol:
+            at = dict(common, kind="solve", test="NewtonStep", tolerance=rtol)
+            runs.append(dict(at, jacobian="control", step=0.0))
+            runs.append(dict(at, jacobian="t3d", step=args.step[0]))
     return runs
 
 
@@ -124,18 +139,18 @@ def summarise(results):
     groups = {}
     for r in results:
         if r["kind"] == "solve":
-            groups.setdefault((r["tolerance"], r["jacobian"], r["step"]), []).append(r)
-    print("| tol | Jacobian | step | converged | box calls, median (max) | Newton | guard | "
+            groups.setdefault((r["test"], r["tolerance"], r["jacobian"], r["step"]), []).append(r)
+    print("| test | tol | Jacobian | step | converged | box calls, median (max) | Newton | guard | "
           "noise error n | p_H | p_e | error vs converged p_e |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for k in sorted(groups):
         rs = groups[k]
         calls = np.array([r["calls"] for r in rs])
         en = np.array([r["err_noise"] for r in rs])
         ec = np.array([r["err_conv"] for r in rs])
         conv = sum(r["outcome"] == "Converged" for r in rs)
-        step = "--" if k[1] == "control" else (f"{k[2]:g}" if k[1] == "t3d" else f"{k[2]:g} (u, kappa)")
-        print(f"| {k[0]:g} | {k[1]} | {step} | {conv}/{len(rs)} | {np.median(calls):.0f} ({calls.max()}) | "
+        step = "--" if k[2] == "control" else (f"{k[3]:g}" if k[2] == "t3d" else f"{k[3]:g} (u, kappa)")
+        print(f"| {k[0]} | {k[1]:g} | {k[2]} | {step} | {conv}/{len(rs)} | {np.median(calls):.0f} ({calls.max()}) | "
               f"{np.median([r['newton'] for r in rs]):.0f} | {np.median([r['guarded'] for r in rs]):.0f} | "
               f"{fmt(en[:, 0])} | {fmt(en[:, 1])} | {fmt(en[:, 2])} | {np.median(ec[:, 2]):.1e} |")
 
@@ -149,7 +164,9 @@ def main():
     p.add_argument("--step", type=float, nargs="+", default=[0.5, 0.2],
                    help="T3D's step factor f: dkappa = max(f |kappa|, f); the first is also full's")
     p.add_argument("--tol", type=float, nargs="+", default=[3.0, 5.0, 10.0, 20.0],
-                   help="SteadyStateTolerance, absolute")
+                   help="SteadyStateTolerance for the Residual test, absolute")
+    p.add_argument("--ns-rtol", type=float, nargs="*", default=[1e-2, 3e-3],
+                   help="Relative_tolerance = Absolute_tolerance for the NewtonStep test")
     p.add_argument("--workers", type=int, default=6)
     p.add_argument("--csv")
     args = p.parse_args()

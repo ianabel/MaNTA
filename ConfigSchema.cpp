@@ -133,6 +133,19 @@ const std::vector<Entry> &table()
          "KINSOL's scaling vectors: Unit (default, what this has always used) or ErrorWeights, "
          "which fills them from the same 1/(rtol|y|+atol) weights IDA's WRMS norm uses. Unit "
          "scaling makes the convergence test dimensional, so it favours the largest variable."},
+        {"SteadyStateTest", {}, Type::String, Category::Solver, false, false, std::string{"Residual"},
+         "What decides a steady solve has converged: Residual (default) stops when the weighted "
+         "residual norm falls below SteadyStateTolerance and keeps a continuation step only if "
+         "that norm fell; NewtonStep stops when IDA's corrector test passes on the undamped "
+         "Newton correction, ss*||J^-1 F|| in the run's error weights at or below "
+         "SteadyStateStepTolerance, and keeps any step whose inner solve converged."},
+        {"SteadyStateStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.33,
+         "The NewtonStep test's threshold, in units of the run's error weights. 0.33 is IDA's "
+         "corrector constant; IDACalcIC uses 0.0033. Must be positive."},
+        {"SteadyStateMeasureCorrection", {}, Type::Bool, Category::Solver, false, false, false,
+         "Under SteadyStateTest = Residual, also measure the undamped Newton correction "
+         "||J^-1 F|| in the error weights at the end of each steady solve, for comparing the "
+         "two tests. One residual, one Jacobian build and one solve per solve."},
         {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
          "Report the work a steady solve did: continuation steps, Newton iterations, "
          "residual evaluations, Jacobian builds and solves. Printed on failure too."},
