@@ -77,11 +77,11 @@ resolution, and ASTRA's and TGYRO's barely do.
 
 | problem | MaNTA Newton | MaNTA PseudoTransient | ASTRA scheme | TGYRO, `dz = 0.1` | TGYRO, `dz = 0.01` |
 |---|---|---|---|---|---|
-| Park | **5** | 11 | 84 | 32–38 | 32–38 |
+| Park | **5** | 7 | 84 | 32–38 | 32–38 |
 | Jardin | **11** | 15 | 56 (`Dbar = 30`) | 233–391 | 66–84 |
-| Pinch, `D = 1` | **7** | 11 | 81–82 | 48–60 | 51–60 |
-| Two-temperature | **11** | 15 | 80 (`Dbar = 30`) | 91–103 | 69–76 |
-| Two-temperature + exchange | **7** | 11 | 76–77 (`Dbar = 30`) | 43–50 | 34–40 |
+| Pinch, `D = 1` | **7** | 13 | 81–82 | 48–60 | 51–60 |
+| Two-temperature | **11** | 13 | 80 (`Dbar = 30`) | 91–103 | 69–76 |
+| Two-temperature + exchange | **7** | 9 | 76–77 (`Dbar = 30`) | 43–50 | 34–40 |
 
 Accuracy separates the methods more than cost does:
 
@@ -96,7 +96,8 @@ Accuracy separates the methods more than cost does:
   8.6e-4 and the pinch 4.9e-4 on 32 radii.
 * **Jardin's and the two-temperature problems** have linear answers:
   - MaNTA's `PseudoTransient` and ASTRA's scheme both reproduce them to
-    round-off (MaNTA within 1.2e-15; ASTRA 1e-12 to 7e-12, set by its stopping
+    near round-off (MaNTA within 4.3e-13 on Jardin and 1.1e-14 on the
+    two-temperature problems; ASTRA 1e-12 to 7e-12, set by its stopping
     test). MaNTA's `Newton` stops at 1.5e-8 on Jardin, and at 2.7e-8 and
     4.8e-11 on the two-temperature problems without and with exchange — also
     set by its stopping test, which is on the Newton correction.
@@ -125,11 +126,11 @@ and TGYRO at 16 radii:
 
 | D | MaNTA Newton | MaNTA PseudoTransient | ASTRA scheme | TGYRO |
 |---|---|---|---|---|
-| 0.01 | 7 | 15 | 130 | 59 |
+| 0.01 | 7 | 13 | 130 | 59 |
 | 0.1 | 7 | 13 | 106 | 59 |
-| 1 | 7 | 11 | 82 | 60 |
-| 10 | 7 | 11 | 74 | 67 |
-| 100 | 7 | 11 | 75 | 72 |
+| 1 | 7 | 13 | 82 | 60 |
+| 10 | 7 | 9 | 74 | 67 |
+| 100 | 7 | 9 | 75 | 72 |
 
 The errors do not move with `D`. A time march pays for the slow channel:
 ASTRA's cost grows as the density slows, and MaNTA's own `TimeMarch` fails at

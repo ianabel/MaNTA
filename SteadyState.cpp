@@ -105,18 +105,14 @@ namespace
     // corrector test and not a lookalike.
     constexpr double NLS_SS_FIRST = 20.0; // ss on the first iteration after a setup
     constexpr double NLS_RATEMAX = 0.9;   // a slower contraction is a convergence failure
-    // IDA's RATEMAX suits a corrector started from a good predictor. A
-    // continuation step starts from the last state, often far from its own
-    // solution, and Newton commonly needs several iterations to reach its
-    // quadratic basin, with corrections that grow on the way. Measured on the
-    // T3D ReLU benchmark at dt = 1e-2: KINSOL, which has no divergence test,
-    // converged every step in 8-10 iterations, while RATEMAX rejected the first
-    // four outright at their second correction, and so did CVODE's gentler
-    // test (a correction more than twice the last), cutting dt to 4e-5 either
-    // way. So a continuation step has no divergence test, as under KINSOL:
-    // NewtonMaxIterations is its cap, and only a non-finite correction fails
-    // it at once. RATEMAX is kept for the undamped probes, which should fail
-    // fast.
+    // IDA's RATEMAX suits a corrector started from a good predictor, and
+    // applies here only to an undamped probe from a damped continuation, which
+    // should fail fast. A damped step is a single iteration and is never
+    // tested. An undamped solve that is the run itself -- Newton mode, or the
+    // fallback after a rejection -- may need several iterations to reach
+    // Newton's quadratic basin from far off, with corrections that grow on the
+    // way, so it has no divergence test, as under KINSOL: NewtonMaxIterations
+    // is its cap, and only a non-finite correction fails it at once.
     constexpr double NLS_PASS_OUTRIGHT = 1.0e-8; // 0.0001 * toldel, toldel = 0.0001 * epsNewt
 
     // An undamped solve is attempted from a damped step only once that step's
@@ -126,6 +122,17 @@ namespace
     // (the rate test stops a diverging Newton at its second correction), so the
     // backoff bounds what probing costs while dt climbs.
     constexpr double UNDAMPED_ATTEMPT_CORRECTION = 1.0;
+
+    // A single Newton iteration per damped step cycles where the flux has a
+    // kink the damping cannot reach: the kink is in sigma_hat(q), and sigma and
+    // q are algebraic, so no dt makes the step small there. The signature is a
+    // correction that reverses the last one -- the state bouncing between two
+    // points -- and the response is to halve the step, which for a bounce
+    // either side of a square-root kink lands near the root. Measured on the
+    // two-temperature problem 0.0054 above its threshold: without it,
+    // residuals alternated 0.34 and 1.76 for 200 steps at every dt from 3.7e5
+    // down to 1. The cosine is in the error weights.
+    constexpr double REVERSAL_COSINE = -0.5;
     constexpr double UNDAMPED_ATTEMPT_BACKOFF = 16.0;
 
 } // namespace
@@ -144,7 +151,9 @@ void SystemSolver::allocateNewtonStepScratch()
     nlsU = N_VClone(Y);
     nlsEwt = N_VClone(Y);
     nlsTmp = N_VClone(Y);
-    if (nlsYcor == nullptr || nlsU == nullptr || nlsEwt == nullptr || nlsTmp == nullptr)
+    nlsDprev = N_VClone(Y);
+    if (nlsYcor == nullptr || nlsU == nullptr || nlsEwt == nullptr || nlsTmp == nullptr ||
+        nlsDprev == nullptr)
         throw std::runtime_error("N_VClone failed in solveSteadyState");
 
     steadyNLS = SUNNonlinSol_Newton(Y, ctx);
@@ -237,6 +246,15 @@ int SystemSolver::nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, 
     if (SUNNonlinSolGetCurIter(NLS, &m) != SUN_SUCCESS)
         return -1;
 
+    // A damped step takes its one iteration whatever it measures; only a
+    // correction that is not a number fails it.
+    if (nlsSingleIteration)
+    {
+        nlsFirstNorm = delnrm;
+        nlsLastTest = std::numeric_limits<double>::quiet_NaN();
+        return std::isfinite(delnrm) ? SUN_SUCCESS : SUN_NLS_CONV_RECVR;
+    }
+
     if (m == 0)
     {
         nlsOldNorm = delnrm;
@@ -327,7 +345,36 @@ int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
         std::rethrow_exception(e);
     }
 
-    if (retval == SUN_SUCCESS)
+    if (retval != SUN_SUCCESS)
+        return retval;
+
+    if (nlsSingleIteration)
+    {
+        // REVERSAL_COSINE: halve on a reversal, recover by doubling.
+        N_VDiv(nlsYcor, nlsEwt, nlsTmp);
+        if (nsHaveDprev)
+        {
+            const double norms = std::sqrt(N_VDotProd(nlsTmp, nlsTmp) * N_VDotProd(nlsDprev, nlsDprev));
+            const double cosine = norms > 0.0 ? N_VDotProd(nlsTmp, nlsDprev) / norms : 0.0;
+            // Recovery waits for two steps without a reversal: doubling after
+            // one let a bounce of period four replace the period-two one.
+            if (cosine < REVERSAL_COSINE)
+            {
+                nsLambda *= 0.5;
+                nsCalmSteps = 0;
+            }
+            else if (++nsCalmSteps >= 2)
+            {
+                nsLambda = std::min(1.0, 2.0 * nsLambda);
+                nsCalmSteps = 0;
+            }
+        }
+        N_VScale(1.0, nlsTmp, nlsDprev);
+        nsHaveDprev = true;
+        rec.relaxation = nsLambda;
+        N_VLinearSum(1.0, uPrev, nsLambda, nlsYcor, Y);
+    }
+    else
         N_VLinearSum(1.0, uPrev, 1.0, nlsYcor, Y);
     return retval;
 }
@@ -1042,14 +1089,14 @@ void SystemSolver::solveSteadyState(bool resume)
 }
 
 // The NewtonStep path: IDA's corrector test on the undamped Newton correction,
-// pseudo-transient continuation accepting any step whose inner solve converged.
+// reached by Kelley and Keyes's pseudo-transient continuation.
 //
-// Each continuation step is one SUNNonlinSol solve from Y, damped at the step's
-// dt, and kept if the solve converged on the error-weighted correction test.
-// Only an *undamped* solve -- dt = infinity -- can end the run, because at a
-// finite dt the correction is (J0 + M/dt)^-1 F, and a small enough dt makes it
-// small whatever F is: the damping hides exactly the slow modes (a density whose
-// flux vanishes) that the test exists to see. So once a damped step has stopped
+// Each damped continuation step is one Newton iteration from Y at the step's
+// dt, accepted as it stands. Only an *undamped* solve -- dt = infinity, iterated
+// until the test passes -- can end the run, because at a finite dt the
+// correction is (J0 + M/dt)^-1 F, and a small enough dt makes it small whatever
+// F is: the damping hides exactly the slow modes (a density whose flux
+// vanishes) that the test exists to see. So once a damped step has stopped
 // moving the state, an undamped solve is attempted from it; if it converges the
 // solve is done, and if not the state is put back and continuation carries on.
 //
@@ -1057,8 +1104,8 @@ void SystemSolver::solveSteadyState(bool resume)
 // first evaluation of every solve is at ycor = 0, where the damping term is
 // identically zero. It is therefore known at the *start* of a step, and the
 // growth applied after accepted step n is the reduction step n-1 achieved --
-// one step behind. The floor keeps dt growing regardless, which is what lets a
-// slow channel relax under a noisy residual whose ratio hovers around 1.
+// one step behind. The floor applies to a step that reduced the residual, and
+// one that raised it shrinks dt by the same ratio.
 void SystemSolver::solveSteadyStateNewtonStep(bool resume)
 {
     allocateSteadyScratch();
@@ -1075,6 +1122,9 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         // Undamped from the start in Newton mode; otherwise when a damped step
         // asks for it.
         nsUndampedNext = !std::isfinite(ptcStep);
+        nsLambda = 1.0;
+        nsCalmSteps = 0;
+        nsHaveDprev = false;
     }
 
     if (!(ptcStep > 0.0))
@@ -1172,6 +1222,7 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         // continuation, whose failure should be cheap; none for a solve that is
         // the continuation itself (see NLS_RATEMAX).
         nlsStrictDivergence = rec.undamped && std::isfinite(dampedStep);
+        nlsSingleIteration = !rec.undamped;
         int retval = 0;
         try
         {
@@ -1222,13 +1273,23 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         if (converged)
         {
             // An accepted damped step. Y has moved, so a held tau is stale.
-            closeRecord(true, "accepted");
+            closeRecord(true, rec.relaxation < 1.0
+                                  ? std::format("accepted, step x {:g}", rec.relaxation)
+                                  : std::string("accepted"));
             tauAtY = false;
 
+            // SER, lagged a step: the residual at this step's start is the one
+            // its Sys evaluated first. The floor applies to a step that reduced
+            // the residual; one that raised it shrinks dt by the same rule,
+            // which is what lets single-iteration steps be accepted as they
+            // stand.
             const double Fnow = rec.residualNorm;
             double growth = ptcSERFloor;
             if (std::isfinite(nsFprev) && Fnow > 0.0)
-                growth = std::max(std::pow(nsFprev / Fnow, ptcSERRate), ptcSERFloor);
+            {
+                const double ser = std::pow(nsFprev / Fnow, ptcSERRate);
+                growth = Fnow <= nsFprev ? std::max(ser, ptcSERFloor) : ser;
+            }
             nsFprev = Fnow;
             ptcStep = std::min(ptcStep * growth, ptcMaxStep);
 

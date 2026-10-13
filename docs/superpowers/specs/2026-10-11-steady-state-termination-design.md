@@ -30,7 +30,7 @@ addition to pseudo-transient continuation (`SteadyState.cpp:653–713`): a step 
 kept only if `||F||` fell, and a rejection restores the state and cuts dt by 4.
 Under noise `Fprev` ratchets down to the luckiest draw seen so far, after which
 almost every step is rejected: dt fell to 8e-60 in a run of ~1000 calls. Kelley
-and Keyes accept any step whose inner solve converged.
+and Keyes take one Newton iteration per step and accept it.
 
 T3D, by contrast, tests the relative change of each profile between iterates
 and doubles its step whenever that change is small. Its density converges; on
@@ -266,6 +266,50 @@ floor, which is phase 4. (The `ss >= 1` floor cost one seed at 1e-2 and two at
 the test is conservative with exact derivatives and up to 5x optimistic with
 T3D's Jacobian; max-norm errors reach 2.4 tolerance units, as an RMS test
 allows.
+
+### Kelley-Keyes continuation (2026-10-12, later)
+
+The first build kept a damped step whenever its inner solve converged on the
+same test. That costs at least two iterations per damped step -- the rate needs
+a second correction -- and made `PseudoTransient` dearer than under `Residual`
+(Park 11 visits against 6). Worse, a step whose inner solve ran out of
+iterations was rejected with its progress discarded: on Shestakov's graded mesh
+the warm start resumed at dt = 3e8, where Newton contracts only linearly (2/3
+per iteration, the triple root of `q^3` at the axis), and nineteen 20-iteration
+rejections cost 23x the uniform solve.
+
+So a damped step is now **one Newton iteration, accepted as it stands** --
+Kelley and Keyes's pseudo-transient continuation proper -- and only the undamped
+solve is iterated and tested. Two things make that safe:
+
+* **SER shrinks dt on a step that raised the residual** (by the same ratio); the
+  floor applies only to a step that reduced it.
+* **A correction that reverses the last one halves the step** (cosine below
+  -0.5 in the error weights; two steps without a reversal double it back
+  towards 1). Single iterations cycle either side of a kink in the flux --
+  `chi ~ (|q| - q_c)^(1/2)` -- and no dt stops them, because the kink is in
+  sigma and q, which are algebraic and undamped. On the two-temperature
+  problem 0.0054 above its threshold, plain single iterations alternated
+  residuals 0.34 and 1.76 for 200 steps at every dt from 3.7e5 down to 1.
+  Recovering after one quiet step instead of two let a period-four cycle
+  replace the period-two one.
+
+Rejected on the way, each measured on that case and on Shestakov: holding dt
+after a rise (still cycled); undoing a step whose successor starts more than
+twice as high and retrying it (cycled at every retry dt, since the overshoot is
+dt-independent); and solving the retry to convergence (converged at 747 visits,
+failed from the constant-chi start, and put Shestakov's graded mesh back at
+36500 evaluations).
+
+Measured, visits per point, before -> after: Park continuation 11 -> 7 (`Residual`
+6); Jardin continuation at reuse 10, 110 -> 14; Shestakov continuation at reuse
+10, 346 -> 30; the near-threshold two-temperature case 229 / 269 -> 33 / 73
+(continuation / Newton; time marching 209); Shestakov's graded mesh 42500 ->
+5100 evaluations (`Residual` 6000). Every answer stays within 5e-3 of the
+converged discrete solution. Under noise the plain version took the ReLU
+benchmark at rtol 3e-3 with exact derivatives from 0/8 seeds to 7/8; the
+reversal halving, which noise near the floor trips at random, gives most of that
+back (2/8), and telling noise from a kink is left to phase 4.
 
 ## The migration sweep (2026-10-12)
 

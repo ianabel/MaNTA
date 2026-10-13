@@ -157,8 +157,7 @@ that answer is worth. ``lastSteadyOutcome()`` says which exit it was.
 ``uncertainty``, one entry per objective; it is empty when the run had no
 ``AdjointProblem``, and it costs nothing in that case.
 
-**Under the default test the correction has little left to do; under**
-``Residual`` **it is what makes a loose solve worth having.** Measured on
+**Under the default test the correction has little left to do.** Measured on
 ``AdjointTestProblem`` by ``PseudoTransient``, against a reference solved to a
 ``SteadyStateStepTolerance`` of 1e-8, in physics sweeps (residuals plus
 Jacobians):
@@ -171,15 +170,15 @@ Jacobians):
      - raw error
      - corrected error
    * - ``NewtonStep``, 3.3
-     - 22
+     - 14
      - < 1e-15
      - < 1e-15
    * - ``NewtonStep``, 0.33 (default)
-     - 22
+     - 14
      - < 1e-15
      - < 1e-15
    * - ``NewtonStep``, 1e-4
-     - 24
+     - 14
      - < 1e-15
      - < 1e-15
    * - ``Residual``, 1e-2
@@ -193,13 +192,13 @@ Jacobians):
 
 ``NewtonStep`` bounds the same :math:`J^{-1}F` the correction applies, and a
 correction that passes its test leaves the next one quadratically smaller, so
-every threshold tried stops with :math:`G` at round-off. ``Residual`` at 1e-2
-plus the correction reaches 8e-8 in half the sweeps: each damped inner solve
-under ``NewtonStep`` takes a second Newton iteration before it can estimate a
-rate. By ``Newton``, which this problem does not need damped, both tests reach
-round-off in six sweeps. The bound holds throughout -- replaying every
-continuation step of a tight ``Residual`` solve, it is 1.04x the true error at
-its tightest and 2.3x at its loosest.
+every threshold tried stops with :math:`G` at round-off, for about what
+``Residual`` spends at 1e-3. Where the correction earns its place is a
+``Residual`` solve stopped loosely: at 1e-2 it recovers three and a half orders
+of :math:`G` from one Jacobian solve. By ``Newton`` both tests reach round-off
+in six sweeps. The bound holds throughout -- replaying every continuation step
+of a tight ``Residual`` solve, it is 1.04x the true error at its tightest and
+2.3x at its loosest.
 
 .. warning::
 

@@ -23,9 +23,9 @@ and TGYRO's iteration, at 56-84 and 32-391 visits per point against MaNTA
 Newton's 5-11.
 
 Where only the steady state is wanted, `SteadyStateSolver` chooses how it is
-reached, and the choice is worth an order of magnitude -- but only once
-`NewtonJacobianReuse` is out of the way, which on these fluxes matters more than
-the choice of method does. Visits per collocation point, measured 2026-10-12 by
+reached, and the choice is worth an order of magnitude. `NewtonJacobianReuse`
+matters only to `Newton`: a continuation step is a single Newton iteration with
+a Jacobian of its own, so only the final undamped solve can reuse one. Visits per collocation point, measured 2026-10-12 by
 `python-examples/paper-figures/steady_modes.py`, the steady methods stopping on
 the Newton correction at the default `SteadyStateStepTolerance = 0.33` and
 `TimeMarch` at `SteadyStateTolerance = 1e-2` -- see below for why those and not
@@ -33,21 +33,22 @@ something tighter -- with the relative L1 error each setting actually reached:
 
 | benchmark | `TimeMarch` | `PseudoTransient` 10 / 1 | `Newton` 10 / 1 |
 |---|---|---|---|
-| `park-convergence` | 120 | 9 / 11 | **4** / 5 |
-| `jardin-critical-gradient` | 183 | 110 / 15 | 132 / **11** |
-| `shestakov-nonlinear` | 257 | 346 / 35 | 368 / **29** |
+| `park-convergence` | 120 | 7 / 7 | **4** / 5 |
+| `jardin-critical-gradient` | 183 | 14 / 15 | 36 / **11** |
+| `shestakov-nonlinear` | 257 | 30 / 31 | 52 / **29** |
 | | | | |
 | `park` error | 7.6e-5 | 7.6e-5 / 7.6e-5 | 7.6e-5 / 7.6e-5 |
-| `jardin` error | 3.8e-16 | 8.1e-16 / 4.1e-16 | 8.1e-16 / 1.5e-8 |
-| `shestakov` error | 7.2e-3 | 7.2e-3 / 7.2e-3 | 7.2e-3 / 6.5e-3 |
+| `jardin` error | 3.8e-16 | 5.7e-10 / 4.2e-13 | 5.7e-10 / 1.5e-8 |
+| `shestakov` error | 7.2e-3 | 4.1e-3 / 5.6e-3 | 4.1e-3 / 6.5e-3 |
 
 **0.33 is the equivalent of the `1e-2` the `Residual` test would be run at, not
-a tighter setting.** Every entry stops within 6.4e-4 of the converged discrete
-solution and all but one within 2e-8, which is inside the `5e-3` argued for
-below; at 1.0, `shestakov` by `Newton` at a reuse of one stops 9.5e-3 from it,
-so nothing looser serves all three. Newton's method converges too fast near a
-solution for the test to stop anywhere in between, which is also why the
-`shestakov` errors all read the discretisation's 7.2e-3. The same table under
+a tighter setting.** Every entry stops within 4.1e-3 of the converged discrete
+solution, inside the `5e-3` argued for below, and on `park` and `jardin` within
+2e-8; at 1.0, `shestakov` by `Newton` at a reuse of one stops 9.5e-3 from it, so
+nothing looser serves all three. `shestakov` is the one that lands near the
+threshold, because Newton contracts there only linearly -- 2/3 per iteration,
+the triple root of its `q^3` flux at the axis -- so the test stops it about
+where it says. The same table under
 `SteadyStateTest = "Residual"` at `1e-2` (`MANTA_STEADY_TEST=Residual`) stops
 up to 1.7e-2 from that solution, for 6 / 5, 10 / 9 and 30 / 29 visits
 (`PseudoTransient` / `Newton`) at a reuse of one, and 484 / 509 on `shestakov`

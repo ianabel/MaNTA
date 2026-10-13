@@ -72,11 +72,11 @@ error is the same, 4-5e-6, whatever the method.
 
 | D | Newton | PseudoTransient | TimeMarch |
 |---|---|---|---|
-| 0.01 | 7 | 15 | 190 |
+| 0.01 | 7 | 13 | 190 |
 | 0.1 | 7 | 13 | 167 |
-| 1 | 7 | 11 | 154 |
-| 10 | 7 | 11 | 203 |
-| 100 | 7 | 11 | **fails** (`IDASolve could not complete`) |
+| 1 | 7 | 13 | 154 |
+| 10 | 7 | 9 | 203 |
+| 100 | 7 | 9 | **fails** (`IDASolve could not complete`) |
 
 Newton's cost does not see the disparity at all: it never resolves the
 transient. Time marching pays for both time scales, and at `D = 100`, where

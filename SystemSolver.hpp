@@ -414,6 +414,7 @@ class SystemSolver
             bool undamped = false;
             int nlsRetval = 0;
             double firstCorrection = std::numeric_limits<double>::quiet_NaN();
+            double relaxation = 1.0;     // NewtonStep: the fraction of a damped step's correction applied
             double correctionNorm = std::numeric_limits<double>::quiet_NaN();
             double correctionTest = std::numeric_limits<double>::quiet_NaN();
         };
@@ -1377,6 +1378,18 @@ class SystemSolver
         double nlsOldNorm = 0.0;
         double nlsPrevNorm = 0.0;
         bool nlsStrictDivergence = false;
+        // A damped continuation step is one Newton iteration, accepted as it
+        // stands (Kelley and Keyes's pseudo-transient continuation): the test
+        // is reserved for the undamped solve that ends the run.
+        bool nlsSingleIteration = false;
+        // The relaxation on a damped step, halved whenever its correction
+        // reverses the last one's (see REVERSAL_COSINE) and doubled back
+        // towards one otherwise; the last step's correction in the error
+        // weights, to compare against.
+        double nsLambda = 1.0;
+        int nsCalmSteps = 0; // damped steps since the last reversal
+        bool nsHaveDprev = false;
+        N_Vector nlsDprev = nullptr;
         double nlsFirstNorm = std::numeric_limits<double>::quiet_NaN();
         double nlsLastNorm = std::numeric_limits<double>::quiet_NaN();
         double nlsLastTest = std::numeric_limits<double>::quiet_NaN();
