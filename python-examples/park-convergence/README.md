@@ -72,7 +72,7 @@ last is
 | `SteadyStateSolver` | flux calls | visits/point | error |
 |---|---|---|---|
 | `TimeMarch` | 1520 | 120 | 7.5503e-05 |
-| `PseudoTransient` (default) | 96 | **11** | 7.5503e-05 |
+| `PseudoTransient` (default) | 64 | **7** | 7.5503e-05 |
 | `Newton` | 48 | **5** | 7.5503e-05 |
 
 Same answer to every digit, an order of magnitude apart in cost. `TimeMarch`

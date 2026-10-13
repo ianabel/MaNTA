@@ -118,9 +118,11 @@ const std::vector<Entry> &table()
          "so a healthy run uses ten or so and the default is a runaway backstop. Lower it to stop "
          "a solve early enough to inspect, then resume it. Minimum 1."},
         {"NewtonMaxIterations", {}, Type::UInt, Category::Solver, false, false, 20u,
-         "Newton iterations one KINSol call may take before handing back to the continuation "
-         "loop. Applies to PseudoTransient and Newton alike. KINSOL's own default is 200; 20 "
-         "is deliberate, because an inner solve only has to make progress. Minimum 1."},
+         "Newton iterations one inner solve may take before handing back to the continuation "
+         "loop. Under Residual it caps every KINSol call, PseudoTransient and Newton alike "
+         "(KINSOL's own default is 200; 20 is deliberate, because an inner solve only has to "
+         "make progress). Under NewtonStep it caps the undamped solves only: a damped step is "
+         "one iteration. Minimum 1."},
         {"NewtonJacobianReuse", {}, Type::UInt, Category::Solver, false, false, 1u,
          "Newton iterations that may share one Jacobian factorisation (KINSOL's msbset). "
          "1 (the default) is full Newton. Raising it trades assemblies for iterations, which "
@@ -136,8 +138,8 @@ const std::vector<Entry> &table()
         {"SteadyStateTest", {}, Type::String, Category::Solver, false, false, std::string{"NewtonStep"},
          "What decides a steady solve has converged: NewtonStep (default) stops when IDA's "
          "corrector test passes on the undamped Newton correction, ss*||J^-1 F|| in the run's "
-         "error weights at or below SteadyStateStepTolerance, and keeps any step whose inner "
-         "solve converged; Residual stops when the weighted residual norm falls below "
+         "error weights at or below SteadyStateStepTolerance, and takes each damped step as one "
+         "Newton iteration (Kelley-Keyes); Residual stops when the weighted residual norm falls below "
          "SteadyStateTolerance and keeps a continuation step only if that norm fell."},
         {"SteadyStateStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.33,
          "The NewtonStep test's threshold, in units of the run's error weights. 0.33 is IDA's "

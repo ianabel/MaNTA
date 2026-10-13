@@ -27,10 +27,10 @@ COLUMNS = (("TimeMarch", None),
 # 0.33, because that is the loosest one that buys an answer worth having: a
 # relative error of 5e-3 is already better than a plasma transport run can
 # expect, because the model producing sigma is not that good, and at 0.33 every
-# row stops within 6.4e-4 of the converged discrete solution. At 1.0 Shestakov
+# row stops within 4.1e-3 of the converged discrete solution. At 1.0 Shestakov
 # by Newton with a reuse of one stops 9.5e-3 from it. Newton's method converges
-# too fast for anything between to buy much: most rows reach round-off on the
-# iteration that passes. Set MANTA_STEP_TOL to measure a different regime.
+# too fast for anything between to buy much: most rows are far closer than the
+# threshold on the iteration that passes. Set MANTA_STEP_TOL to measure a different regime.
 STEP_TOLERANCE = float(os.environ.get("MANTA_STEP_TOL", "0.33"))
 
 # Time marching reads neither of those. It stops when ||dY/dt|| falls below

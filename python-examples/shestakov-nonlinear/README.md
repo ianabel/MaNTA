@@ -216,7 +216,7 @@ overrides it back to `TimeMarch` -- not for speed, but because this case exists 
 document a boundary, and time marching is the path that follows the physics into
 it. On cost, a steady solve wins here as it does elsewhere. Visits per point at 10
 cells, `k = 3` (`python-examples/paper-figures/steady_modes.py`): time marching
-257, pseudo-transient 35, Newton 29.
+257, pseudo-transient 31, Newton 29.
 
 That reverses what this section used to say -- pseudo-transient 705 and Newton 731
 against time marching's 283, 2.5x worse -- and the reversal is entirely

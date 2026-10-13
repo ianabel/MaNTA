@@ -545,8 +545,13 @@ correction, with `SUNNonlinSol_Newton` as the inner solver because KINSOL has no
 hook for a convergence test of the caller's own. Its budget is `1 + n` flux
 sweeps and `n` derivative sweeps over `n` Newton iterations in `Newton` mode,
 pinned by `a_newton_step_solve_spends_one_flux_and_one_derivative_sweep_per_iteration`;
-no merit evaluation exists to be duplicated. Everything it carries between steps
-(`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`) is a member, so a
+no merit evaluation exists to be duplicated. A damped continuation step is a
+single Newton iteration, accepted as it stands (Kelley and Keyes), halved when
+its correction reverses the last one -- the signature of a kink in the flux, which
+no `dt` damps because sigma and q are algebraic -- and only the undamped solve
+that ends the run is iterated and tested. Everything it carries between steps
+(`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`, `nsLambda`,
+`nsCalmSteps`, `nsHaveDprev` and the vector `nlsDprev`) is a member, so a
 sliced solve resumes bit for bit, and `a_sliced_newton_step_solve_resumes_exactly`
 pins that at zero tolerance. `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`
 is the design, including where the implementation departs from IDA and why;

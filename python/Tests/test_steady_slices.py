@@ -220,7 +220,8 @@ def test_a_failure_inside_a_slice_raises_rather_than_looping(tmp_path):
     would swallow the exception and spin forever. The timeout is the assertion
     that matters here as much as the exception type.
     """
-    runner = MaNTA.Runner(ExplodesPartWayThrough(400))
+    # About half way: the whole solve makes 306 flux calls.
+    runner = MaNTA.Runner(ExplodesPartWayThrough(150))
     runner.configure(slice_config(tmp_path))
 
     outcome = runner.start_steady(False)

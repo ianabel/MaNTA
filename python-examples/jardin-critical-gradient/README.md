@@ -84,11 +84,11 @@ analytically, so the `deriv pts` column above costs **no flux evaluations at
 all**. Supply that hook from `autodiff` or `jax.grad` and it stays free.
 
 **Where it loses is the same place as the other benchmark** — the `visits`
-column — and `SteadyStateSolver` closes some of it. Time marching needs 212
-visits per point here; pseudo-transient continuation needs **127** and Newton
-152, for the same round-off answer. Less of a win than Park's 120 → 5, because
-this problem's stiffness is real rather than an artefact of error control, but
-still most of a factor of two. See `docs/running.rst`.
+column — and `SteadyStateSolver` closes it. At 10 cells, `k = 3`, time marching
+needs 183 visits per point; pseudo-transient continuation needs **15** and
+Newton **11** (`../paper-figures/steady_modes.py`), within 2e-8 of the same
+answer: a factor of twelve to seventeen, against Park's 120 → 5. See
+`docs/running.rst`.
 
 ## The trap: a Neumann boundary fixes q, not the flux
 

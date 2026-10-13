@@ -1351,8 +1351,8 @@ BOOST_AUTO_TEST_CASE(the_SER_rate_and_floor_change_the_cost_and_not_the_answer)
                << plain << "; it is meant to be the cheaper of the two");
 
     // And a steeper rate is cheaper than plain SER for the same reason, by a
-    // different route: measured 1236 against 2448 here, where the floor gets it
-    // to 336. Both knobs reach the schedule, which is the claim.
+    // different route: measured 636 against 1236 here, where the floor gets it
+    // to 180. Both knobs reach the schedule, which is the claim.
     BOOST_TEST(steeper < plain,
                "SER rate 2 cost " << steeper << " evaluations against rate 1's " << plain
                << "; leaning harder on the residual ratio should grow dt faster");
@@ -1569,7 +1569,8 @@ BOOST_AUTO_TEST_CASE(newton_jacobian_reuse_trades_builds_for_solves)
     //
     // Nonlinear on purpose. On a linear problem each inner solve converges in one
     // iteration, builds equal solves at every setting, and this test would pass
-    // while measuring nothing.
+    // while measuring nothing. Newton mode, because a damped continuation step
+    // is a single iteration and has nothing to reuse a Jacobian across.
     auto run = [](long reuse)
     {
         const std::string stem = "lifecycle_reuse_" + std::to_string(reuse);
@@ -1577,8 +1578,11 @@ BOOST_AUTO_TEST_CASE(newton_jacobian_reuse_trades_builds_for_solves)
         NonlinearDiffusion problem;
         SystemSolver sys(grid, k, &problem);
         configure(sys, stem);
-        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyMode(SystemSolver::SteadyMode::Newton);
         sys.setSteadyStateTolerance(1e-10);
+        // Tight, so the answers can be compared at 1e-8: modified Newton
+        // converges linearly and stops near the threshold it is given.
+        sys.setSteadyStateStepTolerance(1e-4);
         sys.setNewtonJacobianReuse(reuse);
         {
             CapturedOutput quiet;

@@ -132,19 +132,19 @@ the +-20% noise at full strength, and no step damps it. With it:
 
 | Jacobian | rtol = atol | converged | box calls, median (max) | noise error n | p_H | p_e |
 |---|---|---|---|---|---|---|
-| control | 1e-2 | 7/8 | 11 (1555) | 5.4e-3 (2.6e-2) | 3.8e-2 (9.1e-2) | 1.4e-2 (2.2e-2) |
-| control | 3e-3 | 0/8 | 1536 (1546) | 2.6e-2 (2.9e-2) | 2.6e-2 (3.5e-2) | 7.0e-3 (1.0e-2) |
-| t3d, f = 0.5 | 1e-2 | 8/8 | 65 (197) | 1.6e-2 (1.7e-2) | 1.2e-2 (1.2e-2) | 1.5e-2 (2.8e-2) |
-| t3d, f = 0.5 | 3e-3 | 5/8 | 145 (6241) | 1.7e-2 (2.7e-2) | 1.3e-2 (2.2e-2) | 1.1e-2 (1.5e-2) |
+| control | 1e-2 | 8/8 | 14 (16) | 3.4e-3 (8.3e-3) | 5.2e-3 (5.7e-2) | 1.4e-2 (5.8e-2) |
+| control | 3e-3 | 2/8 | 221 (229) | 3.2e-4 (3.1e-3) | 6.3e-4 (7.3e-3) | 6.6e-4 (4.4e-3) |
+| t3d, f = 0.5 | 1e-2 | 8/8 | 57 (132) | 1.0e-2 (1.8e-2) | 1.1e-2 (1.4e-2) | 3.0e-2 (1.2e-1) |
+| t3d, f = 0.5 | 3e-3 | 8/8 | 67 (177) | 1.5e-2 (1.8e-2) | 1.2e-2 (1.5e-2) | 7.8e-3 (3.0e-2) |
 
-So at 1e-2 the noisy solve converges seven seeds of eight for a sixth of T3D's
-68 calls (exact derivatives), or every seed for about as many (T3D's own
-Jacobian), at errors of the order of T3D's below. At 3e-3 with exact
-derivatives the test asks for a correction below what the noise itself
-produces, and every seed runs out of steps -- the noise floor the design's
-phase 4 (a `NoiseLimited` outcome and iterate averaging) is for. T3D's Jacobian
-"converges" there in five seeds only because its corrections understate the
-distance, as the noiseless row at 3e-3 shows.
+So at 1e-2 the noisy solve converges every seed, for a fifth of T3D's 68
+calls (exact derivatives) or about as many (T3D's own Jacobian), at errors of
+the order of T3D's below. At 3e-3 with exact derivatives the test asks for a
+correction at the level the noise itself produces, and only two seeds of eight
+converge -- the noise floor the design's phase 4 (a `NoiseLimited` outcome
+and iterate averaging) is for. T3D's Jacobian "converges" there in every seed
+only because its corrections understate the distance, as the noiseless row at
+3e-3 shows.
 
 **The error the noise itself causes is much smaller.** Frozen -- the same draw on
 every call -- a +-20% particle-flux error moves n by 3-4e-3, and a constant
