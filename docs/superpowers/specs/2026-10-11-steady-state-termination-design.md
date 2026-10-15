@@ -4,7 +4,9 @@ Date: 2026-10-11
 Status: phases 0-3 built on branch `gp-toy-model`, and `NewtonStep` is the
 default; phase 4 not started. "As built" records where the implementation
 departs from this design and why, and "The migration sweep" what flipping the
-default changed.
+default changed. The two measurement drivers cited throughout --
+`python-examples/t3d-relu/` and `python-examples/toy-model/noise_study.py` --
+are still on that branch; only the solver change came to `main`.
 
 ## Why
 

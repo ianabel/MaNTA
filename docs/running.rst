@@ -761,10 +761,11 @@ Stopping on the Newton correction: ``SteadyStateTest``
 The residual norm above weighs every row of every channel in one sum. A channel
 whose rows are small at steady state — a density whose flux vanishes there —
 hardly enters it, so the test fires on the other channels and returns that one
-wherever continuation had got to. On T3D's ReLU benchmark
-(``python-examples/t3d-relu/``) a solve stopped at ``||F|| < 3`` leaves the
-density 2.6% out, and still 1.9% at ``||F|| = 0.03``. Under a noisy flux it is
-worse: ``||F||`` floors, and a tolerance below the floor rejects every step.
+wherever continuation had got to. On T3D's ReLU benchmark (the ``t3d-relu``
+example, which is on the ``gp-toy-model`` branch rather than on ``main``) a
+solve stopped at ``||F|| < 3`` leaves the density 2.6% out, and still 1.9% at
+``||F|| = 0.03``. Under a noisy flux it is worse: ``||F||`` floors, and a
+tolerance below the floor rejects every step.
 
 ``SteadyStateTest = "NewtonStep"`` stops the way IDA's corrector does. It tests
 the *undamped* Newton correction :math:`\delta = J_0^{-1} F` in IDA's
@@ -841,7 +842,7 @@ equal to the flux, so its correction carries the noise at full strength and no
 with exact derivatives, and eight of eight in 57 with T3D's finite-differenced
 Jacobian. A tolerance below
 the correction's noise floor cannot be met, and such a solve runs out of steps;
-``python-examples/t3d-relu/README.md`` has the numbers.
+that example's own README has the tables behind both paragraphs.
 
 The norm is a root mean square, IDA's, so a converged state can be several
 tolerance units out at its worst point — up to 2.4 on that benchmark — and
