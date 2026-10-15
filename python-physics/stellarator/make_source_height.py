@@ -48,12 +48,12 @@ nodes = np.linspace(0.2, 1.0, npoints + 1)
 # # %%
 solver_config = {
     "OutputFilename": "a",
-    "Polynomial_degree": degree,
-    "Grid_points": nodes,
-    "Grid_size": len(nodes) - 1,
+    "PolynomialDegree": degree,
+    "GridPoints": nodes,
+    "GridSize": len(nodes) - 1,
     "tau": tau,
-    "Lower_boundary": 0.0,
-    "Upper_boundary": rho_upper,
+    "LowerBoundary": 0.0,
+    "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
@@ -69,14 +69,14 @@ solver_config = {
 
 points = MaNTA.getNodes(
     nodes,
-    solver_config["Polynomial_degree"],
+    solver_config["PolynomialDegree"],
 )
 yancc_rho = points
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 eq = desc.io.load("eq_qa.h5")
-fig, ax = plot_boozer_surface(eq, fieldlines=8)
-plt.show()
+# fig, ax = plot_boozer_surface(eq, fieldlines=8)
+# plt.show()
 # eq = desc.examples.get("precise_QA")
 #
 # eq_name = "eq_amb3"
@@ -103,7 +103,7 @@ def make_test_state(rho, st):
     ).transpose()
 
     def Er(rho):
-        return -6.0 * rho
+        return (1 / (rho - 1.1) + 1.0 / 1.1) * -10 * (1.1 * (1 - 1.1))
 
     state = {
         "Variable": Variable,
@@ -115,7 +115,7 @@ def make_test_state(rho, st):
     return state
 
 
-def compute_physics(nt, nz, na, nx):
+def compute_physics(nt, nz, na, nx, Sn=0.0, Spi=0.0, Spe=0.0):
     print(f"running at resolution nt={nt}, nz={nz}, na={na}, nx={nx}")
     #
     # st_config = {
@@ -138,22 +138,25 @@ def compute_physics(nt, nz, na, nx):
     #
 
     st_config = {
-        "ParticleSourceCenter": 0.0,
-        "ParticleSourceHeight": 0.0,
+        "ParticleSourceCenter": 0.5,
+        "ParticleSourceHeight": Sn,
         "ParticleSourceWidth": 0.6,
         "NBICenter": 0.0,
-        "NBIPower": 0.0,
-        "NBIWidth": 0.4,
+        "NBIPower": Spi,
+        "NBIWidth": 0.15,
         "ECHCenter": 0.0,
-        "ECHPower": 0.0,
-        "ECHWidth": 0.4,
-        "EdgeTemperature": 0.2,
-        "EdgeDensity": 0.2,
-        "n0": 1.0,
-        "T0": 1.5,
-        "FusionFactor": 0.01,
+        "ECHPower": Spe,
+        "ECHWidth": 0.15,
+        "EdgeTemperature": 0.5,
+        "EdgeDensity": 0.4,
+        "ADCoefficient": 0.0,
+        "n0": 2.0,
+        "T0": 5.0,
+        "alpha": 6,
+        "FusionFactor": 0.0,
         "evolveDensity": True,
         "useBatching": False,
+        "nchunks": 1,
     }
 
     config = {
@@ -171,9 +174,30 @@ def compute_physics(nt, nz, na, nx):
 
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
     states = make_test_state(points, st)
+    st.layout = {}
+    st.layout[len(points)] = (1, *yancc_wrapper.get_fields())
 
     out = st.ComputePhysics(states, points, 0.0)
     return out, yancc_wrapper
+
+
+def run_edge():
+
+    res = (17, 33, 55, 7)
+    Sn0 = 0.02
+    Spi = 5.0
+    Spe = 8.76e-2
+    out, yancc_wrapper = compute_physics(*res, Sn=Sn0, Spi=Spi, Spe=Spe)
+
+    flux = out[0]
+    source = out[1]
+
+    int_source = []
+    for i in range(0, 3):
+        int_source.append(jnp.trapezoid(source[i], points))
+        print(
+            f"Integrated source: {int_source[i]}, flux at x=1: {-flux[i][-1]}, required uniform source: {-flux[i][-1] - int_source[i]}"
+        )
 
 
 def run():
@@ -230,5 +254,4 @@ def run():
     fig.savefig("required_source.png", dpi=300)
 
 
-run()
-plt.show()
+run_edge()

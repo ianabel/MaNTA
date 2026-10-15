@@ -114,6 +114,7 @@ class StellaratorState(eqx.Module):
                     params.config.EdgeDensity,
                     params.config.n0,
                     params.config.rhoUpper,
+                    params.config.alpha,
                 )
             )(x)
 
@@ -230,7 +231,6 @@ class StellaratorState(eqx.Module):
         )
 
     @staticmethod
-    def initial_profile(x, edge_value, peak_value, xr):
-        exponent = 2
+    def initial_profile(x, edge_value, peak_value, xr, exponent):
         a = 1.0 / xr**exponent
         return (peak_value - edge_value) * (1 - a * x**exponent) + edge_value

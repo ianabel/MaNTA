@@ -35,7 +35,7 @@ def _wrap_vmap_maybe_chunk(func, vmap_axes, chunk_size, nchunks, sharding):
             else:
                 return args
 
-        if chunk_size > 0:
+        if nchunks > 1:
             if len(args) != len(vmap_axes):
                 raise RuntimeError(
                     f"args and vmap_axes must be the same length; got len(args)={len(args)}, len(vmap_axes)={len(vmap_axes)}"

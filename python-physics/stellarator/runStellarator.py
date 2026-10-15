@@ -9,6 +9,7 @@ from objective import make_objective
 from yancc_wrapper import yancc_data
 import matplotlib.pyplot as plt
 
+from desc.profiles import SplineProfile
 import desc
 import jax.numpy as jnp
 import numpy as np
@@ -24,24 +25,24 @@ fname = "stellarator_opt_amb"
 
 fac = 1.0
 st_config = {
-    "ParticleSourceCenter": 0.0,
+    "ParticleSourceCenter": 0.5,
     "ParticleSourceHeight": fac * 2e-2,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 8.25,
+    "NBIPower": fac * 5.0,
     "NBIWidth": 0.25,
     "ECHCenter": 0.0,
     "ECHPower": fac * 8.76e-2,
     "ECHWidth": 0.26,
-    "EdgeTemperature": 0.2,
-    "EdgeDensity": 0.2,
-    "n0": 0.5,
+    "EdgeTemperature": 0.5,
+    "EdgeDensity": 0.4,
+    "n0": 1.0,
     "T0": 1.0,
-    "FusionFactor": 0.01,
+    "FusionFactor": 1e-4,
     "evolveDensity": True,
     "useBatching": True,
     "adaptiveGrid": False,
-    "nchunks": 3,
+    "nchunks": 2,
 }
 
 
@@ -51,12 +52,12 @@ atol = 1e-10
 npoints = 8
 degree = 3
 
-base = 1.5
-tau = 0.5
+base = 1.8
+tau = 0.2
 #
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
 
-nodes = np.concatenate(([0, 0.05, 0.1], nodes, [0.99, rho_upper]))
+nodes = np.concatenate(([0, 0.05, 0.1], nodes, [rho_upper]))
 solver_config = {
     "OutputFilename": fname,
     "PolynomialDegree": degree,
@@ -68,17 +69,21 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 0.01,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
-    "SteadyStateTolerance": 1e-5,
+    "SteadyStateTolerance": 1e-4,
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
-    "NewtonJacobianReuse": 4,
-    "tauScaling": "Diffusive",
-    "tauUpdate": "JacobianBuild",
-    "MaxRejectedSteps": 2,
+    # "SteadyStateSolver": "TimeMarch",
+    # "ForceConsistentIC": True,
+    "SteadyStateSolver": "PseudoTransient",
+    "SuppressAlgebraicError": True,
+    "NewtonJacobianReuse": 5,
+    # "tauScaling": "Diffusive",
+    # "tauUpdate": "Residual",
+    "MaxRejectedSteps": 10,
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
@@ -100,16 +105,40 @@ def cheb_nodes(nCells):
     return nodes
 
 
-yancc_rho = cheb_nodes(100)
+points = MaNTA.getNodes(
+    solver_config["GridPoints"],
+    solver_config["PolynomialDegree"],
+)
 
+
+yancc_rho = jnp.array(points)
 yancc_ntheta = 17
 yancc_nzeta = 25
 
 yancc_res = {"na": 45, "nx": 7}
 
+
+pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
+
+
+eq_name = "precise_QH"
+eq = desc.examples.get(eq_name)
+eq = desc.compat.rescale(eq, L=("a", 1.7), B=("<B>", 5.86), copy=True, verbose=1)
+# # eq = desc.examples.get("W7-X")
+# # # # Reduce the number of modes (not sure if this is a good thing to do)
+# # #
+# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# # # #
+# # #
+# # # eq = desc.examples.get("reactor_QA")
+eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
+eq.solve(x_scale="ess")[0]
+
+
 # eqs = desc.io.load("eq_random0_all_equilibria.h5")
 # eq = eqs[-1].copy()
-eq = desc.examples.get("ARIES-CS")
+# eq = desc.examples.get("ARIES-CS")
 points = MaNTA.getNodes(
     solver_config["GridPoints"],
     solver_config["PolynomialDegree"],

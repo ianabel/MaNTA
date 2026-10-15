@@ -32,7 +32,7 @@ def load_and_rescale(name):
 
 # Magnetic field on a flux surface (here from a BOOZ_XFORM file).
 
-eqs_high = desc.io.load("../eq_amb5_all_equilibria.h5")
+eqs_high = desc.io.load("eq2_all_equilibria.h5")
 eqs_low = desc.io.load("eq_all_equilibria.h5")
 
 example_equilibria = ["precise_QH", "W7-X"]

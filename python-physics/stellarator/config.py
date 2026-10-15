@@ -19,6 +19,7 @@ class StellaratorConfig(eqx.Module):
     rhoUpper: float
     n0: float
     T0: float
+    alpha: float
     FusionFactor: float
     evolveDensity: bool
     useSharding: bool
@@ -44,6 +45,7 @@ class StellaratorConfig(eqx.Module):
         rhoUpper=1.0,
         T0=None,
         n0=None,
+        alpha=2.0,
         FusionFactor=1.0,
         evolveDensity=False,
         useSharding=True,
@@ -74,6 +76,7 @@ class StellaratorConfig(eqx.Module):
             self.n0 = self.EdgeDensity
         else:
             self.n0 = n0
+        self.alpha = alpha
         self.FusionFactor = FusionFactor
         self.evolveDensity = evolveDensity
         self.useSharding = useSharding

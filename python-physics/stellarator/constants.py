@@ -11,14 +11,14 @@ from ion_species import _IonSpecies
 
 class PlasmaConstants(eqx.Module):
     IonSpecies: _IonSpecies
-    n0: Float = eqx.field(static=True)
-    n0cgs: Float = eqx.field(static=True)
-    T0: Float = eqx.field(static=True)
-    T0eV: Float = eqx.field(static=True)
-    a: Float = eqx.field(static=True)
-    Z_eff: Float = eqx.field(static=True)
-    B0: Float = eqx.field(static=True)
-    cs0: Float = eqx.field(static=True)
+    n0: Float
+    n0cgs: Float
+    T0: Float
+    T0eV: Float
+    a: Float
+    Z_eff: Float
+    B0: Float
+    cs0: Float
     ElectronMass = 9.1094e-31
     ProtonMass = 1.6726e-27
     ElementaryCharge = 1.60217663e-19

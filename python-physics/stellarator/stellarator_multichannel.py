@@ -138,7 +138,9 @@ def MaNTA_Decorator(func):
 
     def wrapper(self, index, states, positions, *args):
         states_, empty = eqx.partition(State.from_manta(states), lambda x: x.size > 0)
-        positions_ = jnp.array(positions)
+        states_ = _pad_state(states_, self.pad_width)
+
+        positions_ = jnp.pad(jnp.array(positions), (0, self.pad_width), mode="edge")
 
         # Empty arrays causes issues with jax.lax.map, other operations, so we remove them and then add them back after
         def _wrap_shard(self, *args):
@@ -228,6 +230,23 @@ BATCHED = (
 )
 
 
+def _pad_state(tree, pad_width):
+    """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
+    dynamic, static = eqx.partition(tree, eqx.is_array)
+    padded = jax.tree_util.tree_map(
+        lambda leaf: jnp.pad(leaf, ((0, pad_width), (0, 0)), mode="edge"), dynamic
+    )
+    return eqx.combine(padded, static)
+
+
+def _unpad_state(tree, length):
+    """Slices all array leaves of a PyTree back to `length` along axis 0."""
+    dynamic, static = eqx.partition(tree, eqx.is_array)
+    return eqx.combine(
+        jax.tree_util.tree_map(lambda leaf: leaf[:length, ...], dynamic), static
+    )
+
+
 class StellaratorTransport(MaNTA.TransportSystem):
     regrid = MaNTA.Regrid.InPlace
 
@@ -259,6 +278,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
             solver_config["PolynomialDegree"],
         )
 
+        self.doTimeMarch = (
+            True if solver_config.get("SteadyStateSolver") == "TimeMarch" else False
+        )
+
         self.nchunks = self.params.config.nchunks
         self.max_batch = self.nchunks * self.batch_size
 
@@ -269,7 +292,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.points
         )
         self.vp_interp = interpax.Akima1DInterpolator(self.points, self.vp, check=False)
-        g = [self.StoredEnergy]
+        # g = [self.StoredEnergy]
+        g = [self.FusionPower]
 
         self.levels = []  # (cells, k) of each plan MaNTA handed over
         ### for adaptive grid problems ###
@@ -291,7 +315,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             solver_config.pop("GridPoints", None)
 
         self.adjointProblem = StellaratorAdjointProblem(
-            self, g, self.yancc_wrapper, len(self.points)
+            self, g, self.yancc_wrapper, self.points
         )
 
         self.runner = FFIRunner(
@@ -309,7 +333,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.runner.Run(tFinal)
             return 0
         else:
-            if self.params.config.adaptiveGrid:
+            if self.params.config.adaptiveGrid or self.doTimeMarch:
                 self.runner.Run_ss()
                 return 1
             else:
@@ -453,7 +477,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
             Ti = pi / n
         else:
             n = StellaratorState.initial_profile(
-                x, params.config.EdgeDensity, params.config.n0, params.config.rhoUpper
+                x,
+                params.config.EdgeDensity,
+                params.config.n0,
+                params.config.rhoUpper,
+                params.config.alpha,
             )
             Ti = 2.0 / 3.0 * state.Variable[0] / n
 
@@ -474,7 +502,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
             Ti = pi / n
         else:
             n = StellaratorState.initial_profile(
-                x, params.config.EdgeDensity, params.config.n0, params.config.rhoUpper
+                x,
+                params.config.EdgeDensity,
+                params.config.n0,
+                params.config.rhoUpper,
+                params.config.alpha,
             )
             Ti = 2.0 / 3.0 * state.Variable[0] / n
 
@@ -488,6 +520,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 self.params.config.EdgeDensity,
                 self.params.config.n0,
                 self.params.config.rhoUpper,
+                self.params.config.alpha,
             )
 
             return 1.5 * self.params.config.EdgeTemperature * n * self.vp_interp(x)
@@ -499,6 +532,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     self.params.config.EdgeDensity,
                     self.params.config.n0,
                     self.params.config.rhoUpper,
+                    self.params.config.alpha,
                 ) * self.vp_interp(x)
 
             def ui0(x):
@@ -511,6 +545,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                         self.params.config.EdgeTemperature,
                         self.params.config.T0,
                         self.params.config.rhoUpper,
+                        self.params.config.alpha,
                     )
                 )
 
@@ -524,6 +559,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                         self.params.config.EdgeTemperature,
                         self.params.config.T0,
                         self.params.config.rhoUpper,
+                        self.params.config.alpha,
                     )
                 )
 
@@ -587,23 +623,6 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         return [ddke_data[0], dsources, ddke_data[1]]
 
-    @staticmethod
-    def _pad_state(tree, pad_width):
-        """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
-        dynamic, static = eqx.partition(tree, eqx.is_array)
-        padded = jax.tree_util.tree_map(
-            lambda leaf: jnp.pad(leaf, ((0, pad_width), (0, 0)), mode="edge"), dynamic
-        )
-        return eqx.combine(padded, static)
-
-    @staticmethod
-    def _unpad_state(tree, length):
-        """Slices all array leaves of a PyTree back to `length` along axis 0."""
-        dynamic, static = eqx.partition(tree, eqx.is_array)
-        return eqx.combine(
-            jax.tree_util.tree_map(lambda leaf: leaf[:length, ...], dynamic), static
-        )
-
     def prepareEvaluation(self, plan):
         # called before physics are evaluated at a new set of points, generates field data at these points
         self.layout = {}
@@ -656,9 +675,19 @@ class StellaratorTransport(MaNTA.TransportSystem):
             )
 
         rounds, fields, vp, vpp = self.layout[m]
-        pad = rounds * self.batch_size - m
-        states = self._pad_state(_states, pad)
-        positions = jnp.pad(_positions, (0, pad), mode="edge")
+        if self.params.config.useBatching:
+            pad = rounds * self.batch_size - m
+            states = _pad_state(_states, pad)
+            positions = jnp.pad(_positions, (0, pad), mode="edge")
+        else:
+            rounds = 0
+            ndevices = len(jax.devices())
+            pad = 0
+            if m % ndevices != 0:
+                pad += ndevices - m % ndevices
+
+            states = _pad_state(_states, pad)
+            positions = jnp.pad(_positions, (0, pad), mode="edge")
 
         out = vmap_batched(
             func,
@@ -669,7 +698,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         )(states, positions, t, fields, vp, vpp, *args)
 
         self.rounds += rounds
-        return self._unpad_state(out, m)
+        return _unpad_state(out, m)
 
     """
     Create the adjoint problem associated with this transport system
@@ -690,19 +719,33 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         transport_system: StellaratorTransport,
         g,
         yancc_data: yancc_data,
-        npoints,
+        points,
     ):
         MaNTA.AdjointProblem.__init__(self)
 
         self.g = g
         self.ng = len(self.g)  # g functions passed in as an array
-        self.field, self.vp, self.vpp = yancc_data.get_fields()
         self.yancc_wrapper = yancc_data
         boundary_field = yancc_data.fields_unstacked[-1]
 
         flat, _ = jax.flatten_util.ravel_pytree(
             (eqx.filter(boundary_field, eqx.is_array))
         )
+
+        ###
+
+        # perform padding of arrays
+        npoints = len(points)
+
+        self.batch_size = transport_system.batch_size
+        rounds = -(-npoints // self.batch_size)
+        self.pad_width = rounds * self.batch_size - npoints
+        self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields_at_rho(
+            jnp.pad(points, (0, self.pad_width), mode="edge")
+        )
+
+        ###
+
         self.npoints = npoints
         # add 1 for vp and 1 for vpp, which we also take gradients with respect to
         # -2 is for NFP, B0 which we don't get gradients of
@@ -712,7 +755,6 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         self.spatialParameters = True
         self.compute_sources = transport_system.compute_sources
-        self.batch_size = transport_system.batch_size
 
         self.params = transport_system.params
         if self.params.config.evolveDensity:
@@ -727,8 +769,11 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
     @MaNTA_Decorator
     def gFn(self, i, states, positions):
-        out = jax.vmap(self.g[i], in_axes=(0, State.vmap_axes(), 0, None))(
-            self.field, states, positions, self.params
+        out = _unpad_state(
+            jax.vmap(self.g[i], in_axes=(0, State.vmap_axes(), 0, None))(
+                self.field, states, positions, self.params
+            ),
+            self.npoints,
         )
         return out
 
@@ -738,7 +783,11 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         fgrad = eqx.filter_grad(self.g[i])
         fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=(0, State.vmap_axes(), 0, None))
         grad_out = fgrad_vmap(self.field, states, positions, self.params)
-        grad_unstack = tree_unstack(grad_out)
+
+        grad_out = eqx.tree_at(lambda f: f.B0, grad_out, [])
+        grad_out = eqx.tree_at(lambda f: f.NFP, grad_out, [])
+
+        grad_unstack = tree_unstack(grad_out)[: self.npoints]
         grad_unraveled = jnp.stack(
             [jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0
         )
@@ -751,12 +800,16 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         out = jax.vmap(
             jax.grad(self.g[i], argnums=1), in_axes=(0, State.vmap_axes(), 0, None)
         )(self.field, states, positions, self.params)
-        return out
+        return _unpad_state(out, self.npoints)
 
     @Physics_Decorator
-    def ComputePhysicsDerivatives(self, states, positions):
+    def ComputePhysicsDerivatives(self, _states, _positions):
 
-        nchunks = 0 if self.batch_size == 0 else int(self.npoints / self.batch_size)
+        positions = jnp.pad(_positions, (0, self.pad_width), mode="edge")
+        states = _pad_state(_states, self.pad_width)
+
+        rounds = -(-self.npoints // self.batch_size)
+        nchunks = 0 if self.batch_size == 0 else rounds
         ddke_data = vmap_batched(
             dke_field_jac,
             vmap_axes=vmap_axes_wfield,
@@ -790,7 +843,8 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         )(tree_in, states, positions)
 
         def unravel(grad_out):
-            grad_unstack = tree_unstack(grad_out)
+
+            grad_unstack = tree_unstack(grad_out)[: self.npoints]
             grad_unraveled = jnp.stack(
                 [jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0
             )

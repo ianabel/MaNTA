@@ -41,7 +41,7 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-eq_name = "eq2"
+eq_name = "eq3"
 fname = "stellarator_opt" + eq_name
 
 #
@@ -66,23 +66,24 @@ fname = "stellarator_opt" + eq_name
 
 fac = 1.0
 st_config = {
-    "ParticleSourceCenter": 0.0,
+    "ParticleSourceCenter": 0.5,
     "ParticleSourceHeight": fac * 0.02,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 10.0,
+    "NBIPower": fac * 12.0,
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
     "ECHPower": fac * 8.76e-2,
     "ECHWidth": 0.15,
-    "EdgeTemperature": 0.4,
-    "EdgeDensity": 0.3,
+    "EdgeTemperature": 0.5,
+    "EdgeDensity": 0.2,
     "ADCoefficient": 0.0,
-    "n0": 1.0,
-    "T0": 2.0,
+    "n0": 0.5,
+    "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
+    "nchunks": 3,
 }
 
 
@@ -90,8 +91,8 @@ rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-10
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
-npoints = 8
-degree = 3
+npoints = 9
+degree = 4
 # base = 1.5
 # tau = 0.5
 #
@@ -128,9 +129,10 @@ solver_config = {
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
     "SteadyStateStepDiagnostics": True,
-    "tauScaling": "Diffusive",
-    "tauUpdate": "ContinuationStep",
-    "NewtonJacobianReuse": 4,
+    # "tauScaling": "Diffusive",
+    # "tauUpdate": "ContinuationStep",
+    "NewtonJacobianReuse": 5,
+    "NewtonMaxIterations": 25,
     "MaxRejectedSteps": 10,
     "restart": False,
     "zeroFlux": True,
@@ -181,14 +183,36 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
 # )
 # #
-# # # # #
-# # # eq.pressure = desc_pressure
+# # # # # #
+# # # # eq.pressure = desc_pressure
 # eq = eq.solve(x_scale="ess")[0]
 # eqs = EquilibriaFamily(eq)
-# # # desc_pressure = eq.get_profile('p')
-
+# # desc_pressure = eq.get_profile('p')
+#
+# surf = FourierRZToroidalSurface.from_qp_model(
+#     major_radius=1,
+#     aspect_ratio=8,
+#     elongation=3,
+#     mirror_ratio=0.2,
+#     torsion=0.1,
+#     NFP=2,
+#     sym=True,
+# )
+# # this value of Psi gives an average |B| on axis of about 1 T
+# # the Equilibrium class defaults to vacuum pressure and current profiles
+# eq = Equilibrium(Psi=3e-2, M=4, N=4, surface=surf, pressure=desc_pressure)
+#
+# # eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# eq = desc.compat.rescale(
+#     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+# )
+#
+# eq = eq.solve(x_scale="ess")[0]
+# eqs = EquilibriaFamily(eq)
+#
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq = eqs[-1].copy()
+# eq.pressure = desc_pressure
 
 eq_init = eq.copy()
 
@@ -204,7 +228,7 @@ def cheb_nodes(nCells):
 
 
 yancc_wrapper = yancc_data.from_eq(
-    cheb_nodes(100), eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    yancc_rho, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 ## %%
 
@@ -262,8 +286,11 @@ solver_config = {
     "MinStepSize": 1e-10,
     "WriteDatFile": True,
     "NewtonJacobianReuse": 4,
+    "NewtonMaxIterations": 15,
     "restart": True,
     "zeroFlux": True,
+    # "tauScaling": "Constant",
+    # "tauUpdate": "ContinuationStep",
     "SteadyStateTolerance": 1e-4,
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
@@ -307,21 +334,13 @@ config = {
 # eq_self_consistent = eq2.copy()
 # #
 # ax.legend()
-# fig.savefig("initial_self_consistent_pressure.png")
-# # # %%
+# # fig.savefig("initial_self_consistent_pressure.png")
+# # # # %%
+# # #
+# # plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
 # #
-# plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
 # # plt.show()
 # eq = eq2.copy()
-#
-# # %%
-# # %%
-#
-#
-#
-# %%
-
-
 # %%
 
 
@@ -370,6 +389,7 @@ def objective_from_user_fun(grid, data):
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
     g, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
+
     print("------------ STORED ENERGY ----------------")
     print(g)
     print("-------------------------------------------")
@@ -424,7 +444,7 @@ obj_mirror_ratio = ObjectiveFromUser(
     fun=fun_mirror_ratio,
     thing=eq,
     grid=yancc_desc_grid,
-    bounds=(0.0, 0.15),
+    bounds=(0.0, 0.2),
     weight=10.0,
     name="my mirror ratio",
 )
@@ -439,11 +459,11 @@ obj_mirror_ratio = ObjectiveFromUser(
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-5)
 
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 2e-6)
-stored_energy_weight = 5.0
+stored_energy_weight = 20.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 40
+max_it = 80
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -453,9 +473,9 @@ eqfam = EquilibriaFamily(eq)
 # print("====================================")
 #
 objectives = [
-    # AspectRatio(eq=eq, target=6, weight=10),
+    AspectRatio(eq=eq, bounds=(0, 8), weight=10.0),
     obj_mirror_ratio,
-    Volume(eq=eq, target=V0, weight=10.0),
+    Volume(eq=eq, target=V0, weight=100.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
     ObjectiveFromUser(
         objective_from_user_fun,
@@ -481,13 +501,24 @@ R_modes = np.vstack(
 )
 Z_modes = eq.surface.Z_basis.modes[np.max(np.abs(eq.surface.Z_basis.modes), 1) > k, :]
 
+#
+# def mirrorRatio(params):
+#     """Custom linear function to constrain the mirror ratio on axis."""
+#     B_lm = params["B_lm"]
+#     f = jnp.array(
+#         [
+#             B_lm[0] -Bavg * (1 - delta),  # B_min on axis
+#             Bavg * (1 + delta) - B_lm[-1],  # B_max on axis
+#         ]
+#     )
+#     return f
 # %%
 constraints = [
     ForceBalance(eq=eq),  # J x B - grad(p) = 0
     # fix zero current, eventually should use real bootstrap
     FixCurrent(eq=eq),
-    FixBoundaryR(eq=eqfam[-1], modes=R_modes),
-    FixBoundaryZ(eq=eqfam[-1], modes=Z_modes),
+    # FixBoundaryR(eq=eqfam[-1], modes=R_modes),
+    # FixBoundaryZ(eq=eqfam[-1], modes=Z_modes),
     FixPsi(eq=eq),  # fix total magnetic flux
     LinearObjectiveFromUser(
         pressure_constraint_fun, eq, target=pressure_constraint_target
@@ -503,16 +534,16 @@ eq, info_out = eq.optimize(
     ftol=1e-4,  # stopping tolerance on the function value
     xtol=1e-6,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
-    # options={
-    #     "initial_trust_radius": 1e-2,
-    #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
-    #     #     # "solve_options": {
-    #     #     #     "ftol": 5e-3,
-    #     #     #     "xtol": 1e-6,
-    #     #     #     "gtol": 1e-6,
-    #     #     #     "verbose": 3,
-    #     # },  # for equilibrium subproblem
-    # },
+    options={
+        "initial_trust_radius": 0.1,
+        # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
+        #     # "solve_options": {
+        #     #     "ftol": 5e-3,
+        #     #     "xtol": 1e-6,
+        #     #     "gtol": 1e-6,
+        #     #     "verbose": 3,
+        # },  # for equilibrium subproblem
+    },
     verbose=3,
     copy=True,
 )
@@ -563,9 +594,9 @@ eqs.save(eq_name + "_all_equilibria.h5")
 
 # %%
 
-fig, ax = plot_comparison(eqs=[eqs[-1], eq], labels=["Initial", "optimized"])
+fig, ax = plot_comparison(eqs=[eqs[0], eq], labels=["Initial", "optimized"])
 fig.savefig("figs/" + eq_name + "final_comparison.png")
-fig, ax = plot_boundaries(eqs=[eqs[-1], eq], labels=["Initial", "optimized"])
+fig, ax = plot_boundaries(eqs=[eqs[0], eq], labels=["Initial", "optimized"])
 fig.savefig("figs/" + eq_name + "final_comparison_boundary.png")
 # %%
 # eq = desc.io.load("../python/eq2optimized_equilibrium.h5")#desc.examples.get("ESTELL")

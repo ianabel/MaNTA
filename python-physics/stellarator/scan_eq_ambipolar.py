@@ -34,27 +34,28 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-fac = 1.0
-st_config = {
-    "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 0.02,
-    "ParticleSourceWidth": 0.6,
-    "NBICenter": 0.0,
-    "NBIPower": fac * 8.0,
-    "NBIWidth": 0.15,
-    "ECHCenter": 0.0,
-    "ECHPower": fac * 8.76e-2,
-    "ECHWidth": 0.15,
-    "EdgeTemperature": 0.3,
-    "EdgeDensity": 0.2,
-    "ADCoefficient": 1e-4,
-    "n0": 1.0,
-    "T0": 2.0,
-    "FusionFactor": 0.01,
-    "evolveDensity": True,
-    "useBatching": True,
-    "nchunks": 3,
-}
+
+def make_config(fac):
+    return {
+        "ParticleSourceCenter": 0.0,
+        "ParticleSourceHeight": 0.02,
+        "ParticleSourceWidth": 0.6,
+        "NBICenter": 0.0,
+        "NBIPower": fac * 2.0,
+        "NBIWidth": 0.15,
+        "ECHCenter": 0.0,
+        "ECHPower": fac * 8.76e-2,
+        "ECHWidth": 0.15,
+        "EdgeTemperature": 0.4,
+        "EdgeDensity": 0.3,
+        "ADCoefficient": 0.0,
+        "n0": 0.5,
+        "T0": 1.0,
+        "FusionFactor": 0.01,
+        "evolveDensity": True,
+        "useBatching": True,
+        "nchunks": 3,
+    }
 
 
 eq_name = "precise_QH"
@@ -68,7 +69,7 @@ degree = 4
 # base = 1.5
 # tau = 0.5
 #
-base = 2.0
+base = 1.8
 tau = 0.5
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
@@ -78,7 +79,7 @@ tau = 0.5
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
 
-nodes = np.concatenate(([0, 0.05, 0.25], nodes, [rho_upper]))
+nodes = np.concatenate(([0, 0.1, 0.2], nodes, [rho_upper]))
 
 # nodes = np
 print(nodes)
@@ -93,8 +94,8 @@ solver_config = {
     "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
-    "delta_t": 1.0,
-    "initialTimestep": 0.01,
+    "delta_t": 10.0,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 5e-5,
     "AggressiveTimesteps": False,
@@ -112,6 +113,7 @@ solver_config = {
     "PseudoTransientSERFloor": 2.0,
 }
 
+st_config = make_config(1.0)
 
 config = {
     "Stellarator": st_config,
@@ -136,14 +138,15 @@ yancc_res = {"na": 45, "nx": 7}
 pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 eq = desc.examples.get(eq_name)
-eq = desc.compat.rescale(eq, L=("a", 1.7), B=("<B>", 5.86), copy=True, verbose=1)
+# eq = desc.compat.rescale(eq, L=("a", 1.7), B=("<B>", 5.86), copy=True, verbose=1)
 # # eq = desc.examples.get("W7-X")
 # # # # Reduce the number of modes (not sure if this is a good thing to do)
 # # #
-# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
 # # #
 # #
 # # eq = desc.examples.get("reactor_QA")
+eq.pressure = desc_pressure
 eq.change_resolution(M=4, N=4, L_grid=len(points), M_grid=8, N_grid=8)
 eq.solve(x_scale="ess")[0]
 # eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
@@ -154,22 +157,77 @@ eq.solve(x_scale="ess")[0]
 eq_init = eq.copy()
 
 
-def cheb_nodes(nCells):
-    nodes = np.ndarray((nCells + 1,))
-    for i in range(0, len(nodes)):
-        nodes[nCells - i] = 0.5 * (1 + np.cos(i * np.pi / nCells))
-    return nodes
-
-
+# def cheb_nodes(nCells):
+#     nodes = np.ndarray((nCells + 1,))
+#     for i in range(0, len(nodes)):
+#         nodes[nCells - i] = 0.5 * (1 + np.cos(i * np.pi / nCells))
+#     return nodes
+#
+#
 yancc_wrapper = yancc_data.from_eq(
-    cheb_nodes(100), eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    yancc_rho, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 ## %%
 
 
 # with jax.log_compiles(True):
+
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
 st.run()
+# for fac in jnp.linspace(0.01, 1.0, 5):
+#
+#     pi = st.getPressure()
+#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+#     eq.pressure = SplineProfile(pi_manta, pressure_rho)
+#     # fit the current profile to a power series, with c_0=c_1=0
+#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+#     # re-solve the equilibrium
+#     eq, _ = eq.solve(objective="force", optimizer="lsq-exact", verbose=3)
+#
+#     solver_config = {
+#         "OutputFilename": "stellarator_" + eq_name,
+#         "PolynomialDegree": degree,
+#         "GridPoints": nodes,
+#         "GridSize": len(nodes) - 1,
+#         "tau": tau,
+#         "LowerBoundary": 0.0,
+#         "UpperBoundary": rho_upper,
+#         "Relative_tolerance": rtol,
+#         "Absolute_tolerance": [atol],
+#         "delta_t": 1.0,
+#         "initialTimestep": 1e-2,
+#         "MinStepSize": 1e-9,
+#         "SteadyStateTolerance": 1e-4,
+#         "AggressiveTimesteps": False,
+#         "WriteDatFile": True,
+#         "restart": True,
+#         "zeroFlux": True,
+#         "solveAdjoint": False,
+#         "tauScaling": "Diffusive",
+#         "tauUpdate": "ContinuationStep",
+#         "SteadyStateSolver": "PseudoTransient",
+#         "NewtonJacobianReuse": 4,
+#         "SteadyStateDiagnostics": True,
+#         "SteadyStateStepDiagnostics": True,
+#         "PseudoTransientSERRate": 1.0,
+#         "PseudoTransientSERFloor": 2.0,
+#     }
+#
+#     st_config = make_config(fac)
+#
+#     config = {
+#         "Stellarator": st_config,
+#         "Solver": solver_config,
+#     }
+#     yancc_wrapper = yancc_data.from_eq(
+#         yancc_rho, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+#     )
+#     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+#     st.run()
+#
+
+
 #
 
 
@@ -403,9 +461,10 @@ for a in ax:
 fig.tight_layout()
 fig.set_figwidth(5.0)
 fig.set_figheight(3.0)
-fig.savefig(f"figs/sweep_G_{eq_name}_{M}_{N}.eps", dpi=500)
+fig.savefig(f"figs/sweep_G_{eq_name}_{M}_{N}.pdf", dpi=500)
 eqs.save("sweep.h5")
 plt.figure()
 fig, ax = plot_comparison(eqs=eqs[0:-1:4])
-fig.savefig(f"figs/eqs_{eq_name}_{M}_{N}.png")
+fig.savefig(f"figs/eqs_{eq_name}_{M}_{N}.pdf")
 print("done")
+plt.show()

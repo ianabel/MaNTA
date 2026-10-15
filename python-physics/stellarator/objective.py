@@ -86,7 +86,7 @@ def make_objective(config, yancc_res=None):
     @_objective_base.def_jvp
     def _objective_base_jvp(primals, tangents):
         (fields, Vp, Vpp), grid = primals
-        # (field_dot, Vp_dot, Vpp_dot), _= tangents
+
         v, _ = tangents
 
         # compute

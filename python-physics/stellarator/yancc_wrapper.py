@@ -122,7 +122,6 @@ class yancc_data(eqx.Module):
         cell_boundaries=None,
     ):
 
-        print("Initializing yancc wrapper")
         if eq is None:
             print("No equilibrium passed, using W7-X example")
             eq = desc.examples.get("W7-X")
