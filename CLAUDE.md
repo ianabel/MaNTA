@@ -534,6 +534,30 @@ bill of a case whose flux is expensive:
   for itself. Never consulted at finite `dt`, where the damped residual is a
   different function and any small enough `dt` makes it small.
 
+**All of the above is the `SteadyStateTest = "Residual"` path; the default,
+`"NewtonStep"`, is a second loop** (`solveSteadyStateNewtonStep`, `SteadyState.cpp`)
+that `solveSteadyState` dispatches to before touching KINSOL. A test of the KINSOL
+path's mechanics -- its sweep budget, its counters, the ||F||-based rejection --
+must therefore name `Residual`, as the ones in `SolverLifecycleTests.cpp` do.
+It is IDA's corrector test,
+`ss * ||J0^-1 F||_WRMS(ewt) <= SteadyStateStepTolerance`, on the undamped Newton
+correction, with `SUNNonlinSol_Newton` as the inner solver because KINSOL has no
+hook for a convergence test of the caller's own. Its budget is `1 + n` flux
+sweeps and `n` derivative sweeps over `n` Newton iterations in `Newton` mode,
+pinned by `a_newton_step_solve_spends_one_flux_and_one_derivative_sweep_per_iteration`;
+no merit evaluation exists to be duplicated. A damped continuation step is a
+single Newton iteration, accepted as it stands (Kelley and Keyes), halved when
+its correction reverses the last one -- the signature of a kink in the flux, which
+no `dt` damps because sigma and q are algebraic -- and only the undamped solve
+that ends the run is iterated and tested. Everything it carries between steps
+(`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`, `nsLambda`,
+`nsCalmSteps`, `nsHaveDprev` and the vector `nlsDprev`) is a member, so a
+sliced solve resumes bit for bit, and `a_sliced_newton_step_solve_resumes_exactly`
+pins that at zero tolerance. `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`
+is the design, including where the implementation departs from IDA and why;
+`docs/superpowers/specs/2026-10-12-kinsol-convergence-test-hook-design.md` is the
+upstream KINSOL change that would let this path return to KINSOL.
+
 **The residual at the initial state is not one of the removable ones**, despite
 duplicating KINSOL's first evaluation: it is also the already-converged test,
 the early return that makes a warm start cost one sweep rather than a Newton

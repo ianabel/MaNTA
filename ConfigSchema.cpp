@@ -29,7 +29,8 @@ const std::vector<Entry> &table()
         {"GradingCells", {}, Type::Int, Category::Solver, false, false, 0,
          "Cells in each graded layer; at least 2, and few enough to leave one cell outside "
          "them. 0 means a third of GridSize per layer when grading both ends, half when "
-         "grading one."},
+         "grading one, and never fewer than 2 -- worked out at each GridLadder rung's own "
+         "count."},
         {"GradingEnd", {}, Type::String, Category::Solver, false, false, std::string{"Both"},
          "Which end GradedGridBoundary refines into: \"Both\" (default), \"Lower\" or "
          "\"Upper\"."},
@@ -44,7 +45,9 @@ const std::vector<Entry> &table()
         {"PolynomialDegree", {"Polynomial_degree"}, Type::UInt, Category::Solver, true, true, 1u,
          "Degree k of the nodal basis in each cell."},
         {"GridSize", {"Grid_size"}, Type::Int, Category::Solver, false, false, 0,
-         "Number of cells; required unless GridPoints is given or the run is a restart."},
+         "Number of cells; required unless GridPoints is given or the run is a restart. "
+         "On a restart, giving neither keeps the restart file's mesh as it stands, and "
+         "giving it remeshes, taking any end of the domain not given from the file."},
         {"GridPoints", {"Grid_points"}, Type::DoubleList, Category::Solver, false, false, std::vector<double>{},
          "Explicit cell boundaries, as an array. Supersedes LowerBoundary/UpperBoundary/"
          "GridSize and every grading key, and is the way to supply a mesh no rule here "
@@ -90,9 +93,9 @@ const std::vector<Entry> &table()
         {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
          "Build the adjoint problem and solve for dG/dp after the integration."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
-         "Stop once the solution stops changing by this much; presence arms it. "
-         "Compared against dy/dt under TimeMarch, and against a mesh-independent "
-         "weighted norm of the steady residual otherwise."},
+         "Arms steady-state termination by its presence. Its value is compared against dy/dt "
+         "under TimeMarch, and against a mesh-independent weighted norm of the steady residual "
+         "under SteadyStateTest = Residual; the default NewtonStep test does not read it."},
         {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
          "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
          "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},
@@ -115,9 +118,11 @@ const std::vector<Entry> &table()
          "so a healthy run uses ten or so and the default is a runaway backstop. Lower it to stop "
          "a solve early enough to inspect, then resume it. Minimum 1."},
         {"NewtonMaxIterations", {}, Type::UInt, Category::Solver, false, false, 20u,
-         "Newton iterations one KINSol call may take before handing back to the continuation "
-         "loop. Applies to PseudoTransient and Newton alike. KINSOL's own default is 200; 20 "
-         "is deliberate, because an inner solve only has to make progress. Minimum 1."},
+         "Newton iterations one inner solve may take before handing back to the continuation "
+         "loop. Under Residual it caps every KINSol call, PseudoTransient and Newton alike "
+         "(KINSOL's own default is 200; 20 is deliberate, because an inner solve only has to "
+         "make progress). Under NewtonStep it caps the undamped solves only: a damped step is "
+         "one iteration. Minimum 1."},
         {"NewtonJacobianReuse", {}, Type::UInt, Category::Solver, false, false, 1u,
          "Newton iterations that may share one Jacobian factorisation (KINSOL's msbset). "
          "1 (the default) is full Newton. Raising it trades assemblies for iterations, which "
@@ -130,6 +135,19 @@ const std::vector<Entry> &table()
          "KINSOL's scaling vectors: Unit (default, what this has always used) or ErrorWeights, "
          "which fills them from the same 1/(rtol|y|+atol) weights IDA's WRMS norm uses. Unit "
          "scaling makes the convergence test dimensional, so it favours the largest variable."},
+        {"SteadyStateTest", {}, Type::String, Category::Solver, false, false, std::string{"NewtonStep"},
+         "What decides a steady solve has converged: NewtonStep (default) stops when IDA's "
+         "corrector test passes on the undamped Newton correction, ss*||J^-1 F|| in the run's "
+         "error weights at or below SteadyStateStepTolerance, and takes each damped step as one "
+         "Newton iteration (Kelley-Keyes); Residual stops when the weighted residual norm falls below "
+         "SteadyStateTolerance and keeps a continuation step only if that norm fell."},
+        {"SteadyStateStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.33,
+         "The NewtonStep test's threshold, in units of the run's error weights. 0.33 is IDA's "
+         "corrector constant; IDACalcIC uses 0.0033. Must be positive."},
+        {"SteadyStateMeasureCorrection", {}, Type::Bool, Category::Solver, false, false, false,
+         "Under SteadyStateTest = Residual, also measure the undamped Newton correction "
+         "||J^-1 F|| in the error weights at the end of each steady solve, for comparing the "
+         "two tests. One residual, one Jacobian build and one solve per solve."},
         {"SteadyStateDiagnostics", {}, Type::Bool, Category::Solver, false, false, false,
          "Report the work a steady solve did: continuation steps, Newton iterations, "
          "residual evaluations, Jacobian builds and solves. Printed on failure too."},
@@ -150,7 +168,18 @@ const std::vector<Entry> &table()
          "warm-starting the next. A route to the configured resolution, not a change of it."},
         {"GridLadder", {}, Type::UIntList, Category::Solver, false, false, std::vector<unsigned>{},
          "Intermediate cell counts to go with DegreeLadder; same length if both are given. "
-         "Either alone holds the other at its configured value."},
+         "Either alone holds the other at its configured value. Each rung's mesh is "
+         "GridSize's rule at that count, graded like the final one under "
+         "GradedGridBoundary. GridPoints and a restart file's mesh are not rules, so "
+         "they need GridLadderRescaling."},
+        {"GridLadderRescaling", {}, Type::String, Category::Solver, false, false, std::string{"None"},
+         "How a GridLadder rescales a mesh given as boundaries -- GridPoints, or a restart "
+         "file's mesh kept as it stands -- to another cell count. \"None\" refuses the "
+         "ladder. \"Map\" reads the boundaries as a piecewise-linear map from a uniform "
+         "mesh and samples it at the rung's count: nested when the count divides the "
+         "final one, and otherwise keeping the cell density but moving every boundary, "
+         "including any on a coefficient jump. Not read for a GridSize mesh, which "
+         "rescales by its own rule."},
         {"DegreeAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Choose the global polynomial degree by solving, estimating the error from "
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
@@ -200,6 +229,13 @@ const std::vector<Entry> &table()
          "grades it, as a ratio of decay rates. Must exceed 1. Measured on three "
          "problems at k >= 3: 3.09-6.80 for the one that wants grading against "
          "0.97-1.19 for the two that do not."},
+        {"MeshAdaptationNeighbourMargin", {}, Type::Double, Category::Solver, false, false, 0.2,
+         "How much rougher than its wider neighbour a graded end must read before "
+         "MeshAdaptation grades it further: neighbour / end > 1 + margin. A smooth end "
+         "reads smoother than a wider neighbour (ratio below 1) and a singular one rougher, "
+         "by a factor set by the grading ratio alone. Measured: at most 1.00 for smooth "
+         "ends and at least 1.36 for singular ones, so it must stay below 0.36. See "
+         "docs/adaptivity.rst."},
         {"MeshAdaptationAttempts", {}, Type::UInt, Category::Solver, false, false, 4u,
          "How many graded meshes MeshAdaptation may try before giving up and staying "
          "uniform. A grading that fails to solve is a rejected step: the ratio is "

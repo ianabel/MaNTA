@@ -72,8 +72,8 @@ last is
 | `SteadyStateSolver` | flux calls | visits/point | error |
 |---|---|---|---|
 | `TimeMarch` | 1520 | 120 | 7.5503e-05 |
-| `PseudoTransient` (default) | 128 | **10** | 7.5503e-05 |
-| `Newton` | 64 | **5** | 7.5503e-05 |
+| `PseudoTransient` (default) | 64 | **7** | 7.5503e-05 |
+| `Newton` | 48 | **5** | 7.5503e-05 |
 
 Same answer to every digit, an order of magnitude apart in cost. `TimeMarch`
 sizes each step from a local error estimate on a transient that is then
@@ -84,12 +84,14 @@ discarded; the other two size it from the residual. See `docs/running.rst`, and
 honest comparison is less flattering.** Those iterations are from his stiff and
 TGLF cases; here the diffusivity is constant, so his relaxation is converged at
 its first iterate and he solves the linear system in one pass over the grid —
-the `1` in his row above. Three of the five are the floor for a method that does
-not know the problem is linear: a residual to form the right-hand side, a
-Jacobian, and a residual to learn the correction was exact. The other two build
-`sigma` from the initial condition and test whether the initial state is already
-converged, and that last one is the whole cost of a solve resumed from a
-neighbouring answer.
+the `1` in his row above. One of the five builds `sigma` from the initial
+condition, and the other four are two Newton iterations of a residual and a
+Jacobian each, because the stopping test is on the Newton correction: the first
+iteration makes the correction, which is exact, and the second measures it.
+Three of those four are the floor for a method that does not know the problem is
+linear — a residual to form the right-hand side, a Jacobian, and a residual to
+learn the correction was exact. The fourth is the Jacobian rebuilt at the second
+iterate, which `NewtonJacobianReuse = 1`, the default, does every iteration.
 
 Also worth noting: every point on the cost/accuracy Pareto frontier used **4
 cells**, the coarsest tried. Refining the mesh never paid; raising `k` always
