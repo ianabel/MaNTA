@@ -36,8 +36,9 @@ What MaNTA can additionally do
   :math:`u^\star` that is one polynomial degree richer than :math:`u_h`, and an
   opt-in flag makes the discretisation itself exploit it. See
   :doc:`superconvergence`.
-* **Steady states.** ``run_ss`` integrates until :math:`\mathrm{d}y/\mathrm{d}t`
-  falls below a tolerance rather than to a fixed final time.
+* **Steady states.** ``run_ss`` solves for the steady state directly, by
+  pseudo-transient continuation or Newton's method, and stops on IDA's test on
+  the Newton correction rather than at a fixed final time.
 * **Restarts.** Every run writes a restart file that a later run can resume from.
 * **Self-consistent magnetic fields.** A *field model* can join the system as a
   coupled algebraic block, so that the geometry the transport physics reads and

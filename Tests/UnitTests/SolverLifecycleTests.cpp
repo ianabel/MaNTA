@@ -1245,6 +1245,7 @@ BOOST_AUTO_TEST_CASE(a_steady_solve_spends_the_physics_sweeps_it_has_to_and_no_o
         configure(sys, stem);
         sys.setSteadyMode(mode);
         sys.setSteadyStateTolerance(1e-10);
+        sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
         if (!newton)
             sys.setPseudoTransientInitialStep(1.0);
 
@@ -1350,8 +1351,8 @@ BOOST_AUTO_TEST_CASE(the_SER_rate_and_floor_change_the_cost_and_not_the_answer)
                << plain << "; it is meant to be the cheaper of the two");
 
     // And a steeper rate is cheaper than plain SER for the same reason, by a
-    // different route: measured 1704 against 3540 here, where the floor gets it
-    // to 552. Both knobs reach the schedule, which is the claim.
+    // different route: measured 636 against 1236 here, where the floor gets it
+    // to 180. Both knobs reach the schedule, which is the claim.
     BOOST_TEST(steeper < plain,
                "SER rate 2 cost " << steeper << " evaluations against rate 1's " << plain
                << "; leaning harder on the residual ratio should grow dt faster");
@@ -1377,6 +1378,7 @@ BOOST_AUTO_TEST_CASE(a_steady_solve_says_what_it_is_about_to_do)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
 
     std::string log;
     {
@@ -1411,6 +1413,7 @@ BOOST_AUTO_TEST_CASE(the_steady_diagnostics_count_the_whole_solve_not_the_last_s
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setSteadyStateDiagnostics(true);
 
     std::string log;
@@ -1486,6 +1489,7 @@ BOOST_AUTO_TEST_CASE(the_per_step_records_sum_to_the_totals)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
 
     {
         CapturedOutput quiet;
@@ -1565,7 +1569,8 @@ BOOST_AUTO_TEST_CASE(newton_jacobian_reuse_trades_builds_for_solves)
     //
     // Nonlinear on purpose. On a linear problem each inner solve converges in one
     // iteration, builds equal solves at every setting, and this test would pass
-    // while measuring nothing.
+    // while measuring nothing. Newton mode, because a damped continuation step
+    // is a single iteration and has nothing to reuse a Jacobian across.
     auto run = [](long reuse)
     {
         const std::string stem = "lifecycle_reuse_" + std::to_string(reuse);
@@ -1573,8 +1578,11 @@ BOOST_AUTO_TEST_CASE(newton_jacobian_reuse_trades_builds_for_solves)
         NonlinearDiffusion problem;
         SystemSolver sys(grid, k, &problem);
         configure(sys, stem);
-        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyMode(SystemSolver::SteadyMode::Newton);
         sys.setSteadyStateTolerance(1e-10);
+        // Tight, so the answers can be compared at 1e-8: modified Newton
+        // converges linearly and stops near the threshold it is given.
+        sys.setSteadyStateStepTolerance(1e-4);
         sys.setNewtonJacobianReuse(reuse);
         {
             CapturedOutput quiet;
@@ -1627,6 +1635,7 @@ BOOST_AUTO_TEST_CASE(newton_max_iterations_caps_every_inner_solve)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setNewtonMaxIterations(1);
 
     {
@@ -1683,6 +1692,7 @@ BOOST_AUTO_TEST_CASE(the_per_step_diagnostics_print_without_the_summary)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setSteadyStateStepDiagnostics(true);
 
     std::string log;
@@ -1726,6 +1736,7 @@ BOOST_AUTO_TEST_CASE(a_failed_steady_solve_still_writes_the_last_state_it_reache
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-30);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     // Out of the way: a stalled solve rejects step after step, and the
     // rejected-step budget would otherwise stop it first -- which returns rather
     // than throws, and is the next test's subject.
@@ -1801,6 +1812,7 @@ BOOST_AUTO_TEST_CASE(running_out_of_rejected_steps_returns_the_last_accepted_sta
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     sys.setSteadyStateTolerance(1e-30);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
     sys.setMaxRejectedSteps(5);
 
     {
@@ -2501,6 +2513,7 @@ BOOST_AUTO_TEST_CASE(KINSOL_measures_the_same_thing_the_continuation_loop_does)
     configure(sys, stem);
     sys.setSteadyMode(SystemSolver::SteadyMode::Newton);
     sys.setSteadyStateTolerance(1e-10);
+    sys.setSteadyTest(SystemSolver::SteadyTest::Residual);
 
     {
         CapturedOutput quiet;

@@ -57,12 +57,12 @@ channels at once.
 
 | cells | k | visits/point | error n | error T |
 |---|---|---|---|---|
-| 4 | 2 | 11 | 2.0e-4 | 2.4e-4 |
-| 16 | 2 | 11 | 3.4e-6 | 4.4e-6 |
-| 4 | 3 | 11 | 4.7e-5 | 4.8e-5 |
-| 16 | 3 | 11 | 3.0e-7 | 3.0e-7 |
-| 4 | 5 | 11 | 1.4e-6 | 1.4e-6 |
-| 16 | 5 | 11 | 1.0e-9 | 9.0e-10 |
+| 4 | 2 | 7 | 2.0e-4 | 2.4e-4 |
+| 16 | 2 | 7 | 3.4e-6 | 4.4e-6 |
+| 4 | 3 | 7 | 4.7e-5 | 4.8e-5 |
+| 16 | 3 | 7 | 3.0e-7 | 3.0e-7 |
+| 4 | 5 | 7 | 1.4e-6 | 1.4e-6 |
+| 16 | 5 | 7 | 1.1e-9 | 9.1e-10 |
 
 The rates approach `k + 1` from below: 2.98 at `k = 2`, 3.78 at `k = 3` and
 5.5 at `k = 5`, at 16 cells. The approach is slow because of the branch point.
@@ -72,11 +72,11 @@ error is the same, 4-5e-6, whatever the method.
 
 | D | Newton | PseudoTransient | TimeMarch |
 |---|---|---|---|
-| 0.01 | 11 | 18 | 190 |
-| 0.1 | 11 | 18 | 167 |
-| 1 | 11 | 20 | 154 |
-| 10 | 11 | 18 | 203 |
-| 100 | 11 | 18 | **fails** (`IDASolve could not complete`) |
+| 0.01 | 7 | 13 | 190 |
+| 0.1 | 7 | 13 | 167 |
+| 1 | 7 | 13 | 154 |
+| 10 | 7 | 9 | 203 |
+| 100 | 7 | 9 | **fails** (`IDASolve could not complete`) |
 
 Newton's cost does not see the disparity at all: it never resolves the
 transient. Time marching pays for both time scales, and at `D = 100`, where

@@ -71,6 +71,7 @@ set(MANTA_TEST_SOURCES
   SpectrumTests.cpp
   SolveJacTests.cpp
   SolverLifecycleTests.cpp
+  SteadyNewtonStepTests.cpp
   SolverPlumbingTests.cpp
   StateGeometryTests.cpp
   SystemSolverMatrixTests.cpp

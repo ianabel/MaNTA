@@ -11,7 +11,7 @@ hold these against. Three tables:
   1. cost by steady-state method, without exchange and with it;
   2. what happens as the steady state approaches the threshold -- the heating
      that sets the ion gradient 0.0054 above it, where the steady-state
-     solvers pay 40-50 times their usual cost and time marching does not;
+     solvers pay 2.5-7 times their usual cost and time marching does not;
   3. the starting point: the constant-chi steady state Jardin also uses starts
      the exchange variant at gradients near 6, which IDA's first step does not
      survive.
@@ -106,7 +106,7 @@ def main():
     for H, above, *cells in kink:
         print(f"  {str(H):<12} {np.array2string(above, precision=4):<20} " + " ".join(f"{c:>18}" for c in cells))
     print()
-    print("  At H = (1, 2) the steady-state solvers still reach round-off, at 40-50")
+    print("  At H = (1, 2) the steady-state solvers still reach round-off, at 2.5-7")
     print("  times their cost further from the threshold; time marching's cost does")
     print("  not move.")
     print()

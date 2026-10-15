@@ -4,181 +4,181 @@
    "cells": 4,
    "k": 2,
    "points": 12,
-   "nflux": 96,
-   "nderiv": 24,
-   "visits": 10,
-   "error": 0.0012333565115846454
+   "nflux": 48,
+   "nderiv": 36,
+   "visits": 7,
+   "error": 0.0012333565116867432
   },
   {
    "cells": 4,
    "k": 3,
    "points": 16,
-   "nflux": 128,
-   "nderiv": 32,
-   "visits": 10,
-   "error": 7.550338739344828e-05
+   "nflux": 64,
+   "nderiv": 48,
+   "visits": 7,
+   "error": 7.550338726684679e-05
   },
   {
    "cells": 4,
    "k": 4,
    "points": 20,
-   "nflux": 160,
-   "nderiv": 40,
-   "visits": 10,
-   "error": 3.4069318246443576e-06
+   "nflux": 80,
+   "nderiv": 60,
+   "visits": 7,
+   "error": 3.4069316926161577e-06
   },
   {
    "cells": 4,
    "k": 5,
    "points": 24,
-   "nflux": 192,
-   "nderiv": 48,
-   "visits": 10,
-   "error": 2.120813979911533e-07
+   "nflux": 96,
+   "nderiv": 72,
+   "visits": 7,
+   "error": 2.1208158194421496e-07
   },
   {
    "cells": 4,
    "k": 6,
    "points": 28,
-   "nflux": 224,
-   "nderiv": 56,
-   "visits": 10,
-   "error": 6.46129803495573e-09
+   "nflux": 112,
+   "nderiv": 84,
+   "visits": 7,
+   "error": 6.4614633563223e-09
   },
   {
    "cells": 6,
    "k": 2,
    "points": 18,
-   "nflux": 144,
-   "nderiv": 36,
-   "visits": 10,
-   "error": 0.00033985419559633335
+   "nflux": 72,
+   "nderiv": 54,
+   "visits": 7,
+   "error": 0.00033985419568384413
   },
   {
    "cells": 6,
    "k": 3,
    "points": 24,
-   "nflux": 192,
-   "nderiv": 48,
-   "visits": 10,
-   "error": 1.5178861894085466e-05
+   "nflux": 96,
+   "nderiv": 72,
+   "visits": 7,
+   "error": 1.5178861768077992e-05
   },
   {
    "cells": 6,
    "k": 4,
    "points": 30,
-   "nflux": 240,
-   "nderiv": 60,
-   "visits": 10,
-   "error": 3.927442362827809e-07
+   "nflux": 120,
+   "nderiv": 90,
+   "visits": 7,
+   "error": 3.927441218902233e-07
   },
   {
    "cells": 6,
    "k": 5,
    "points": 36,
-   "nflux": 288,
-   "nderiv": 72,
-   "visits": 10,
-   "error": 1.9715745185180177e-08
+   "nflux": 144,
+   "nderiv": 108,
+   "visits": 7,
+   "error": 1.971594051822951e-08
   },
   {
    "cells": 6,
    "k": 6,
    "points": 42,
-   "nflux": 336,
-   "nderiv": 84,
-   "visits": 10,
-   "error": 3.084627824806792e-10
+   "nflux": 168,
+   "nderiv": 126,
+   "visits": 7,
+   "error": 3.085897544038296e-10
   },
   {
    "cells": 10,
    "k": 2,
    "points": 30,
-   "nflux": 240,
-   "nderiv": 60,
-   "visits": 10,
-   "error": 7.196830775600318e-05
+   "nflux": 120,
+   "nderiv": 90,
+   "visits": 7,
+   "error": 7.19683078307386e-05
   },
   {
    "cells": 10,
    "k": 3,
    "points": 40,
-   "nflux": 320,
-   "nderiv": 80,
-   "visits": 10,
-   "error": 2.0718578840792134e-06
+   "nflux": 160,
+   "nderiv": 120,
+   "visits": 7,
+   "error": 2.071857734961043e-06
   },
   {
    "cells": 10,
    "k": 4,
    "points": 50,
-   "nflux": 400,
-   "nderiv": 100,
-   "visits": 10,
-   "error": 2.8533782226062747e-08
+   "nflux": 200,
+   "nderiv": 150,
+   "visits": 7,
+   "error": 2.853370230845276e-08
   },
   {
    "cells": 10,
    "k": 5,
    "points": 60,
-   "nflux": 480,
-   "nderiv": 120,
-   "visits": 10,
-   "error": 9.969000373315657e-10
+   "nflux": 240,
+   "nderiv": 180,
+   "visits": 7,
+   "error": 9.970958158264966e-10
   },
   {
    "cells": 10,
    "k": 6,
    "points": 70,
-   "nflux": 560,
-   "nderiv": 140,
-   "visits": 10,
-   "error": 7.915613928324209e-12
+   "nflux": 280,
+   "nderiv": 210,
+   "visits": 7,
+   "error": 8.000664826824271e-12
   },
   {
    "cells": 20,
    "k": 2,
    "points": 60,
-   "nflux": 480,
-   "nderiv": 120,
-   "visits": 10,
-   "error": 9.178531544664154e-06
+   "nflux": 240,
+   "nderiv": 180,
+   "visits": 7,
+   "error": 9.178531609215281e-06
   },
   {
    "cells": 20,
    "k": 3,
    "points": 80,
-   "nflux": 640,
-   "nderiv": 160,
-   "visits": 10,
-   "error": 1.3878515212800116e-07
+   "nflux": 320,
+   "nderiv": 240,
+   "visits": 7,
+   "error": 1.387850042705103e-07
   },
   {
    "cells": 20,
    "k": 4,
    "points": 100,
-   "nflux": 800,
-   "nderiv": 200,
-   "visits": 10,
-   "error": 9.524842679334669e-10
+   "nflux": 400,
+   "nderiv": 300,
+   "visits": 7,
+   "error": 9.52417675967533e-10
   },
   {
    "cells": 20,
    "k": 5,
    "points": 120,
-   "nflux": 960,
-   "nderiv": 240,
-   "visits": 10,
-   "error": 1.6994861183434163e-11
+   "nflux": 480,
+   "nderiv": 360,
+   "visits": 7,
+   "error": 1.7189140976961388e-11
   },
   {
    "cells": 20,
    "k": 6,
    "points": 140,
-   "nflux": 1120,
-   "nderiv": 280,
-   "visits": 10,
-   "error": 2.298757856531355e-13
+   "nflux": 560,
+   "nderiv": 420,
+   "visits": 7,
+   "error": 6.756837154727541e-14
   }
  ]
 }

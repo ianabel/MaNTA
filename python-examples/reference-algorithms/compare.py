@@ -12,8 +12,9 @@ cells, or N (k + 1) nodes. The error is the relative L1 error against the
 closed form on 201 points, the worst channel's, each method's profile
 interpolated the way the method itself defines it.
 
-Every method stops on its own residual: MaNTA at SteadyStateTolerance = 1e-11,
-ASTRA's march when its discrete steady residual is below 1e-10 relative to its
+Every method stops on its own test: MaNTA on the Newton correction at the
+default SteadyStateStepTolerance (SteadyStateTolerance = 1e-11 is what
+TimeMarch reads), ASTRA's march when its discrete steady residual is below 1e-10 relative to its
 terms, TGYRO when its flux mismatch is below 1e-10 of the largest target.
 
 The solver writes progress lines as it goes, so the tables are collected and

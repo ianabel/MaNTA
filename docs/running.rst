@@ -547,8 +547,12 @@ transient *is* the answer.
    term is kept purely as damping and the pseudo-time step is sized from the
    *residual* rather than from a local error estimate: on each accepted step
    ``dt`` grows by ``||F_prev||/||F_now||`` (Switched Evolution Relaxation, with
-   a floor of 2), and a step that increases the residual is rejected outright —
-   the state is restored and ``dt`` cut by four. ``PseudoTransientInitialStep``
+   a floor of 2). Under ``SteadyStateTest = "Residual"`` a step that increases
+   the residual is rejected outright — the state is restored and ``dt`` cut by
+   four. Under the default ``"NewtonStep"`` each step is a single Newton
+   iteration, kept as it stands, and a step that increased the residual shrinks
+   ``dt`` by the same ratio instead (see :ref:`steady-state-test`).
+   ``PseudoTransientInitialStep``
    sets the first step, defaulting to ``initialTimestep`` and then ``delta_t``;
    ``PseudoTransientMaxStep`` caps it.
 
@@ -567,7 +571,7 @@ transient *is* the answer.
    grows at the floor alone, 1 is plain SER, above 1 is more aggressive. It may
    not be negative — that would shrink ``dt`` as the residual falls.
 
-   ``f`` is the least ``dt`` may grow on a step that made progress, and is why
+   ``f`` is the least ``dt`` may grow on a step that reduced the residual, and is why
    plain SER is not enough on its own: the ratio is only as large as the
    residual reduction, and the reduction is only as large as ``dt`` allows, so a
    conservative first step is self-perpetuating. ``f = 1`` is "no floor", i.e.
@@ -586,18 +590,18 @@ transient *is* the answer.
         - evaluations
       * - 1
         - 2 *(defaults)*
-        - **552**
+        - **180**
       * - 1
         - 1 *(plain SER)*
-        - 3540
+        - 1236
       * - 2
         - 1
-        - 1704
+        - 636
 
    The converged state is identical in every case; only the number of
    continuation steps differs. Growing ``dt`` faster is not free, though — on a
-   degenerate flux such as ``shestakov-nonlinear``'s it is what makes the inner
-   solve start rejecting steps, which is the trade-off these two expose.
+   degenerate flux such as ``shestakov-nonlinear``'s a large step is what
+   overshoots, which is the trade-off these two expose.
 
 ``Newton``
    The same code with an infinite first step, so the damping term is absent from
@@ -617,8 +621,9 @@ transient *is* the answer.
 What ``SteadyStateTolerance`` is measured against
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-On the two continuation modes the tolerance is compared against a weighted norm
-of the undamped steady residual,
+Under ``SteadyStateTest = "Residual"`` — the default is ``"NewtonStep"``, which
+does not read the tolerance; see :ref:`steady-state-test` — the two continuation
+modes compare it against a weighted norm of the undamped steady residual,
 
 .. math::
 
@@ -672,30 +677,37 @@ tolerance in the time loop, so a config that switches between the modes is
 changing what the number means.
 
 Measured on the benchmarks under ``python-examples/``, in the units
-``PERFORMANCE.md`` asks for — evaluations of the physics per point, for an
-answer identical in every digit printed. The resolution is stated because the
-counts depend on it: ``park-convergence`` at 4 cells, the other two at 10, all
-three at :math:`k = 3`.
+``PERFORMANCE.md`` asks for — flux and derivative evaluations per point — by
+the reuse-1 columns of ``python-examples/paper-figures/steady_modes.py`` with
+``MANTA_STEADY_TOL=1e-11``, and again with ``MANTA_STEADY_TEST=Residual`` for
+the ``Residual`` entries (``Relative_tolerance = 1e-6``,
+``Absolute_tolerance = 1e-3``). The resolution
+is stated because the counts depend on it: ``park-convergence`` at 4 cells, the
+other two at 10, all three at :math:`k = 3`. ``TimeMarch`` reads neither test.
+Every answer agrees with the converged one in every digit printed, except
+Shestakov under ``NewtonStep``, where ``Newton`` stops 6.5e-3 from the exact
+solution and ``PseudoTransient`` 5.6e-3, against the converged state's 7.2e-3 —
+within their ``Absolute_tolerance``.
 
 .. list-table::
    :header-rows: 1
 
    * - benchmark
      - ``TimeMarch``
-     - ``PseudoTransient``
-     - ``Newton``
+     - ``PseudoTransient``, ``NewtonStep`` / ``Residual``
+     - ``Newton``, ``NewtonStep`` / ``Residual``
    * - ``park-convergence``
      - 120
-     - **6**
-     - **5**
+     - 7 / 10
+     - **5** / **5**
    * - ``jardin-critical-gradient``
      - 183
-     - **116**
-     - 140
+     - 15 / 22
+     - **11** / 15
    * - ``shestakov-nonlinear``
-     - **257**
-     - 442
-     - 467
+     - 257
+     - 31 / 44
+     - **29** / 37
 
 Three things a steady solve does not pay for account for a constant few
 evaluations of those two columns, and none of them for the order of magnitude in
@@ -707,25 +719,27 @@ already computed rather than evaluating it again. Every converged answer is
 unchanged bit for bit by all three, and ``TimeMarch``, which needs the first two,
 is untouched.
 
-The budget that leaves is exact: ``2 + 3n`` physics sweeps for ``Newton`` and
-``2 + 4n`` for ``PseudoTransient``, over ``n`` continuation steps. Two are fixed
+Under ``SteadyStateTest = "Residual"`` the budget that leaves is exact:
+``2 + 3n`` physics sweeps for ``Newton`` and ``2 + 4n`` for
+``PseudoTransient``, over ``n`` continuation steps. Two are fixed
 — building ``sigma``, and the residual evaluation that tests whether the initial
 state is already converged — and each step costs KINSOL's residual at both ends
 plus a Jacobian, with a fourth sweep at finite ``dt`` where the damped residual
 KINSOL drives to zero and the steady one the step-size rule needs are different
-functions.
+functions. Under the default ``"NewtonStep"`` there is no merit function: a
+solve costs one sweep for ``sigma`` and then one residual and one Jacobian per
+Newton iteration -- one per damped step, and as many as the final undamped solve
+takes -- the converged iterate never being evaluated.
 
 Park's own solver reaches a steady state in 9–15 iterations on the nonlinear
 problems he reports, which ``Newton`` matches or beats. On ``park-convergence``
 itself the comparison is not that: the diffusivity there is constant, so his
 relaxation is converged at its first iterate and he solves the linear system in
-one pass over the grid. Three of ``Newton``'s five sweeps are the floor for a
-method that does not know the problem is linear — a residual to form the
-right-hand side, a Jacobian, and a residual to learn the correction was exact —
-and the other two are ``sigma`` and the already-converged test. The last row is the counter-example and is why ``TimeMarch``
-stays: that problem's flux ``D0 q^3/u^2`` is degenerate, the mass term
-continuation exists to shed is what was damping it, and as ``dt`` grows the inner
-solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
+one pass over the grid. A method that does not know the problem is linear needs
+at least a residual to form the right-hand side, a Jacobian, and a second
+correction to learn the first was exact. ``shestakov-nonlinear``'s ``run.conf``
+pins ``TimeMarch``, to follow the physics into the degenerate boundary it
+documents; on this table's configuration both steady modes beat it.
 
 .. note::
 
@@ -738,6 +752,106 @@ solve starts rejecting steps. Its ``run.conf`` therefore pins ``TimeMarch``.
 
    Explicitly time-dependent data — boundary values, sources — is frozen at
    ``t_initial``. There is no time axis to evaluate it on.
+
+.. _steady-state-test:
+
+Stopping on the Newton correction: ``SteadyStateTest``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The residual norm above weighs every row of every channel in one sum. A channel
+whose rows are small at steady state — a density whose flux vanishes there —
+hardly enters it, so the test fires on the other channels and returns that one
+wherever continuation had got to. On T3D's ReLU benchmark (the ``t3d-relu``
+example, which is on the ``gp-toy-model`` branch rather than on ``main``) a
+solve stopped at ``||F|| < 3`` leaves the density 2.6% out, and still 1.9% at
+``||F|| = 0.03``. Under a noisy flux it is worse: ``||F||`` floors, and a
+tolerance below the floor rejects every step.
+
+``SteadyStateTest = "NewtonStep"`` stops the way IDA's corrector does. It tests
+the *undamped* Newton correction :math:`\delta = J_0^{-1} F` in IDA's
+error-weighted norm,
+
+.. math::
+
+   s \, \|\delta\|_\mathrm{WRMS} \le \epsilon, \qquad
+   w_i = \frac{1}{\mathrm{rtol}\,|y_i| + \mathrm{atol}_i},
+
+with :math:`\epsilon` = ``SteadyStateStepTolerance`` (default 0.33, IDA's
+corrector constant; ``IDACalcIC`` uses 0.0033) and :math:`s = r/(1-r)` the
+distance left that a contraction rate :math:`r` implies, 20 on a first iteration.
+Two guards differ from IDA, both because a steady solve can start far from its
+answer where IDA's predictor starts near it: :math:`r` is the larger of IDA's
+geometric-mean rate and the last ratio of corrections, and :math:`s` is never
+below 1 — the distance left is taken to be at least the last correction, as in
+Deuflhard's error-oriented Newton termination.
+The correction is a distance to the solution per component, in units of the
+run's own ``Relative_tolerance`` and ``Absolute_tolerance``, so every channel is
+judged on its own scale and ``SteadyStateTolerance``'s value is not read (its
+presence still arms the solve). ``"NewtonStep"`` is the default; ``"Residual"``
+is the merit-function test above, with KINSOL as the inner solver.
+
+What changes with it:
+
+* **The inner solver** is SUNDIALS' generic Newton, ``SUNNonlinSol_Newton``, with
+  this test plugged in, as IDA plugs in its own — KINSOL has no hook for one.
+  ``NewtonStepTolerance`` and ``NewtonScaling`` are KINSOL's and are not read.
+* **A damped continuation step is one Newton iteration, kept as it stands** --
+  Kelley and Keyes's pseudo-transient continuation. No requirement that
+  ``||F||`` fall, which is what made a noisy residual reject every step; a step
+  that raised it shrinks ``dt`` by the ratio instead, and the SER floor applies
+  only to a step that reduced it. Only a correction that is not a number, or a
+  model that throws, rejects a step (``dt`` cut by four).
+* **A step that reverses the last one is halved.** Where the flux has a kink --
+  a critical gradient, ``chi ~ (|q| - q_c)^(1/2)`` -- single iterations can
+  bounce either side of it for ever, and no ``dt`` stops them, because the kink
+  is in ``sigma`` and ``q``, which are algebraic and undamped. The signature is a
+  correction pointing back the way the last one came (cosine below -0.5 in the
+  error weights); each one halves the fraction of the correction applied, and
+  two steps without one double it back towards 1. It costs no evaluations.
+  Measured on the two-temperature problem 0.0054 above its threshold: without
+  it, 200 steps alternating residuals 0.34 and 1.76; with it, 33 visits per
+  point, against 209 by time marching.
+* **Only an undamped solve can end the run**, iterated until the test passes. At
+  finite ``dt`` the correction is :math:`(J_0 + M/dt)^{-1} F`, which a small
+  enough ``dt`` makes small whatever :math:`F` is. Once a damped step's
+  correction is within one tolerance unit, or ``dt`` has reached its cap, an
+  undamped solve is tried from it; if it fails the state is put back and
+  continuation goes on, trying again only after ``dt`` has grown sixteenfold.
+* **SER reads the steady residual at the start of each step**, which the step
+  evaluates anyway, so the schedule costs nothing and lags by one step.
+* **The converged iterate is never evaluated**, as IDA never evaluates its
+  converged corrector: a ``Newton`` solve costs one flux sweep plus one flux and
+  one derivative sweep per Newton iteration.
+* **NewtonMaxIterations caps the undamped solves only**; a damped step is always
+  one iteration. ``NewtonJacobianReuse`` likewise matters only there.
+
+**The test cannot be met below the correction's floor**, whether that floor is
+set by noise in the flux or by round-off in the linear solve. A badly
+conditioned discretisation — a graded mesh with cells ~5e-4 wide at a wall, say
+— puts the round-off floor of :math:`\|\delta\|` near IDA's threshold at
+``Absolute_tolerance = 1e-6``, and the solve then runs out of steps with
+``||F||`` already at 1e-9; ``python-examples/nc-toy-model`` did exactly that.
+Ask for a tolerance the discretisation can resolve, or set
+``SteadyStateTest = "Residual"``.
+
+``SuppressAlgebraicError = true`` means here what it means to IDA: only ``u`` is
+tested. Under a **noisy flux it is required** — ``sigma`` is an algebraic unknown
+equal to the flux, so its correction carries the noise at full strength and no
+``dt`` damps it. On the ReLU benchmark with ±20% noise, at ``rtol = atol =
+1e-2``, it takes eight seeds of eight to convergence in a median 14 box calls
+with exact derivatives, and eight of eight in 57 with T3D's finite-differenced
+Jacobian. A tolerance below
+the correction's noise floor cannot be met, and such a solve runs out of steps;
+that example's own README has the tables behind both paragraphs.
+
+The norm is a root mean square, IDA's, so a converged state can be several
+tolerance units out at its worst point — up to 2.4 on that benchmark — and
+with the algebraic rows masked the mean is still over every row, as IDA's is.
+``SteadyStateMeasureCorrection = true`` reports :math:`\|\delta\|` at the end of
+a ``Residual`` solve as well (one residual, one build, one solve), for comparing
+the two tests on one run; both solves return it as ``correction_norm`` in
+``steadyStats()``, and a ``NewtonStep`` solve also returns the tested
+:math:`s\|\delta\|` as ``correction_test``.
 
 Output from a steady solve
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1034,11 +1148,13 @@ to ``TimeMarch``, which never builds a KINSOL object.
    section below is about why it is worth setting per case.
 
 ``NewtonMaxIterations``
-   Newton iterations one ``KINSol`` call may take before handing back to the
-   continuation loop. The default is **20 against KINSOL's own 200**, deliberately:
-   an inner solve only has to make progress, because SER re-damps and tries again
-   from a better ``dt``. Raise it for ``SteadyStateSolver = "Newton"``, where
-   there is no outer loop to fall back on.
+   Newton iterations one inner solve may take before handing back to the
+   continuation loop. Under ``SteadyStateTest = "Residual"`` that is every
+   ``KINSol`` call, and the default is **20 against KINSOL's own 200**,
+   deliberately: an inner solve only has to make progress, because SER re-damps
+   and tries again from a better ``dt``. Under the default ``"NewtonStep"`` it caps
+   only the undamped solves, a damped step being a single iteration. Raise it for
+   ``SteadyStateSolver = "Newton"``, where there is no outer loop to fall back on.
 
 ``NewtonStepTolerance``
    KINSOL's scaled-step test. A ``KINSol`` below it returns

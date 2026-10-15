@@ -1034,6 +1034,12 @@ void SystemSolver::destroySundials()
 		kin_mem = nullptr; // ... belt and braces, since we test the pointer
 	}
 
+	if (steadyNLS)
+	{
+		SUNNonlinSolFree(steadyNLS);
+		steadyNLS = nullptr;
+	}
+
 	if (sunMat)
 	{
 		MatDestroy(sunMat);
@@ -1054,7 +1060,8 @@ void SystemSolver::destroySundials()
 	}
 
 	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec,
-	                      &uPrev, &ptcDYdt, &kinScale, &resScale, &fScaleScratch})
+	                      &uPrev, &ptcDYdt, &kinScale, &resScale, &fScaleScratch,
+	                      &nlsYcor, &nlsU, &nlsEwt, &nlsTmp, &nlsDprev})
 	{
 		if (*vec)
 		{

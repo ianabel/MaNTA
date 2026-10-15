@@ -325,6 +325,9 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(NewtonJacobianReuse, unsigned);
     READ(NewtonStepTolerance, double);
     READ(NewtonScaling, std::string);
+    READ(SteadyStateTest, std::string);
+    READ(SteadyStateStepTolerance, double);
+    READ(SteadyStateMeasureCorrection, bool);
     READ(SteadyStateDiagnostics, bool);
     READ(SteadyStateStepDiagnostics, bool);
     READ(SteadyStateSolve, bool);
@@ -975,6 +978,16 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
             "NewtonScaling must be \"Unit\" or \"ErrorWeights\"; got \"" +
             config.NewtonScaling + "\".");
 
+    if (config.SteadyStateTest == "Residual")
+        system.setSteadyTest(SystemSolver::SteadyTest::Residual);
+    else if (config.SteadyStateTest == "NewtonStep")
+        system.setSteadyTest(SystemSolver::SteadyTest::NewtonStep);
+    else
+        throw std::invalid_argument(
+            "SteadyStateTest must be \"Residual\" or \"NewtonStep\"; got \"" +
+            config.SteadyStateTest + "\".");
+    system.setMeasureSteadyCorrection(config.SteadyStateMeasureCorrection);
+
     if (config.SteadyStateSolver == "PseudoTransient")
         system.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
     else if (config.SteadyStateSolver == "TimeMarch")
@@ -1023,6 +1036,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setNewtonMaxIterations(config.NewtonMaxIterations);
         system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
         system.setNewtonStepTolerance(config.NewtonStepTolerance);
+        system.setSteadyStateStepTolerance(config.SteadyStateStepTolerance);
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
         system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
 

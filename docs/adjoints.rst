@@ -130,7 +130,8 @@ Limitations
 The corrected objective and its error bar
 -----------------------------------------
 
-A steady solve stops when :math:`\|F\|` is small, not when :math:`G` is. An
+A steady solve stops when its Newton correction is small, not when the error in
+:math:`G` is. An
 optimisation sweep comparing :math:`G` at two parameter points therefore needs to
 know how much of the difference is the answer moving and how much is each solve
 stopping short, and ``estimateObjective()`` answers both. Both quantities it needs
@@ -156,37 +157,48 @@ that answer is worth. ``lastSteadyOutcome()`` says which exit it was.
 ``uncertainty``, one entry per objective; it is empty when the run had no
 ``AdjointProblem``, and it costs nothing in that case.
 
-**Solve looser and correct, rather than converging harder.** Measured on
-``AdjointTestProblem``, against a reference two orders tighter:
+**Under the default test the correction has little left to do.** Measured on
+``AdjointTestProblem`` by ``PseudoTransient``, against a reference solved to a
+``SteadyStateStepTolerance`` of 1e-8, in physics sweeps (residuals plus
+Jacobians):
 
 .. list-table::
    :header-rows: 1
 
-   * - ``SteadyStateTolerance``
-     - residuals
+   * - test, threshold
+     - sweeps
      - raw error
      - corrected error
-   * - 1e-2
-     - 31
-     - 2.1e-3
-     - **1.7e-6**
-   * - 1e-3
-     - 41
-     - 6.0e-6
-     - < 1e-10
-   * - 1e-4
-     - 47
-     - 5.6e-6
-     - < 1e-10
-   * - 1e-6
-     - 65
-     - < 1e-10
-     - < 1e-10
+   * - ``NewtonStep``, 3.3
+     - 14
+     - < 1e-15
+     - < 1e-15
+   * - ``NewtonStep``, 0.33 (default)
+     - 14
+     - < 1e-15
+     - < 1e-15
+   * - ``NewtonStep``, 1e-4
+     - 14
+     - < 1e-15
+     - < 1e-15
+   * - ``Residual``, 1e-2
+     - 11
+     - 2.8e-4
+     - **8.0e-8**
+   * - ``Residual``, 1e-3
+     - 15
+     - 2.5e-8
+     - < 1e-13
 
-Correcting a solve at 1e-2 is **34% cheaper and three times more accurate** than
-running one at 1e-4 and taking :math:`G` raw. The bound holds throughout —
-replaying every continuation step of a tight solve, it is 1.04x the true error at
-its tightest and 2.3x at its loosest.
+``NewtonStep`` bounds the same :math:`J^{-1}F` the correction applies, and a
+correction that passes its test leaves the next one quadratically smaller, so
+every threshold tried stops with :math:`G` at round-off, for about what
+``Residual`` spends at 1e-3. Where the correction earns its place is a
+``Residual`` solve stopped loosely: at 1e-2 it recovers three and a half orders
+of :math:`G` from one Jacobian solve. By ``Newton`` both tests reach round-off
+in six sweeps. The bound holds throughout -- replaying every continuation step
+of a tight ``Residual`` solve, it is 1.04x the true error at its tightest and
+2.3x at its loosest.
 
 .. warning::
 

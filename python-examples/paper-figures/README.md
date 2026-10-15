@@ -6,8 +6,7 @@ the examples' own cases rather than restating them:
 
 | script | what it produces |
 |---|---|
-| `steady_modes.py` | `tab:steady` -- visits per point by `SteadyStateSolver`, on all three benchmarks at Park 4 cells, Jardin and Shestakov 10, all `k = 3` |
-| `reuse.py` | the `NewtonJacobianReuse` columns of the same table |
+| `steady_modes.py` | `tab:steady` -- visits per point by `SteadyStateSolver` and `NewtonJacobianReuse`, on all three benchmarks at Park 4 cells, Jardin and Shestakov 10, all `k = 3`, with each row's error against the closed form and against the converged discrete solution |
 | `park_fig.py` / `park_fig_ptc.py` | the cost/accuracy sweep for `fig:park`, time-marched and by continuation, over 4/6/10/20 cells at `k = 2..6` |
 | `plot_park.py` | draws `paper/figures/park-frontier.pdf` from the two JSON files |
 | `adaptivity.py` | the adaptivity section: a Dirichlet wall layer with a closed-form steady state, uniform against `MeshAdaptation` with and without the degree loop and with `tauScaling = "Diffusive"`; then the three benchmarks at `tab:steady`'s resolutions as the controls for the decision to grade |
