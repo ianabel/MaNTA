@@ -1296,6 +1296,12 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
             nsUndampedNext = (rec.firstCorrection <= UNDAMPED_ATTEMPT_CORRECTION ||
                             ptcStep >= ptcMaxStep) &&
                            ptcStep >= nsNextUndampedDt;
+
+            if (writeDatFile)
+            {
+              print(out0, ptcStep, nOut, true);
+            }
+
             continue;
         }
 

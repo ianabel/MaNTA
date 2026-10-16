@@ -25,24 +25,24 @@ fname = "stellarator_opt_amb"
 
 fac = 1.0
 st_config = {
-    "ParticleSourceCenter": 0.5,
-    "ParticleSourceHeight": fac * 2e-2,
-    "ParticleSourceWidth": 0.6,
+    "ParticleSourceCenter": 0.0,
+    "ParticleSourceHeight": fac * 0.02,
+    "ParticleSourceWidth": 0.4,
     "NBICenter": 0.0,
-    "NBIPower": fac * 5.0,
-    "NBIWidth": 0.25,
+    "NBIPower": fac * 0.5,
+    "NBIWidth": 0.1,
     "ECHCenter": 0.0,
-    "ECHPower": fac * 8.76e-2,
-    "ECHWidth": 0.26,
+    "ECHPower": fac * 25.0,
+    "ECHWidth": 0.05,
     "EdgeTemperature": 0.5,
     "EdgeDensity": 0.4,
-    "n0": 1.0,
+    "n0": 0.5,
     "T0": 1.0,
-    "FusionFactor": 1e-4,
+    "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
     "adaptiveGrid": False,
-    "nchunks": 2,
+    "nchunks": 3,
 }
 
 
@@ -50,14 +50,14 @@ rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-10
 npoints = 8
-degree = 3
+degree = 5
 
 base = 1.8
 tau = 0.2
 #
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 
-nodes = np.concatenate(([0, 0.05, 0.1], nodes, [rho_upper]))
+nodes = np.concatenate(([0, 0.01, 0.05, 0.2], nodes, [rho_upper]))
 solver_config = {
     "OutputFilename": fname,
     "PolynomialDegree": degree,
@@ -84,7 +84,7 @@ solver_config = {
     # "tauScaling": "Diffusive",
     # "tauUpdate": "Residual",
     "MaxRejectedSteps": 10,
-    "restart": False,
+    "restart": True,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 1.0,
@@ -122,7 +122,7 @@ pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
 
-eq_name = "precise_QH"
+eq_name = "W7-X"
 eq = desc.examples.get(eq_name)
 eq = desc.compat.rescale(eq, L=("a", 1.7), B=("<B>", 5.86), copy=True, verbose=1)
 # # eq = desc.examples.get("W7-X")

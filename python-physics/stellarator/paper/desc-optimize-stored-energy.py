@@ -66,15 +66,15 @@ fname = "stellarator_opt" + eq_name
 
 fac = 1.0
 st_config = {
-    "ParticleSourceCenter": 0.5,
-    "ParticleSourceHeight": fac * 0.02,
-    "ParticleSourceWidth": 0.6,
+    "ParticleSourceCenter": 0.0,
+    "ParticleSourceHeight": fac * 0.01,
+    "ParticleSourceWidth": 0.4,
     "NBICenter": 0.0,
-    "NBIPower": fac * 12.0,
+    "NBIPower": fac * 1.0,
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
-    "ECHPower": fac * 8.76e-2,
-    "ECHWidth": 0.15,
+    "ECHPower": fac * 8.0,
+    "ECHWidth": 0.05,
     "EdgeTemperature": 0.5,
     "EdgeDensity": 0.2,
     "ADCoefficient": 0.0,
@@ -91,8 +91,8 @@ rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-10
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
-npoints = 9
-degree = 4
+npoints = 8
+degree = 5
 # base = 1.5
 # tau = 0.5
 #
@@ -106,7 +106,7 @@ tau = 0.2
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
 
-nodes = np.concatenate(([0, 0.1, 0.2], nodes, [rho_upper]))
+nodes = np.concatenate(([0, 0.05, 0.2], nodes, [rho_upper]))
 
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
@@ -125,7 +125,7 @@ solver_config = {
     "initialTimestep": 0.01,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-5,
-    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
+    # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "SteadyStateDiagnostics": True,
@@ -213,7 +213,7 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq = eqs[-1].copy()
-# eq.pressure = desc_pressure
+eq.pressure = desc_pressure
 
 eq_init = eq.copy()
 
@@ -293,7 +293,7 @@ solver_config = {
     # "tauScaling": "Constant",
     # "tauUpdate": "ContinuationStep",
     "SteadyStateTolerance": 1e-4,
-    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
+    # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
     "MaxRejectedSteps": 0,
@@ -307,42 +307,43 @@ config = {
 }
 
 
-# eq2 = eq.copy()
-# fam2 = EquilibriaFamily(eq2)
-# niters = 2
-# for k in range(niters):
-#     eq2 = eq2.copy()
+eq2 = eq.copy()
+fam2 = EquilibriaFamily(eq2)
+niters = 2
+for k in range(niters):
+    eq2 = eq2.copy()
+
+    fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
+
+    yancc_wrapper = yancc_data.from_eq(
+        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    )
+    pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    st.run()
+
+    pi = st.getPressure()
+    pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+    ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+    eq2.pressure = SplineProfile(pi_manta, pressure_rho)
+    # fit the current profile to a power series, with c_0=c_1=0
+    # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+    # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+    # re-solve the equilibrium
+    eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
+    fam2.append(eq2)
+    eqs.append(eq2)
+eq_self_consistent = eq2.copy()
 #
-#     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
-#
-#     yancc_wrapper = yancc_data.from_eq(
-#         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-#     )
-#     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-#     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-#     st.run()
-#
-#     pi = st.getPressure()
-#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-#     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-#     eq2.pressure = SplineProfile(pi_manta, pressure_rho)
-#     # fit the current profile to a power series, with c_0=c_1=0
-#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-#     # re-solve the equilibrium
-#     eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
-#     fam2.append(eq2)
-#     eqs.append(eq2)
-# eq_self_consistent = eq2.copy()
+ax.legend()
+# fig.savefig("initial_self_consistent_pressure.png")
+# # # %%
 # #
-# ax.legend()
-# # fig.savefig("initial_self_consistent_pressure.png")
-# # # # %%
-# # #
-# # plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
-# #
-# # plt.show()
-# eq = eq2.copy()
+# plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
+#
+# plt.show()
+eq = eq2.copy()
+#
 # %%
 
 
@@ -461,11 +462,11 @@ obj_mirror_ratio = ObjectiveFromUser(
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-5)
 
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 2e-6)
-stored_energy_weight = 20.0
+stored_energy_weight = 10.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 80
+max_it = 40
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -534,18 +535,18 @@ eq, info_out = eq.optimize(
     x_scale="ess",
     maxiter=max_it,
     ftol=1e-4,  # stopping tolerance on the function value
-    xtol=1e-6,  # stopping tolerance on the step size
+    xtol=1e-4,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
-    options={
-        "initial_trust_radius": 0.1,
-        # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
-        #     # "solve_options": {
-        #     #     "ftol": 5e-3,
-        #     #     "xtol": 1e-6,
-        #     #     "gtol": 1e-6,
-        #     #     "verbose": 3,
-        # },  # for equilibrium subproblem
-    },
+    # options={
+    #     "initial_trust_radius": 0.05,
+    #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
+    #     #     # "solve_options": {
+    #     #     #     "ftol": 5e-3,
+    #     #     #     "xtol": 1e-6,
+    #     #     #     "gtol": 1e-6,
+    #     #     #     "verbose": 3,
+    #     # },  # for equilibrium subproblem
+    # },
     verbose=3,
     copy=True,
 )

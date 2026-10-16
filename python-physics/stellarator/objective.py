@@ -45,12 +45,14 @@ def make_objective(config, yancc_res=None):
     time_march_solver_config = solver_config.copy()
     time_march_solver_config["SteadyStateSolver"] = "PseudoTransient"
     time_march_solver_config["restart"] = False
-    time_march_solver_config["MaxRejectedSteps"] = 4
+    time_march_solver_config["MaxRejectedSteps"] = 5
     grad_solver_config = solver_config.copy()
     grad_solver_config["delta_t"] = grad_solver_config["delta_t"] / 10000.0
     grad_solver_config["restart"] = True
     grad_solver_config["solveAdjoint"] = True
     grad_solver_config["SteadyStateSolver"] = "Newton"
+    grad_solver_config["SteadyStateTest"] = "Residual"
+    grad_solver_config["SteadyStateTolerance"] = 1.0
 
     grad_config = {"Stellarator": config["Stellarator"], "Solver": grad_solver_config}
 

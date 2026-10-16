@@ -237,8 +237,8 @@ yancc_wrapper = yancc_data.from_eq(
 # # # %%
 # with jax.log_compiles(True):
 #
-# st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-# st.run()
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+st.run()
 #
 # # %%
 #

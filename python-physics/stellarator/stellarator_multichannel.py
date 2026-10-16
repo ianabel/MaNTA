@@ -292,8 +292,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.points
         )
         self.vp_interp = interpax.Akima1DInterpolator(self.points, self.vp, check=False)
-        # g = [self.StoredEnergy]
-        g = [self.FusionPower]
+        g = [self.StoredEnergy]
+        # g = [self.FusionPower]
 
         self.levels = []  # (cells, k) of each plan MaNTA handed over
         ### for adaptive grid problems ###
@@ -360,7 +360,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     )
                     jax.debug.print("ec: {val}", val=ec)
 
-                    self._report_objective_estimate()
+                    # self._report_objective_estimate()
                     return ec
 
     def objectiveEstimate(self):
