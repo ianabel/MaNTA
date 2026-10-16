@@ -9,6 +9,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import jax
 from jax.experimental import io_callback
+from manta.jax.ffi_runner import cpu_fp_dtype
 import os
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -23,9 +24,9 @@ def abstract_eval(yin):
     np = len(flat) - 1 + 1 + 1
 
     return (
-        jax.ShapeDtypeStruct((), jnp.float32),
-        jax.ShapeDtypeStruct((npoints, np), jnp.float32),
-        jax.ShapeDtypeStruct((npoints,), jnp.float32),
+        jax.ShapeDtypeStruct((), cpu_fp_dtype),
+        jax.ShapeDtypeStruct((npoints, np), cpu_fp_dtype),
+        jax.ShapeDtypeStruct((npoints,), cpu_fp_dtype),
     )
 
 
@@ -39,7 +40,7 @@ def make_objective(config, yancc_res=None):
 
         pi = jnp.array(st.getPressure())
 
-        return G[0], G_p, pi
+        return G[0], G_p, pi, st
 
     solver_config = config["Solver"]
     time_march_solver_config = solver_config.copy()
@@ -75,7 +76,7 @@ def make_objective(config, yancc_res=None):
                 return st.G()[0]
 
             def false_fn():
-                return jnp.array([1e-10], dtype=jnp.float32)
+                return jnp.array([1e-10], dtype=cpu_fp_dtype)
                 # ec = st2.run()
                 #
                 # return st2.G()[0]
@@ -94,7 +95,11 @@ def make_objective(config, yancc_res=None):
         # compute
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
         # runs MaNTA and returns the adjoints + pressure profile
-        G, G_p, pi = StellaratorFun(grad_config, yancc_wrapper)
+        G, G_p, pi, st = StellaratorFun(grad_config, yancc_wrapper)
+
+        # the spatial columns, then one upper-boundary sensitivity per variable
+        np_cell = st.adjointProblem.np_cell
+        G_p_cell, G_p_boundary = G_p[:, :np_cell], G_p[:, np_cell:]
 
         ntheta = fields.ntheta
         nzeta = fields.nzeta
@@ -106,7 +111,15 @@ def make_objective(config, yancc_res=None):
                 mode="constant",
             )
         )(v)
-        dp = jnp.float32(jnp.dot(G_p.flatten(), v_unstack.flatten()))
+        dp = jnp.dot(G_p_cell.flatten(), v_unstack.flatten())
+
+        # the Dirichlet edge data depend on V': chain dG/dg_D (carried by the
+        # edge cell's rows, so summed over rows) through g_D(V')
+        Vp_tangent = v[1]
+        if Vp_tangent is not None:
+            _, dgD = jax.jvp(st.upper_boundary_values, (Vp,), (Vp_tangent,))
+            dp = dp + jnp.dot(G_p_boundary.sum(axis=0), dgD)
+        dp = jnp.asarray(dp, dtype=cpu_fp_dtype)
 
         return (G, pi), (dp, None)
 

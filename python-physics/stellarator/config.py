@@ -24,6 +24,7 @@ class StellaratorConfig(eqx.Module):
     evolveDensity: bool
     useSharding: bool
     useBatching: bool
+    useITGProxy: bool
     batch_size: int
     nchunks: int
     adaptiveGrid: bool
@@ -50,6 +51,7 @@ class StellaratorConfig(eqx.Module):
         evolveDensity=False,
         useSharding=True,
         useBatching=False,
+        useITGProxy=False,
         batch_size=16,
         nchunks=2,
         adaptiveGrid=False,
@@ -81,6 +83,7 @@ class StellaratorConfig(eqx.Module):
         self.evolveDensity = evolveDensity
         self.useSharding = useSharding
         self.useBatching = useBatching
+        self.useITGProxy = useITGProxy
         self.batch_size = batch_size
         self.nchunks = nchunks
         self.adaptiveGrid = adaptiveGrid

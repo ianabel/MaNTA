@@ -30,12 +30,17 @@ class Platform(enum.IntEnum):
 
 cpu_device = jax.devices("cpu")[0]
 
-cpu_fp_dtype = jnp.float32
-cpu_i_dtype = jnp.int32
-
-if cpu_fp_dtype == jnp.float64:
-    print("Enabling 64-bit math")
+# The FFI's floating-point width is fixed when the extension is built
+# (MANTA_FFI_FP64) and reported by it, so every buffer declared below follows the
+# build rather than a constant here that could disagree with it. A 64-bit build
+# needs jax_enable_x64, or jnp.float64 silently means float32 and the buffers
+# are half the size the C++ side writes into.
+if MaNTA.ffi_float_bits == 64:
+    cpu_fp_dtype = jnp.float64
     jax.config.update("jax_enable_x64", True)
+else:
+    cpu_fp_dtype = jnp.float32
+cpu_i_dtype = jnp.int32
 # MaNTA has to run on cpu so we only have cpu implementation for the run functions
 ffi_ops_names = [
     "get_solution",
@@ -237,8 +242,8 @@ class FFIRunner(MaNTA.Runner):
 
         def gpu_call():
             adjoint_output = [
-                jax.ShapeDtypeStruct((self.ng,), jnp.float32),
-                jax.ShapeDtypeStruct((self.ng * self.fac, self.np), jnp.float32),
+                jax.ShapeDtypeStruct((self.ng,), cpu_fp_dtype),
+                jax.ShapeDtypeStruct((self.ng * self.fac, self.np), cpu_fp_dtype),
             ]
             G, G_p = jax.ffi.ffi_call(
                 ffi_ops["get_adjoint_gradients"][Platform.GPU], adjoint_output
@@ -258,10 +263,10 @@ class FFIRunner(MaNTA.Runner):
             )
 
         def gpu_call(points, var):
-            sol_output = jax.ShapeDtypeStruct((len(points),), jnp.float32)
+            sol_output = jax.ShapeDtypeStruct((len(points),), cpu_fp_dtype)
             return cpu_fp_dtype(
                 jax.ffi.ffi_call(ffi_ops["get_solution"][Platform.GPU], sol_output)(
-                    jnp.int32(var), points.astype(jnp.float32), obj=self.get_address()
+                    jnp.int32(var), points.astype(cpu_fp_dtype), obj=self.get_address()
                 )
             )
 

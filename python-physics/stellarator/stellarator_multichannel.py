@@ -514,6 +514,25 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @partial(jax.jit, static_argnums=(0,))
     def InitialValue(self, index, x):
+        return self._initial_value(index, x, self.vp_interp)
+
+    def upper_boundary_values(self, Vp):
+        """The Dirichlet data at x_R, as a function of V' on the field's rho.
+
+        `UpperBoundary` is `InitialValue(i, xR)`, and the evolved variables are
+        V' times a profile, so the edge data move with V'. The adjoint returns
+        dG/d(g_D) for each variable (the boundary sensitivities); this is the
+        g_D(V') to chain it through. It repeats the two interpolations V' goes
+        through on its way to `vp_interp`: onto the MaNTA nodes
+        (`get_fields_at_rho`), then the Akima interpolant evaluated at x_R.
+        """
+        vp = interpax.interp1d(self.points, self.yancc_wrapper.rho, Vp, extrap=True)
+        vp_interp = interpax.Akima1DInterpolator(self.points, vp, check=False)
+        return jnp.stack(
+            [self._initial_value(i, self.xR, vp_interp) for i in range(self.nVars)]
+        )
+
+    def _initial_value(self, index, x, vp_interp):
         def constant_density(index, x):
             n = StellaratorState.initial_profile(
                 x,
@@ -523,7 +542,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 self.params.config.alpha,
             )
 
-            return 1.5 * self.params.config.EdgeTemperature * n * self.vp_interp(x)
+            return 1.5 * self.params.config.EdgeTemperature * n * vp_interp(x)
 
         def ambipolar(index, x):
             def n0(x):
@@ -533,7 +552,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     self.params.config.n0,
                     self.params.config.rhoUpper,
                     self.params.config.alpha,
-                ) * self.vp_interp(x)
+                ) * vp_interp(x)
 
             def ui0(x):
                 return (
@@ -748,7 +767,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         self.npoints = npoints
         # add 1 for vp and 1 for vpp, which we also take gradients with respect to
-        # -2 is for NFP, B0 which we don't get gradients of
+        # -2 is for NFP and source, integer leaves which we don't get gradients of
         self.np_cell = len(flat) - 2 + 1 + 1
         self.np = self.np_cell
         self.np_boundary = 0
@@ -767,6 +786,12 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
 
+        # The Dirichlet edge data depend on V' (see upper_boundary_values), so
+        # G also depends on them. One parameter per variable, appended after
+        # the np_cell spatial ones: columns np_cell .. np_cell + nVars - 1.
+        for i in range(self.nVars):
+            self.addUpperBoundarySensitivity(i)
+
     @MaNTA_Decorator
     def gFn(self, i, states, positions):
         out = _unpad_state(
@@ -784,14 +809,15 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=(0, State.vmap_axes(), 0, None))
         grad_out = fgrad_vmap(self.field, states, positions, self.params)
 
-        grad_out = eqx.tree_at(lambda f: f.B0, grad_out, [])
-        grad_out = eqx.tree_at(lambda f: f.NFP, grad_out, [])
-
         grad_unstack = tree_unstack(grad_out)[: self.npoints]
         grad_unraveled = jnp.stack(
             [jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0
         )
-        grad_w_vprime = jnp.pad(grad_unraveled, ((0, 0), (0, 2)), mode="constant")
+        # zero columns for V', V'' and the boundary sensitivities: g reads none
+        # of them explicitly
+        grad_w_vprime = jnp.pad(
+            grad_unraveled, ((0, 0), (0, 2 + self.np_boundary)), mode="constant"
+        )
 
         return grad_w_vprime.transpose()
 

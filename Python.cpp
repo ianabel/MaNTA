@@ -722,6 +722,9 @@ PYBIND11_MODULE(_manta, m) {
       .def("get_address", [](const PyRunner &runner) // needed for xla interface
            { return reinterpret_cast<std::uint64_t>(&runner); });
 #ifdef XLA_FFI
+  // The width MANTA_FFI_FP64 chose for every floating-point FFI buffer;
+  // manta.jax.ffi_runner declares its ShapeDtypeStructs from it.
+  m.attr("ffi_float_bits") = 8 * sizeof(ffi_fp_t);
   m.def("runner_ffi_ops", []() {
     py::dict ffi_ops;
     ffi_ops["get_solution_ffi"] = EncapsulateFfiCall(get_solution_ffi_ops);

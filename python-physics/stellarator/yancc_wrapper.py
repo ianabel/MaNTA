@@ -101,12 +101,18 @@ class yancc_data(eqx.Module):
         Vp_interp = interpax.interp1d(_rho, self.rho, self.Vp, extrap=True)
         Vpp_interp = interpax.interp1d(_rho, self.rho, self.Vpp, extrap=True)
 
-        dynamic, static = eqx.partition(self.fields, eqx.is_array)
+        # float leaves are interpolated; integer leaves (NFP, source) are
+        # restacked onto the new points by nearest neighbour, which keeps them
+        # integers -- interpolating them made them floats, and so differentiable
+        dynamic, rest = eqx.partition(self.fields, eqx.is_inexact_array)
+        integer, static = eqx.partition(rest, eqx.is_array)
         dynamic_interp = jax.tree.map(
             lambda leaf: _interpolate_to_rho(_rho, self.rho, leaf), dynamic
         )
+        nearest = jnp.argmin(jnp.abs(_rho[:, None] - self.rho[None, :]), axis=1)
+        integer_restacked = jax.tree.map(lambda leaf: leaf[nearest], integer)
 
-        fields_interp = eqx.combine(dynamic_interp, static)
+        fields_interp = eqx.combine(dynamic_interp, integer_restacked, static)
         return fields_interp, Vp_interp, Vpp_interp
 
     @classmethod
