@@ -117,3 +117,53 @@ box calls:
   build, which nets out at between 3 fewer and 7 more calls at `sqrt(eps)`. The toy's
   `u^(-3/2)` makes `d sigma/du` large; a gyro-Bohm flux may come out
   differently.
+
+## A box that reports its error bar: `reporting.py` and `known_noise_study.py`
+
+GX's fluxes come from QUENDS (https://github.com/sandialabs/quends), which
+returns a mean and a standard error for every flux-tube run. The error varies
+from run to run with how much statistically steady data the run had. A run with
+no steady segment comes back with its tail mean and a 100% error. `QuendsFlux`
+reproduces that on the toy flux. `FilteredCase` keeps a scalar Kalman filter at
+each point: the estimate is carried between states by the flux's derivatives,
+gets process noise `kappa` times the predicted change, and is updated with each
+new sample. What differs between the arms is the variance assigned to a sample:
+none (raw, as before), one global level (uniform), or the reported error
+(weighted). `reporting.py`'s docstring has the details.
+
+    python known_noise_study.py      # 168 solves, ~15 s on 6 workers
+
+The study runs 48 cells at k = 4, with a median sample error of `eps` = 1e-2,
+eight seeds and kappa = 0.1. Each entry is the noise error in units of `eps`,
+median over seeds, at a budget of 100 calls (worst seed in brackets):
+
+| arm | flat | spread (4x) | irregular (2% of runs) |
+|---|---|---|---|
+| raw | 0.052 (0.18) | 0.065 (0.25) | 0.15 (0.65) |
+| uniform, true level | 0.014 (0.025) | 0.008 (0.031) | 0.023 (0.049) |
+| uniform, level 3x off | 0.014-0.018 | 0.008 | 0.024-0.034 |
+| weighted | 0.016 (0.027) | 0.006 (0.018) | 0.006 (0.025) |
+| weighted, error bar 2x off | 0.016-0.017 | 0.006 | 0.006 |
+
+* **Filtering is what pays: 4-10x on raw, whatever it is told.** Raw never gets
+  below about 0.05 `eps`, because the last iterate carries one call's noise in
+  full. Every filtered arm reaches 0.006-0.02 `eps` by 100 calls.
+* **The error bar adds little when the noise is well behaved.** The arms tie
+  when every run has the same error. When the error varies 4x, weighting gains
+  about 1.3x, which is the `sqrt(E[s^2] E[1/s^2])` the spread predicts.
+* **The error bar earns its keep on flagged runs.** When 2% of runs fail to
+  reach a steady state, raw is wrecked (0.15-0.34 `eps`) and uniform weighting
+  is 3-4x worse than weighted. The weighted arm is unaffected, because a 100%
+  error gives the bad sample almost no weight.
+* **Only the relative weights matter.** Misreporting the error bar by 2x either
+  way, or assuming a global level 3x off, moves almost nothing.
+* **kappa has a wide plateau.** Anything from 0.03 to 0.3 gives these numbers.
+  At 0.01 the filter trusts old samples too long and lags (0.1-0.4 `eps` at
+  25-100 calls); at 1 it hardly averages.
+
+**The NewtonStep test cannot judge a filtered flux.** It passes at rtol 1e-6 in
+most filtered runs, while the real error is about 7e-5. The filter makes F
+change slowly between calls, so successive Newton corrections become small
+whether or not the noise has been averaged away. The clearest case is kappa =
+0.01: the test passes on every seed at 0.05 `eps`. A stopping test for this
+setup has to read the filter's own posterior variance.

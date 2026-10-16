@@ -1,0 +1,142 @@
+"""A black box that reports its own error bar, and a case that uses it.
+
+GX hands a transport solver a time-averaged flux. The average and its error bar
+come from QUENDS (https://github.com/sandialabs/quends): it trims the initial
+transient, takes the mean over the statistically steady segment, and reports
+`mean_uncertainty`, the standard error of autotuned, independent block means.
+If it cannot find a steady segment, it returns the mean of the last third of the
+series with a 100% relative uncertainty. Every flux tube is its own GX run, so
+all of this happens independently at every point on every call.
+
+`QuendsFlux` stands in for that, on the toy model's flux. At each point of each
+call:
+
+* the run has `n` effective independent samples, log-uniform on
+  [`n_min`, `n_max`]. The true standard error is `eps |sigma| sqrt(n_ref / n)`,
+  with `n_ref` the geometric mean, so `eps` is the median relative error and
+  `n_max / n_min` sets how much it varies;
+* the reported error is QUENDS's estimate of it from `n` block means, so it
+  carries a chi factor with `n - 1` degrees of freedom;
+* with probability `p_irregular` there is no steady segment. The mean is then
+  biased by a uniform relative draw on +-`irregular_bias`, and the reported
+  error is 100% of it.
+
+`FilteredCase` passes every value call through a scalar Kalman filter at each
+point. The filter's estimate is carried from the last state to this one by the
+flux's derivatives (trapezoidal in u and q). It is given process noise
+`kappa` times the size of that predicted change, so that it trusts old samples
+only while the state has stopped moving. It is then updated with the new sample.
+The variance the filter assigns that sample is the arm under test:
+
+* "raw"      -- no filter: MaNTA sees each sample as it comes, as today;
+* "uniform"  -- one global level, `assumed_eps` times the estimate. This is the
+                best that can be done without the error bar, and it is given
+                the true median level;
+* "weighted" -- the error bar the box reported, times `misreport`.
+
+The derivatives used for the prediction are the box's exact ones -- the same
+control the "analytic" Jacobian uses -- so this measures the filter, not the
+differencing.
+"""
+
+import numpy as np
+
+from blackbox import BlackBoxCase, ToyFlux
+from toy_model import A, B, C, D
+
+
+class QuendsFlux(ToyFlux):
+    def __init__(self, noise=1.0e-2, seed=0, n_min=4, n_max=64,
+                 p_irregular=0.0, irregular_bias=0.5):
+        super().__init__(noise=noise, seed=seed)
+        self.n_min, self.n_max = n_min, n_max
+        self.p_irregular = p_irregular
+        self.irregular_bias = irregular_bias
+        self.irregular = 0              # samples QUENDS would flag
+
+    def sample(self, u, q, x):
+        """(mean, source, reported standard error), each (nPoints, nVars)."""
+        self.calls += 1
+        self.points += u.shape[0]
+        exact = self.flux(u, q)
+        rng = self.rng
+        shape = exact.shape
+        n_ref = np.sqrt(self.n_min * self.n_max)
+        n = np.exp(rng.uniform(np.log(self.n_min), np.log(self.n_max), shape))
+        sem = self.noise * np.abs(exact) * np.sqrt(n_ref / n)
+        mean = exact + sem * rng.standard_normal(shape)
+        dof = np.maximum(np.rint(n) - 1.0, 1.0)
+        reported = sem * np.sqrt(rng.chisquare(dof) / dof)
+
+        bad = rng.random(shape) < self.p_irregular
+        if bad.any():
+            self.irregular += int(np.count_nonzero(bad))
+            bias = rng.uniform(-self.irregular_bias, self.irregular_bias, shape)
+            mean = np.where(bad, exact * (1.0 + bias), mean)
+            reported = np.where(bad, np.abs(mean), reported)
+        return mean, self.source(x), reported
+
+    def __call__(self, u, q, x):
+        mean, source, _ = self.sample(u, q, x)
+        return mean, source
+
+    def flux(self, u, q):
+        return A * u ** -1.5 * q
+
+    def source(self, x):
+        return np.reshape(D * np.exp(-(x - C) ** 2 / B), (-1, 1))
+
+
+class _PointFilter:
+    """The state of one batch shape's filters: one scalar filter per point."""
+
+    def __init__(self, u, q, dsdu, dsdq, y, var):
+        self.u, self.q, self.dsdu, self.dsdq = u, q, dsdu, dsdq
+        self.est, self.var = y.copy(), var.copy()
+
+
+class FilteredCase(BlackBoxCase):
+    def __init__(self, box, mode="weighted", kappa=0.1, assumed_eps=None,
+                 misreport=1.0, **kw):
+        super().__init__(box, jacobian="analytic", **kw)
+        if mode not in ("raw", "uniform", "weighted"):
+            raise ValueError(f"unknown mode {mode!r}")
+        self.mode = mode
+        self.kappa = kappa
+        self.assumed_eps = box.noise if assumed_eps is None else assumed_eps
+        self.misreport = misreport
+        self.filters = {}
+
+    def _variance(self, y, reported, prior):
+        if self.mode == "weighted":
+            return (self.misreport * reported) ** 2
+        scale = np.abs(prior) if prior is not None else np.abs(y)
+        return (self.assumed_eps * scale) ** 2
+
+    def ComputePhysics(self, states, positions, t):
+        u, q, x = self._unpack(states, positions)
+        y, source, reported = self.box.sample(u, q, x)
+        self.value_calls += 1
+        self._last = (t, u, q, x, y, source)
+        if self.mode == "raw":
+            return [list(y.T), list(source.T), []]
+
+        dsdu, dsdq = (d[:, :, 0] for d in self.box.derivatives(u, q, x))
+        key = x.tobytes()
+        f = self.filters.get(key)
+        if f is None:
+            f = _PointFilter(u, q, dsdu, dsdq, y, self._variance(y, reported, None))
+            self.filters[key] = f
+        else:
+            change = 0.5 * ((f.dsdu + dsdu) * (u - f.u) + (f.dsdq + dsdq) * (q - f.q))
+            f.est += change
+            f.var += (self.kappa * change) ** 2
+            r = self._variance(y, reported, f.est)
+            total = f.var + r
+            # Both vanish where the flux does -- q = 0 at the initial state --
+            # and the sample is then as good as anything.
+            gain = np.divide(f.var, total, out=np.ones_like(total), where=total > 0.0)
+            f.est += gain * (y - f.est)
+            f.var *= 1.0 - gain
+            f.u, f.q, f.dsdu, f.dsdq = u, q, dsdu, dsdq
+        return [list(f.est.T), list(source.T), []]
