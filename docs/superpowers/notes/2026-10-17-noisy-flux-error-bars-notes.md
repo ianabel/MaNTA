@@ -200,12 +200,20 @@ of two kinds:
   Neither quantity sees the noise left in the answer. A noise-aware test must
   estimate it directly.
 * **Their noise is spatially correlated; QuendsFlux's is not.** Independent
-  per-point noise is right for a flux-tube code like GX, where each radius is its
-  own run. It is wrong for a global code like GENE-global, which Parker et al.
-  coupled, and for T3D's particle flux (one draw per call, see
-  `python-examples/t3d-relu/README.md`). Correlated noise averages less through
-  the integral that makes u, so floors are higher, and the GP's noise model needs
-  a spatial covariance.
+  noise across radius is right for a flux-tube code like GX: each radius is its
+  own run, and every flux it returns -- heat and particle alike -- comes from
+  that run. It is wrong for a global code like GENE-global, which Parker et al.
+  coupled. There, correlated noise averages less through the integral that makes
+  u, so floors are higher, and a GP's noise model would need a spatial
+  covariance. (T3D's ReLU *benchmark* draws one particle-flux noise value per
+  call for the whole profile, `python-examples/t3d-relu/README.md`. That is an
+  artefact of its unvectorised `Linear` test model, not a property of GX.)
+* **What flux-tube runs do correlate is the channels at one radius.** The heat
+  and particle fluxes of one run are averages of the same turbulent time series,
+  so their errors are correlated, and the error measure at a point is properly a
+  covariance across channels. QUENDS analyses each column separately and reports
+  standard errors only. A cross-covariance would need a joint estimate over the
+  same blocks.
 * **Their test problem is in this tree.** `python-examples/shestakov-nonlinear`
   is Shestakov's case. Their `P0 = 0.01` keeps the edge value nonzero, which
   avoids the `n_b = 0` degeneracy that example's README discusses. Their noise
@@ -258,8 +266,10 @@ What these results say about that design:
   filter at equal tube counts.
 * **`NewtonJacobianReuse`** to recover the 4x that differencing costs: near
   convergence J barely changes. Not measured.
-* **Richer noise:** spatially correlated (Parker et al.'s Langevin), log-normal
-  ARMA with bursts, error that depends on the state, intermittency.
+* **Richer noise:** errors correlated across channels at one radius (the
+  flux-tube case, and what a multi-channel filter or GP must weight by),
+  log-normal ARMA with bursts, error that depends on the state, intermittency,
+  and spatially correlated noise (Parker et al.'s Langevin, for global codes).
 * **Shestakov with Parker et al.'s noise**, as a second benchmark beside the toy.
 * **A stopping test on the posterior**, and whether it is calibrated: does the
   reported uncertainty cover the true error over seeds?
