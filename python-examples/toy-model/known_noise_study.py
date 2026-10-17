@@ -25,7 +25,17 @@ The scenarios are what the box does:
 * irregular  -- spread, plus a fraction of runs with no steady segment, biased
                 by up to +-50% and reported at 100%.
 
-Cost is box calls; the error a run reaches is read at each budget given.
+The Jacobians are a pair: the one MaNTA's Newton iteration uses, and the one
+that carries the filter between states (see `reporting.py`):
+
+* analytic/exact -- both exact, which no real box provides: the control;
+* full/exact     -- Newton's differenced, in u and q at dz = sqrt(eps); the
+                    filter's exact. This isolates what Newton's Jacobian costs;
+* full/build     -- both differenced: the filter reuses each build's
+                    derivatives. This is what a box without derivatives allows.
+
+Cost is box calls, counting those made only to difference; the error a run
+reaches is read at each budget given.
 """
 
 import argparse
@@ -45,8 +55,12 @@ SCENARIOS = {
     "irregular": dict(n_min=4, n_max=64, p_irregular=0.02),
 }
 
-ARMS = [("raw", 1.0), ("uniform", 1.0), ("uniform", 1 / 3), ("uniform", 3.0),
-        ("weighted", 1.0), ("weighted", 0.5), ("weighted", 2.0)]
+ARMS = {"raw": ("raw", 1.0), "uniform": ("uniform", 1.0),
+        "uniform/3": ("uniform", 1 / 3), "uniform*3": ("uniform", 3.0),
+        "weighted": ("weighted", 1.0), "weighted/2": ("weighted", 0.5),
+        "weighted*2": ("weighted", 2.0)}
+
+JACOBIANS = ["analytic/exact", "full/exact", "full/build"]
 
 
 def configuration(cells, degree, rtol, steps):
@@ -89,11 +103,15 @@ def solve(run):
     from reporting import QuendsFlux, FilteredCase
 
     box = QuendsFlux(run["noise"], seed=run["seed"], **SCENARIOS[run["scenario"]])
+    jacobian, filter_jacobian = run["jacobians"].split("/")
+    dz = np.sqrt(run["noise"])
+    common = dict(kappa=run["kappa"], jacobian=jacobian, filter_jacobian=filter_jacobian,
+                  dz=dz, du=dz, fresh_base=run["fresh_base"],
+                  significance=run["significance"] or None)
     if run["mode"] == "uniform":
-        case = FilteredCase(box, "uniform", kappa=run["kappa"],
-                            assumed_eps=run["factor"] * run["noise"])
+        case = FilteredCase(box, "uniform", assumed_eps=run["factor"] * run["noise"], **common)
     else:
-        case = FilteredCase(box, run["mode"], kappa=run["kappa"], misreport=run["factor"])
+        case = FilteredCase(box, run["mode"], misreport=run["factor"], **common)
     runner = manta.Runner(case)
     runner.configure(configuration(run["cells"], run["degree"], run["rtol"], 1))
     case.reset_counts()
@@ -112,7 +130,7 @@ def solve(run):
     except RuntimeError:
         outcome = "Failed"
     return dict(run, outcome=outcome, calls=np.array(calls), states=np.array(states),
-                irregular=box.irregular)
+                irregular=box.irregular, rejected_differences=case.rejected_differences)
 
 
 def at_budget(r, budget):
@@ -124,7 +142,8 @@ def at_budget(r, budget):
 def summarise(results, budgets):
     groups = {}
     for r in results:
-        groups.setdefault((r["scenario"], r["mode"], r["factor"], r["kappa"]), []).append(r)
+        groups.setdefault((r["scenario"], r["jacobians"], r["mode"], r["factor"], r["kappa"],
+                           r["significance"] or 0.0), []).append(r)
 
     for scenario in SCENARIOS:
         rows = sorted(k for k in groups if k[0] == scenario)
@@ -133,8 +152,9 @@ def summarise(results, budgets):
         irr = sum(r["irregular"] for k in rows for r in groups[k])
         print(f"\n## {scenario}" + (f" ({irr} irregular samples over every run)" if irr else "") + "\n")
         head = " | ".join(f"{b} calls" for b in budgets)
-        print(f"| arm | kappa | {head} | test passed | calls when it did |")
-        print("|---|---|" + "---|" * len(budgets) + "---|---|")
+        print(f"| J (Newton/filter) | arm | kappa | guard | {head} | test passed "
+              "| calls when it did | differences rejected, median |")
+        print("|---|---|---|---|" + "---|" * len(budgets) + "---|---|---|")
         for k in rows:
             rs = groups[k]
             cells = []
@@ -143,9 +163,13 @@ def summarise(results, budgets):
                 cells.append(f"{np.median(e):.3f} ({e.max():.3f})")
             conv = [r for r in rs if r["outcome"] == "Converged"]
             when = (f"{np.median([r['calls'][-1] for r in conv]):.0f}" if conv else "--")
-            arm = k[1] if k[1] == "raw" else f"{k[1]} x {k[2]:.2g}"
-            kappa = "--" if k[1] == "raw" else f"{k[3]:g}"
-            print(f"| {arm} | {kappa} | " + " | ".join(cells) + f" | {len(conv)}/{len(rs)} | {when} |")
+            arm = k[2] if k[2] == "raw" else f"{k[2]} x {k[3]:.2g}"
+            kappa = "--" if k[2] == "raw" else f"{k[4]:g}"
+            jac = k[1].split("/")[0] if k[2] == "raw" else k[1]
+            guard = f"{k[5]:g}" if k[5] else "--"
+            rejected = np.median([r["rejected_differences"] for r in rs])
+            print(f"| {jac} | {arm} | {kappa} | {guard} | " + " | ".join(cells)
+                  + f" | {len(conv)}/{len(rs)} | {when} | {rejected:.0f} |")
 
 
 def main():
@@ -157,6 +181,13 @@ def main():
     p.add_argument("--seeds", type=int, default=8)
     p.add_argument("--scenario", nargs="+", default=list(SCENARIOS))
     p.add_argument("--kappa", type=float, nargs="+", default=[0.1])
+    p.add_argument("--arms", nargs="+", default=list(ARMS), choices=list(ARMS))
+    p.add_argument("--jacobians", nargs="+", default=JACOBIANS[:1], choices=JACOBIANS,
+                   help="Newton/filter Jacobian pairs")
+    p.add_argument("--fresh-base", action="store_true",
+                   help="difference from a sample of its own, not the filter's")
+    p.add_argument("--significance", type=float, nargs="+", default=[None],
+                   help="reject differences whose standard error exceeds this fraction")
     p.add_argument("--rtol", type=float, default=1.0e-6)
     p.add_argument("--budget", type=int, default=400)
     p.add_argument("--budgets", type=int, nargs="+", default=[25, 50, 100, 200, 400])
@@ -167,11 +198,25 @@ def main():
     runs = []
     for scenario in args.scenario:
         for seed in range(args.seeds):
-            for mode, factor in ARMS:
-                for kappa in (args.kappa if mode != "raw" else [args.kappa[0]]):
-                    runs.append(dict(cells=args.cells, degree=args.degree, noise=args.noise,
-                                     rtol=args.rtol, budget=args.budget, scenario=scenario,
-                                     seed=seed, mode=mode, factor=factor, kappa=kappa))
+            for arm in args.arms:
+                mode, factor = ARMS[arm]
+                raw_done = set()
+                for jacobians in args.jacobians:
+                    if mode == "raw":
+                        # The filter's Jacobian means nothing without a filter.
+                        newton = jacobians.split("/")[0]
+                        if newton in raw_done:
+                            continue
+                        raw_done.add(newton)
+                    for kappa in (args.kappa if mode != "raw" else [args.kappa[0]]):
+                        for sig in args.significance:
+                            runs.append(dict(cells=args.cells, degree=args.degree,
+                                             noise=args.noise, rtol=args.rtol,
+                                             budget=args.budget, scenario=scenario,
+                                             seed=seed, mode=mode, factor=factor,
+                                             kappa=kappa, jacobians=jacobians,
+                                             fresh_base=args.fresh_base,
+                                             significance=sig))
 
     ctx = mp.get_context("spawn")
     with ProcessPoolExecutor(args.workers, mp_context=ctx, initializer=_quiet) as pool:

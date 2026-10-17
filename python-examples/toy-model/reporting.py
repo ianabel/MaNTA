@@ -34,9 +34,32 @@ The variance the filter assigns that sample is the arm under test:
                 the true median level;
 * "weighted" -- the error bar the box reported, times `misreport`.
 
-The derivatives used for the prediction are the box's exact ones -- the same
-control the "analytic" Jacobian uses -- so this measures the filter, not the
-differencing.
+Two choices of derivative are independent of the arm. `jacobian` is the
+Jacobian MaNTA's Newton iteration uses, as in `BlackBoxCase`: "analytic" (the
+control) or differenced. `filter_jacobian` is what carries the filter between
+states:
+
+* "exact" -- the box's exact derivatives at both ends, which a real box does
+             not have: the control;
+* "build" -- the derivatives of MaNTA's last Jacobian build at those points,
+             which cost nothing more. Before the first build there are none,
+             and each sample is then taken as it stands.
+
+**A difference the filter reuses must not share a sample with it.** By
+default `BlackBoxCase` differences from the last value call's sample, the one
+the filter has just absorbed. The derivative's error is then that sample's
+noise divided by h, and the filter's prediction carries it back into the
+estimate. That correlation drifts the solve to about 0.07 eps, where
+independent errors in J of up to 30% cost the filter nothing. `fresh_base`
+differences from a sample of its own, which costs one call per build and is
+never shown to the filter.
+
+`significance` rejects any difference whose standard error,
+`sqrt(s_base^2 + s_pert^2) / h`, exceeds that fraction of its value. The point
+then keeps the previous build's derivative, if there is one. `s` is the arm's
+view of a sample's error: the reported error for "weighted", and `assumed_eps`
+times the sample otherwise. A flagged run reports 100%, so only "weighted" can
+see it.
 """
 
 import numpy as np
@@ -74,6 +97,7 @@ class QuendsFlux(ToyFlux):
             bias = rng.uniform(-self.irregular_bias, self.irregular_bias, shape)
             mean = np.where(bad, exact * (1.0 + bias), mean)
             reported = np.where(bad, np.abs(mean), reported)
+        self.last_reported = reported
         return mean, self.source(x), reported
 
     def __call__(self, u, q, x):
@@ -97,10 +121,18 @@ class _PointFilter:
 
 class FilteredCase(BlackBoxCase):
     def __init__(self, box, mode="weighted", kappa=0.1, assumed_eps=None,
-                 misreport=1.0, **kw):
-        super().__init__(box, jacobian="analytic", **kw)
+                 misreport=1.0, jacobian="analytic", filter_jacobian="exact",
+                 fresh_base=False, significance=None, **kw):
+        super().__init__(box, jacobian=jacobian, **kw)
+        self.fresh_base = fresh_base
+        self.significance = significance
+        self.rejected_differences = 0
         if mode not in ("raw", "uniform", "weighted"):
             raise ValueError(f"unknown mode {mode!r}")
+        if filter_jacobian not in ("exact", "build"):
+            raise ValueError(f"unknown filter_jacobian {filter_jacobian!r}")
+        self.filter_jacobian = filter_jacobian
+        self.built = {}             # positions -> (dsigma/du, dsigma/dq) of the last build
         self.mode = mode
         self.kappa = kappa
         self.assumed_eps = box.noise if assumed_eps is None else assumed_eps
@@ -118,17 +150,23 @@ class FilteredCase(BlackBoxCase):
         y, source, reported = self.box.sample(u, q, x)
         self.value_calls += 1
         self._last = (t, u, q, x, y, source)
+        self._last_reported = reported
         if self.mode == "raw":
             return [list(y.T), list(source.T), []]
 
-        dsdu, dsdq = (d[:, :, 0] for d in self.box.derivatives(u, q, x))
         key = x.tobytes()
+        if self.filter_jacobian == "exact":
+            dsdu, dsdq = (d[:, :, 0] for d in self.box.derivatives(u, q, x))
+        else:
+            dsdu, dsdq = self.built.get(key, (None, None))
         f = self.filters.get(key)
-        if f is None:
+        if f is None or dsdu is None:
             f = _PointFilter(u, q, dsdu, dsdq, y, self._variance(y, reported, None))
             self.filters[key] = f
         else:
-            change = 0.5 * ((f.dsdu + dsdu) * (u - f.u) + (f.dsdq + dsdq) * (q - f.q))
+            dsdu0 = dsdu if f.dsdu is None else f.dsdu
+            dsdq0 = dsdq if f.dsdq is None else f.dsdq
+            change = 0.5 * ((dsdu0 + dsdu) * (u - f.u) + (dsdq0 + dsdq) * (q - f.q))
             f.est += change
             f.var += (self.kappa * change) ** 2
             r = self._variance(y, reported, f.est)
@@ -140,3 +178,54 @@ class FilteredCase(BlackBoxCase):
             f.var *= 1.0 - gain
             f.u, f.q, f.dsdu, f.dsdq = u, q, dsdu, dsdq
         return [list(f.est.T), list(source.T), []]
+
+    def _error(self, y, reported):
+        if self.mode == "weighted":
+            return self.misreport * reported
+        return self.assumed_eps * np.abs(y)
+
+    def _difference(self, u, q, x, t):
+        """As BlackBoxCase's, from a fresh base if asked and with the significance
+        test applied. One channel; the source does not depend on u or q."""
+        assert u.shape[1] == 1, "written for one channel"
+        if self.fresh_base:
+            y0, _, s0 = self.box.sample(u, q, x)
+            self.fd_calls += 1
+        else:
+            calls = self.fd_calls
+            y0, _ = self._base(u, q, x, t)
+            s0 = self.box.last_reported if self.fd_calls > calls else self._last_reported
+        s0 = self._error(y0, s0)
+        previous = self.built.get(x.tobytes())
+
+        def derivative(up, qp, h, slot):
+            y, _, s = self.box.sample(up, qp, x)
+            self.fd_calls += 1
+            d = (y - y0) / h[:, None]
+            if self.significance is not None:
+                se = np.sqrt(s0 ** 2 + self._error(y, s) ** 2) / h[:, None]
+                bad = se > self.significance * np.abs(d)
+                if previous is not None:
+                    d = np.where(bad, previous[slot], d)
+                self.rejected_differences += int(np.count_nonzero(bad))
+            return d
+
+        n = u.shape[0]
+        zero = np.zeros((n, 1, 1))
+        h = self.dz * np.abs(u[:, 0])
+        qp = q.copy(); qp[:, 0] += h
+        dsdq = derivative(u, qp, h, 1)
+        if self.jacobian == "full":
+            h = self.du * np.abs(u[:, 0])
+            up = u.copy(); up[:, 0] += h
+            dsdu = derivative(up, q, h, 0)
+        else:
+            dsdu = np.zeros((n, 1))
+        return dsdu[:, :, None], dsdq[:, :, None], zero, zero.copy()
+
+    def ComputePhysicsDerivatives(self, states, positions, t):
+        rows = super().ComputePhysicsDerivatives(states, positions, t)
+        flux = rows[0][0]
+        self.built[np.asarray(positions, dtype=float).tobytes()] = (
+            np.array(flux["Variable"], dtype=float), np.array(flux["Derivative"], dtype=float))
+        return rows

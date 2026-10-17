@@ -167,3 +167,39 @@ change slowly between calls, so successive Newton corrections become small
 whether or not the noise has been averaged away. The clearest case is kappa =
 0.01: the test passes on every seed at 0.05 `eps`. A stopping test for this
 setup has to read the filter's own posterior variance.
+
+### Without derivatives
+
+The table above gives MaNTA and the filter the box's exact derivatives. A real
+box has none, so `--jacobians full/build` differences instead: forward
+differences in u and q at `dz = sqrt(eps)` for Newton, with the filter reusing
+each build's derivatives. Each build costs three calls. The entries below are
+the noise error in units of `eps` at 800 calls, median (max), for eight seeds:
+
+    python known_noise_study.py --arms raw uniform weighted --jacobians full/build \
+        --fresh-base --significance 0 0.5 --budget 800 --budgets 50 100 200 400 800
+
+| arm | guard | flat | spread | irregular |
+|---|---|---|---|---|
+| raw | -- | 0.063 (0.10) | diverges in at least half | diverges |
+| uniform | -- | 0.015 (0.024) | 0.014 (0.031) | diverges |
+| weighted | -- | 0.011 (0.023) | 0.012 (0.030) | diverges |
+| uniform | 0.5 | 0.013 (0.024) | 0.010 (0.038) | diverges |
+| weighted | 0.5 | 0.010 (0.023) | 0.014 (0.018) | 0.009 (0.024) |
+
+Diverging here means errors of 1e3 `eps` and up, with u driven negative.
+
+* **The filter still gains 4-6x on raw.** Differencing makes it slower: the
+  error reached at 200 calls with exact derivatives takes about 800 here.
+* **Difference from a fresh sample.** With the default base, the last value
+  call's sample, the filtered solve drifts back up to 0.074 `eps` by 800 calls
+  in the flat case. Neither a systematic error in J (11-20% in d sigma/du) nor
+  independent random errors of 30% do this; only the correlation between the
+  base sample's noise and the filter's estimate does. `reporting.py` has the
+  mechanism.
+* **One flagged run in a difference wrecks the Jacobian, and only the error bar
+  sees it.** A biased sample divided by `h` makes a wild entry. Newton follows
+  it and the solve diverges, filtered or not. The significance guard keeps the
+  previous derivative wherever the difference's standard error exceeds half its
+  value. With the reported error that rejects the flagged differences. With one
+  global level it cannot, and the solve diverges as before.
