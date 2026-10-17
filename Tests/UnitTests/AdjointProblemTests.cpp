@@ -1,12 +1,12 @@
 // Tests for AdjointProblem's defaults and for the adjoint derivative vectors
 // SystemSolver builds from them.
 //
-// Context worth knowing before reading: end-to-end adjoint output is currently
-// dead -- WriteAdjoints() is commented out at Solver.cpp:350 (commit 57d2652,
-// "adjoint writing doesn't work for spatial adjoints"), so no run emits the
-// gradients and both the regression and Python suites skip their adjoint
-// comparison. That makes unit coverage the *only* thing standing behind this
-// machinery, and the existing AdjointTests.cpp only ever asserts that
+// Context worth knowing before reading: no reference file in either suite
+// carries adjoint output -- it is written only under WriteAdjoints = true, and
+// no regression configuration sets it -- so both the regression and Python
+// suites skip their adjoint comparison. That makes unit coverage and the Python
+// gradient checks the things standing behind this machinery, and the existing
+// AdjointTests.cpp only ever asserts that
 // dGdq_Vec/dGdsigma_Vec/dGdaux_Vec are zero -- true for AdjointTestProblem,
 // whose integrand genuinely has no q, sigma or phi dependence, but vacuous as
 // a test. The mock here gives all four a nonzero derivative.

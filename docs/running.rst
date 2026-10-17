@@ -109,15 +109,12 @@ restart output. A run with no field model writes exactly what it wrote before
 the feature existed — byte for byte, apart from that one ``nField = 0`` in the
 restart file.
 
-With ``solveAdjoint`` set, the file also carries the scalars ``ng``, ``np`` and
-``np_boundary``, one ``G<i>`` value per objective, and the groups ``G<i>_p`` and
-``G<i>_boundary`` holding the gradient with respect to each named parameter.
-
-.. note::
-
-   ``WriteAdjoints()`` is currently commented out in ``Solver.cpp``, so a run
-   does not in fact serialise the adjoint *state*. The gradients themselves are
-   available through ``Runner.getAdjointGradients``; see :doc:`adjoints`.
+With ``WriteAdjoints`` set as well as ``solveAdjoint``, the file also carries
+the scalars ``ng``, ``np`` and ``np_boundary``, one ``G<i>`` value per
+objective, the groups ``G<i>_p`` and ``G<i>_boundary`` holding the gradient with
+respect to each named parameter, and each objective's adjoint state beside the
+solution; :ref:`adjoint-on-demand` and the section after it give the layout.
+Without it the gradients are available through ``Runner.getAdjointGradients``.
 
 Reading the output
 ------------------
@@ -1002,7 +999,8 @@ that is what the context manager calls.
 
 ``steadyStats()`` and ``objectiveEstimate()`` need no FFI op — they read
 host-side state and touch no device memory, so the inherited ``Runner`` methods
-serve.
+serve. The same holds for ``solve_adjoint()`` and the three reads beside it
+(:ref:`adjoint-on-demand`).
 
 CPU only, like ``Run`` and ``Run_ss``. In eager code a slice returns a
 ``SteadyOutcome``, which forces the sync a Python ``while`` needs. Under a trace

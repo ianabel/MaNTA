@@ -451,6 +451,11 @@ Adjoints and superconvergence
      - Build the adjoint problem from the physics case and solve for
        :math:`\mathrm{d}G/\mathrm{d}p` after the forward integration. See
        :doc:`adjoints`.
+   * - ``WriteAdjoints``
+     - ``false``
+     - Write :math:`G`, :math:`\mathrm{d}G/\mathrm{d}p` and each objective's
+       adjoint state into the netCDF output at the end of the run. Requires
+       ``solveAdjoint``; written only with ``WriteOutput``. See :doc:`adjoints`.
    * - ``Superconvergent``
      - ``false``
      - Switch the residual and Jacobian to the superconvergent interpolatory

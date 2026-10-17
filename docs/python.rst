@@ -90,6 +90,13 @@ Module contents
      - The objective value, without gradients.
    * - ``getAdjointGradients()``
      - :math:`\mathrm{d}G/\mathrm{d}p`.
+   * - ``solve_adjoint(g=None)``
+     - Solves the adjoint at the current state from the last Jacobian build,
+       without calling the physics. See :ref:`adjoint-on-demand`.
+   * - ``adjoint_state(g)``, ``objective_gradient(g)``, ``objective_sensitivity(g)``
+     - The adjoint state :math:`z`, the right-hand side
+       :math:`\partial G/\partial y`, and :math:`\partial G/\partial \Gamma`
+       for the flux and the sources, as nodal arrays.
    * - ``physics_case``
      - The registered C++ case name this ``Runner`` was built from, or ``""``
        when it was handed a transport system object.

@@ -974,24 +974,25 @@ These are deliberate and tracked, not oversights:
   modes above 1e-3 -- because a fixture whose two populations had drifted
   together would keep passing while testing nothing.
 
-* **Adjoint *output* is still not verified.** `WriteAdjoints()` is commented
-  out at `Solver.cpp:350` (commit `57d2652`, "adjoint writing doesn't work for
-  spatial adjoints"), so no run emits the `ng` variable or the `G<i>_p` /
-  `G<i>_boundary` groups. Both suites guarded their adjoint comparison on the
-  *freshly generated* file containing `ng`, so the check silently skipped itself
-  and could never fail -- even though `AdjointTestProblem.ref.nc` still carries
-  `G0_p`, `G0_boundary`, `G1_p` and `G1_boundary`. Both suites now print a loud
-  SKIPPING warning instead.
+* **Adjoint output is written only on request, and no reference file carries
+  it.** `WriteAdjoints = true` writes `ng`, `G<i>`, the `G<i>_p` /
+  `G<i>_boundary` groups and each objective's adjoint state beside the solution;
+  `python/Tests/test_adjoint_on_demand.py` reads one back against the closed form
+  and against `getAdjointGradients`. No regression configuration sets it, and
+  `AdjointTestProblem.ref.nc` carries no adjoint groups, so both suites' adjoint
+  comparisons print a SKIPPING warning rather than silently passing.
 
-  The adjoint *gradients* are no longer unverified, though.
+  The adjoint *gradients* are verified without the file.
   `python/Tests/test_adjoint.py` reaches `G_p` through
-  `PyRunner::getAdjointGradients`, which does not depend on `WriteAdjoints`, and
-  checks it two independent ways for a problem with a closed-form solution:
-  against central finite differences of the objective (re-running the solver at
-  perturbed parameters) and against the analytic `dG/dp`. Both agree, so
-  `initializeMatricesForAdjointSolve`, `solveAdjointState` and
-  `computeAdjointGradients` are now covered end to end. What remains untested is
-  serialising them to netCDF.
+  `PyRunner::getAdjointGradients` and checks it two independent ways for a
+  problem with a closed-form solution: against central finite differences of the
+  objective (re-running the solver at perturbed parameters) and against the
+  analytic `dG/dp`. `Tests/UnitTests/AdjointOnDemandTests.cpp` checks the adjoint
+  state itself node by node: the sensitivity `w = -z^T dF/dGamma` against finite
+  differences of `G` under a one-node perturbation of the flux and of the source,
+  with a guard that the data separates the mass-matrix projection from `diag(w)`,
+  and a count of the case's entry points that has to stay at zero across an
+  adjoint solve.
 
   `python/Tests/test_adjoint_aux.py` does the same at `nAux = 2`, `nVars = 1`.
   That intersection -- adjoints *and* auxiliary variables -- was uncovered, and

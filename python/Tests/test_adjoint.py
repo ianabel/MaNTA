@@ -1,18 +1,12 @@
 """End-to-end tests for the adjoint sensitivity path.
 
-This is the least-verified machinery in the project. `WriteAdjoints()` is
-commented out at Solver.cpp:350 (commit 57d2652, "adjoint writing doesn't work
-for spatial adjoints"), so no run emits the gradients and both the regression
-and reference-solution suites skip their adjoint comparison entirely. Until now
-nothing checked that `solveAdjointState` and `computeAdjointGradients` produce a
-correct number -- only that they ran.
-
-`PyRunner::getAdjointGradients` is a way in that does *not* depend on
-WriteAdjoints: it reads `SystemSolver::G_p` directly. That makes the whole chain
-testable from Python --
+No reference file in the regression or reference-solution suites carries
+adjoint output -- it is written only under WriteAdjoints = true -- so neither
+compares gradients. `PyRunner::getAdjointGradients` reads `SystemSolver::G_p`
+directly, which makes the whole chain testable from Python --
 
     PyAdjointProblem (gFn / dg / dgFndp / dSigma / dSources)
-      -> initializeMatricesForAdjointSolve
+      -> assembleAdjointOperator, assembleObjectiveGradient
       -> solveAdjointState
       -> computeAdjointGradients
       -> G_p
