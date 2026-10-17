@@ -303,11 +303,12 @@ class SystemSolver
         //    stopped on the objectives instead of on the whole solution: when
         //    |z^T F|, the dual-weighted estimate of how far each G is from its
         //    value at the fixed point, is within the algebraic share of
-        //    ObjectiveTolerance for every objective. z is the adjoint state at
-        //    the iterate, solved from the build that iterate already made, so the
-        //    test asks the case for nothing (solveAdjointAt). It controls only
-        //    the named objectives: anything else the run reports may be less
-        //    converged than NewtonStep would leave it.
+        //    ObjectiveTolerance for every objective. With J^T z = dG/dy that is
+        //    (dG/dy) J^-1 F, the change in G the iteration's own Newton
+        //    correction makes, so the test costs the objective's dg and a dot
+        //    product, and asks the case for nothing. It controls only the named
+        //    objectives: anything else the run reports may be less converged
+        //    than NewtonStep would leave it.
         //    docs/superpowers/specs/2026-10-17-objective-error-control-design.md.
         enum class SteadyTest { Residual, NewtonStep, Objective };
         void setSteadyTest(SteadyTest test) { steadyTest = test; };
@@ -460,8 +461,8 @@ class SystemSolver
 
             // Objective only: max over the objectives of |z^T F| / (algebraic
             // share of eps_g) at the step's last undamped iteration -- the number
-            // compared with 1 -- and the adjoint solves the step made, one per
-            // objective per undamped iteration.
+            // compared with 1. And the adjoint solves the step made, which is
+            // none under every test; see SteadyStats::adjointSolves.
             double objectiveTest = std::numeric_limits<double>::quiet_NaN();
             long adjointSolves = 0;
         };
@@ -502,8 +503,10 @@ class SystemSolver
             double correctionNorm = std::numeric_limits<double>::quiet_NaN();
             double correctionTest = std::numeric_limits<double>::quiet_NaN();
 
-            // Adjoint solves, one per objective each (solveAdjointState calls).
-            // Only SteadyTest::Objective makes any inside a solve.
+            // Adjoint solves made inside the solve, one objective each
+            // (solveAdjointState calls). Zero: the Objective test reads the
+            // change in G off the Newton correction rather than solving for z,
+            // and this is counted so that it stays zero.
             long adjointSolves = 0;
 
             // SteadyTest::Objective's verdict at the last undamped iteration: per
@@ -1509,8 +1512,8 @@ class SystemSolver
         // Whether the iteration under way is one the objective test judges: an
         // undamped solve under SteadyTest::Objective. Damped continuation is
         // judged by nothing -- each step is one iteration taken as it stands --
-        // and makes no adjoint solve, since far from the fixed point a
-        // first-order estimate of the distance to it means little.
+        // and estimates nothing, since far from the fixed point a first-order
+        // estimate of the distance to it means little.
         bool objectiveTestActive() const
         {
             return steadyTest == SteadyTest::Objective && !nlsSingleIteration;
@@ -1525,11 +1528,12 @@ class SystemSolver
         // The algebraic share of eps_g for objective g, given its value G there.
         double objectiveAlgebraicTolerance(Index g, double G) const;
 
-        // The estimate at the iterate nlsU, from minusF = -F(nlsU), the right-hand
-        // side of the Newton step about to be solved. One adjoint solve per
-        // objective from the build at that iterate -- no physics call -- and
-        // z^T F against each objective's tolerance. Fills the three below.
-        void estimateObjectiveError(N_Vector minusF);
+        // The estimate at the iterate nlsU, from the Newton correction the
+        // iteration has just solved for there: |(dG/dy) . correction| = |z^T F|
+        // per objective, against each objective's tolerance. Calls the
+        // objective's dg and GFn, and nothing of the case's. Fills the three
+        // below.
+        void estimateObjectiveError(N_Vector correction);
         double nlsObjectiveTest = std::numeric_limits<double>::quiet_NaN();
         double nlsObjectivePrevTest = std::numeric_limits<double>::quiet_NaN();
         Vector nlsObjectiveError;

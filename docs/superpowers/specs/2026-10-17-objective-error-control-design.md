@@ -122,9 +122,11 @@ Following the `UpperCamelCase` convention, all in `ConfigSchema.cpp`:
 * `ObjectiveTolerance` -- `eps_G`, relative to `|G|`, per objective.
   `ObjectiveAbsoluteTolerance` is the floor for an objective near zero. With
   `ng > 1` each objective carries its own, and every test below must hold for
-  all of them.
-* `ObjectiveBudget` -- the shares (discretisation, algebraic). Default half and
-  half.
+  all of them. Both are a number or an array (the `Absolute_tolerance` type):
+  one value for every objective, or one per objective, checked against `ng`
+  when a solve starts. Defaults `1e-3` and `0`.
+* `ObjectiveBudget` -- the shares, as the array `[discretisation, algebraic]`,
+  non-negative and summing to 1. Default half and half.
 * `SteadyStateTest = "Objective"` -- see Stopping.
 * `AdaptationTarget = "Solution" | "Objective"` -- what `DegreeAdaptation` and
   `MeshAdaptation` adapt to. `"Solution"` is today's behaviour and the default.
@@ -132,10 +134,12 @@ Following the `UpperCamelCase` convention, all in `ConfigSchema.cpp`:
 ## Stopping
 
 `SteadyStateTest = "Objective"` stops the steady solve when `|lambda^T F|` is
-below the algebraic share for every objective. It needs an adjoint solve per
-Newton iteration of the undamped solve, from the factorised Jacobian at no
-physics cost, and none during damped continuation, where the state is far off
-and the estimate means little. **It controls only the named objectives.**
+below the algebraic share for every objective. It is evaluated at each Newton
+iteration of the undamped solve, at no physics cost, and not during damped
+continuation, where the state is far off and the estimate means little. With
+`J^T lambda = dG/dy`, `lambda^T F = (dG/dy) J^-1 F`, which is the objective's
+change under the Newton correction the iteration solves for anyway, so it needs
+no adjoint solve (see Phase 2 as built). **It controls only the named objectives.**
 Anything else the run outputs may be less converged than the `NewtonStep` test
 would leave it, and the docs must say so: name every output that matters as an
 objective. The adjoint gradients `G_p` are taken at that state too.
@@ -235,6 +239,57 @@ anticipate:
   `z` inherits: at k = 4, with `z` a quartic the basis represents, `z_h` is off
   by 2.4e-4 of `max |z|`. An estimator built on `z - z_h` has to see past that
   pattern.
+
+## Phase 2 as built
+
+* **The estimate is read off the Newton correction, not solved for.** The text
+  above first had an adjoint solve per undamped iteration. Built that way and
+  measured, on `AdjointTestProblem` (a C++ autodiff case, `ng = 2`, Newton mode,
+  equal iteration counts, best of seven): the objective test cost 36-55% more
+  wall time than `NewtonStep`, of which the adjoint assembly, `nCells`
+  factorisations and two transposed solves were a quarter to a third of a whole
+  Newton iteration each time, and the objective's own `dg` the rest. The same
+  number is `(dG/dy) . delta` for the correction `delta` the iteration has just
+  solved for with the same build, so the adjoint solve is dropped: the test
+  checks `|z^T F|` from `solveAdjointAt` against it at 1e-15 relative, with and
+  without `Superconvergent`, and every count and error in the benchmark table is
+  identical between the two implementations. What remains per undamped
+  iteration is the objective's `dg` and `GFn`: on `AdjointTestProblem` the
+  overhead fell to 24-37%, and the rest is `AutodiffAdjointProblem::dg`, which
+  differentiates by autodiff at every node and costs about as much as a Newton
+  iteration of that cheap case; NumPy objectives on the Python benchmarks are
+  lost in the timing noise. `solveAdjointAt` stays the way to
+  get `z` itself -- the noisy design's `w`, and phase 3 -- between slices.
+* **Where it composes with NewtonStep.** The damped continuation is
+  `NewtonStep`'s to the bit; only the undamped solve's convergence test differs.
+  The estimate is trusted from the second iteration once the corrections
+  contract, and on the first only when that correction is within one unit of
+  the error weights -- the gauge the continuation already uses for a state that
+  has stopped moving. It is made at the iterate the correction starts from and
+  the correction is then applied, so the returned state is a Newton step better
+  than the one tested: on the four benchmarks at 1e-2 to 1e-4 the error left in
+  `G` is at most 0.36 of the share (Shestakov under PseudoTransient at 1e-2,
+  1.8e-3 against 5e-3), and usually orders of magnitude inside it.
+* **An unreachable tolerance ends in a new outcome, `Stalled`**, returned like
+  `OutOfSteps`: the correction reached round-off in the error weights, or
+  `NewtonStep`'s own test passes and the estimate stopped falling (slower than
+  `RATEMAX`), with the objective test unmet. An objective at zero with no
+  absolute floor is the ordinary way to get one. Without it the undamped solve
+  ran to `NewtonMaxIterations`, was rejected, and dropped into damped
+  continuation until a budget ran out.
+* **What it saves, measured** (`python-examples/objective-tolerance/`): the last
+  one or two Newton iterations, and only at a loose tolerance -- Jardin at 1e-2
+  4 against 5, two-temperature 3 against 5. From 1e-3 down the two tests stop on
+  the same iteration on Park, Jardin and two-temperature. What it buys is the
+  accuracy asked for where `NewtonStep` does not deliver it: on Shestakov
+  `NewtonStep` at its default leaves the particle inventory 6.5e-4 (Newton) and
+  1.8e-3 (PseudoTransient) from the fixed point, and the objective test at 1e-3
+  spends two more iterations to return 6.4e-8 and 3.0e-6.
+* **Refusals** are where they can first be made: in the configuration,
+  `Objective` without `solveAdjoint` or under `TimeMarch`, an objective key under
+  any other test, and a budget that is not two shares of one; at the start of a
+  solve, a tolerance list neither 1 nor `ng` long, an objective with neither
+  tolerance, global scalars and a `Diffusive` tau.
 
 ## Open questions
 

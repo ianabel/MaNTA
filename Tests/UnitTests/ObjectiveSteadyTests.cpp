@@ -4,15 +4,14 @@
 // docs/superpowers/specs/2026-10-17-objective-error-control-design.md is the
 // design. The test is NewtonStep's continuation with another convergence test in
 // its undamped solve: |z^T F| within the algebraic share of each objective's
-// tolerance, z the adjoint state at the iterate. What these pin:
+// tolerance, z the adjoint state at the iterate -- read, without solving for z,
+// as (dG/dy) . delta for the Newton correction delta. What these pin:
 //
-//  * that |z^T F| is the objective's Newton correction -- the number
-//    estimateObjective forms from a forward solve, here from the adjoint;
+//  * that the estimate, read off the iteration's own Newton correction, is
+//    |z^T F| -- the same number an adjoint solve gives, and estimateObjective;
 //  * that the test fires at its threshold, on either side of it, and that the
 //    error in G it leaves is inside the share it was given;
-//  * the cost: Newton's sweeps and no others, and one adjoint solve per
-//    objective per undamped iteration -- none of which asks the case for
-//    anything;
+//  * the cost: Newton's sweeps and no others, and no adjoint solve;
 //  * that a sliced solve resumes exactly;
 //  * that a tolerance below what the arithmetic resolves ends Stalled, said and
 //    returned, rather than as a claimed convergence or an exhausted budget;
@@ -246,15 +245,18 @@ Answer reference(Options o, std::string const &stem)
 
 BOOST_AUTO_TEST_SUITE(objective_steady_tests)
 
-BOOST_AUTO_TEST_CASE(the_estimate_is_the_objectives_newton_correction)
+BOOST_AUTO_TEST_CASE(the_estimate_is_the_adjoint_one)
 {
-    // z^T F, from the adjoint at the iterate, and (dG/dy) . J^-1 F, which
-    // estimateObjective forms from a forward solve, are one number: J^T z =
-    // dG/dy. One undamped iteration from the initial condition, which is not
-    // enough to pass, and one continuation step, so the solve stops with Y
-    // still at the initial condition and the estimate recorded there. Every
-    // block of z -- cells, traces -- enters the dot product, so a layout error
-    // shows here.
+    // The test reads |(dG/dy) . delta| off the iteration's own Newton
+    // correction. That is |z^T F| with J^T z = dG/dy -- the dual-weighted
+    // estimate the design asks for -- and it is checked here against both
+    // routes to it: z from solveAdjointAt at the same state and build, dotted
+    // with the residual over every block of the solution vector, cells and
+    // traces; and estimateObjective's forward (dG/dy) . J^-1 F.
+    //
+    // One undamped iteration from the initial condition, which is not enough to
+    // pass, and one continuation step, so the solve stops with Y still at the
+    // initial condition, the last build there, and the estimate recorded.
     for (bool superconvergent : {false, true})
     {
         BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
@@ -262,23 +264,47 @@ BOOST_AUTO_TEST_CASE(the_estimate_is_the_objectives_newton_correction)
             Run run({.relative = {1e-12}, .superconvergent = superconvergent,
                      .maxContinuationSteps = 1, .newtonMaxIterations = 1},
                     "objective_estimate_identity");
-            CapturedOutput quiet;
-            run.sys->initialize();
-            BOOST_CHECK_THROW(run.sys->solveSteadyState(), std::runtime_error);
-            const auto stats = run.sys->lastSteadyStats();
+            SystemSolver &sys = *run.sys;
+            {
+                CapturedOutput quiet;
+                sys.initialize();
+                BOOST_CHECK_THROW(sys.solveSteadyState(), std::runtime_error);
+            }
+            const auto stats = sys.lastSteadyStats();
             BOOST_REQUIRE(stats.objectiveError.size() == 2);
-            BOOST_TEST(stats.adjointSolves == 2);
+            BOOST_TEST(stats.adjointSolves == 0);
 
-            const auto e = run.sys->estimateObjective();
+            // The adjoint route: no physics call for z, one residual for F.
+            DGSoln state(sys.nVars, sys.grid, sys.k, N_VGetArrayPointer(sys.Y), 0, 0, 0);
+            sys.solveAdjointAt(run.objective, {0, 1}, state);
+            N_Vector zero = N_VClone(sys.Y), F = N_VClone(sys.Y);
+            N_VConst(0.0, zero);
+            sys.residual(0.0, sys.Y, zero, F);
+            double const *f = N_VGetArrayPointer(F);
+            const Index cellDOF = static_cast<Index>(sys.localDOF);
+
+            const auto e = sys.estimateObjective();
             BOOST_REQUIRE(e.valid);
             for (Index g = 0; g < 2; ++g)
             {
+                auto const *z = sys.adjointSolution(g, state);
+                BOOST_REQUIRE(z != nullptr);
+                BOOST_TEST(z->operatorAtState);
+                double zF = 0.0;
+                for (Index i = 0; i < nCells; ++i)
+                    zF += z->squ[i].dot(Eigen::Map<const Vector>(f + i * cellDOF, cellDOF));
+                zF += z->lambda.dot(Eigen::Map<const Vector>(f + nCells * cellDOF, nCells + 1));
+
                 const double forward = std::abs(e.value(g) - e.corrected(g));
-                BOOST_TEST_MESSAGE(std::format("G_{}: |z^T F| {:.15e}, |dG/dy . J^-1 F| {:.15e}",
-                                               g, stats.objectiveError(g), forward));
+                BOOST_TEST_MESSAGE(std::format("G_{}: test {:.15e}, |z^T F| {:.15e}, "
+                                               "|dG/dy . J^-1 F| {:.15e}",
+                                               g, stats.objectiveError(g), std::abs(zF), forward));
                 BOOST_TEST(forward > 1e-3); // far from the fixed point: not vacuous
+                BOOST_TEST(std::abs(stats.objectiveError(g) - std::abs(zF)) <= 1e-10 * forward);
                 BOOST_TEST(std::abs(stats.objectiveError(g) - forward) <= 1e-10 * forward);
             }
+            N_VDestroy(zero);
+            N_VDestroy(F);
             removeOutput("objective_estimate_identity");
         }
     }
@@ -350,14 +376,14 @@ BOOST_AUTO_TEST_CASE(the_error_in_G_is_inside_its_share)
         }
 }
 
-BOOST_AUTO_TEST_CASE(an_objective_solve_spends_newtons_sweeps_and_one_adjoint_solve_per_objective_per_iteration)
+BOOST_AUTO_TEST_CASE(an_objective_solve_spends_newtons_sweeps_and_no_adjoint_solve)
 {
     // Newton mode, full Newton: one flux sweep builds sigma from the initial
     // condition, then each iteration evaluates the residual at its iterate and
     // builds the Jacobian there -- 1 + n flux sweeps and n derivative sweeps,
-    // NewtonStep's budget exactly. The adjoint solve at each iteration, one per
-    // objective, adds to neither: it is assembled from the build that
-    // iteration already made.
+    // NewtonStep's budget exactly. The estimate each iteration adds to neither,
+    // and solves for nothing: it is the objective's dg dotted with the
+    // correction the iteration has already solved for.
     Run run({.relative = {1e-8}}, "objective_sweeps");
     {
         CapturedOutput quiet;
@@ -368,10 +394,8 @@ BOOST_AUTO_TEST_CASE(an_objective_solve_spends_newtons_sweeps_and_one_adjoint_so
     const long nodes = nCells * (k + 1);
     BOOST_TEST(a.calls % nodes == 0);
     BOOST_TEST(a.derivCalls % nodes == 0);
-    BOOST_TEST_MESSAGE(std::format("{} Newton iterations: {} flux sweeps, {} derivative sweeps, "
-                                   "{} adjoint solves",
-                                   a.stats.newtonIters, a.calls / nodes, a.derivCalls / nodes,
-                                   a.stats.adjointSolves));
+    BOOST_TEST_MESSAGE(std::format("{} Newton iterations: {} flux sweeps, {} derivative sweeps",
+                                   a.stats.newtonIters, a.calls / nodes, a.derivCalls / nodes));
     BOOST_TEST((a.outcome == SystemSolver::SteadyOutcome::Converged));
     BOOST_TEST(a.stats.steps == 1);
     BOOST_TEST(a.stats.newtonIters > 2);
@@ -379,22 +403,22 @@ BOOST_AUTO_TEST_CASE(an_objective_solve_spends_newtons_sweeps_and_one_adjoint_so
     BOOST_TEST(a.derivCalls / nodes == a.stats.newtonIters);
     BOOST_TEST(a.stats.residualEvals == a.stats.newtonIters);
     BOOST_TEST(a.stats.jacBuilds == a.stats.newtonIters);
-    BOOST_TEST(a.stats.adjointSolves == 2 * a.stats.newtonIters);
+    BOOST_TEST(a.stats.adjointSolves == 0);
     removeOutput("objective_sweeps");
 
-    // Under continuation the damped steps make none: one iteration each, judged
-    // by nothing. Only the undamped solve pays, per iteration.
+    // Under continuation the same: one residual and one build per iteration,
+    // damped or not, and no adjoint solve anywhere. Only the undamped steps
+    // carry an estimate.
     const Answer p = solve({.mode = SystemSolver::SteadyMode::PseudoTransient}, "objective_sweeps");
     BOOST_REQUIRE((p.outcome == SystemSolver::SteadyOutcome::Converged));
-    long undampedIterations = 0;
+    BOOST_TEST(p.stats.steps > 1);
     for (auto const &s : p.steps)
     {
-        BOOST_TEST(s.adjointSolves == (s.undamped ? 2 * s.newtonIters : 0));
-        if (s.undamped)
-            undampedIterations += s.newtonIters;
+        BOOST_TEST(s.adjointSolves == 0);
+        BOOST_TEST(s.residualEvals == s.newtonIters);
+        BOOST_TEST(s.jacBuilds == s.newtonIters);
+        BOOST_TEST(std::isnan(s.objectiveTest) == !s.undamped);
     }
-    BOOST_TEST(p.stats.steps > 1);
-    BOOST_TEST(p.stats.adjointSolves == 2 * undampedIterations);
 }
 
 BOOST_AUTO_TEST_CASE(newton_step_and_the_objective_test_take_the_same_continuation)
@@ -439,7 +463,6 @@ BOOST_AUTO_TEST_CASE(a_sliced_objective_solve_resumes_exactly)
             r.sys->setMaxContinuationSteps(slice);
 
         int total = 0;
-        long adjointSolves = 0;
         CapturedOutput quiet;
         r.sys->initialize();
         for (int slices = 0; slices < 200; ++slices)
@@ -456,23 +479,21 @@ BOOST_AUTO_TEST_CASE(a_sliced_objective_solve_resumes_exactly)
                 // Out of steps for this slice.
             }
             total += r.sys->lastSteadyStats().steps;
-            adjointSolves += r.sys->lastSteadyStats().adjointSolves;
             if (r.sys->lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged)
                 break;
         }
         const bool converged = r.sys->lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged;
         const Answer a = r.answer();
-        return std::tuple{converged, total, adjointSolves, a.u};
+        return std::tuple{converged, total, a.u};
     };
 
-    const auto [wholeOK, wholeSteps, wholeAdjoint, wholeU] = run(0);
-    const auto [slicedOK, slicedSteps, slicedAdjoint, slicedU] = run(SLICE);
+    const auto [wholeOK, wholeSteps, wholeU] = run(0);
+    const auto [slicedOK, slicedSteps, slicedU] = run(SLICE);
     BOOST_TEST_MESSAGE(std::format("uninterrupted {} steps, sliced {} steps", wholeSteps, slicedSteps));
     BOOST_REQUIRE(wholeOK);
     BOOST_REQUIRE(wholeSteps > 2 * SLICE);
     BOOST_TEST(slicedOK);
     BOOST_TEST(slicedSteps == wholeSteps);
-    BOOST_TEST(slicedAdjoint == wholeAdjoint);
     for (Index i = 0; i < wholeU.size(); ++i)
         BOOST_TEST(slicedU(i) == wholeU(i));
     removeOutput("objective_resume");

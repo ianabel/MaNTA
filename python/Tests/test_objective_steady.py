@@ -2,11 +2,11 @@
 
 The solve stops when |z^T F|, the adjoint estimate of how far each objective is
 from its value at the fixed point, is inside the algebraic share of
-ObjectiveTolerance. The C++ half -- the estimate against the forward Newton
-correction, the threshold walked from both sides, the sliced resume, the stall
--- is Tests/UnitTests/ObjectiveSteadyTests.cpp. What is only reachable here is
-the dict surface, the statistics a driver reads back, and that a Python case is
-asked for nothing by the adjoint solves the test makes.
+ObjectiveTolerance. The C++ half -- the estimate against an adjoint solve, the
+threshold walked from both sides, the sliced resume, the stall -- is
+Tests/UnitTests/ObjectiveSteadyTests.cpp. What is only reachable here is the
+dict surface, the statistics a driver reads back, and that the test asks a
+Python case for nothing beyond Newton's own sweeps.
 
 The case is nonlinear diffusion, -d_x((1 + u^2) d_x u) = 1 on [0, 1] with
 u(0) = 1 and u(1) = 0, so that Newton takes several iterations, and the
@@ -144,16 +144,15 @@ def test_the_error_in_G_is_inside_its_share(tmp_path):
 
 def test_the_adjoint_solves_ask_the_case_for_nothing(tmp_path):
     """Newton's sweeps and no others: one flux sweep for the initial sigma, then
-    one flux and one derivative sweep per iteration -- with one adjoint solve per
-    iteration beside them, which therefore calls no Python. The one derivative
-    sweep more is the end-of-run gradient's, solveAdjoint's, at the final state
-    where no build was made."""
+    one flux and one derivative sweep per iteration, and no adjoint solve. The
+    one derivative sweep more is the end-of-run gradient's, solveAdjoint's, at
+    the final state where no build was made."""
     runner, case = solve(tmp_path, SteadyStateTest="Objective", ObjectiveTolerance=1e-8)
     stats = runner.steadyStats()
     nodes = NCELLS * (K + 1)
     n = stats["newton_iterations"]
     assert n > 2
-    assert stats["adjoint_solves"] == n
+    assert stats["adjoint_solves"] == 0
     assert case.flux_calls == nodes * (1 + n)
     assert case.derivative_calls == nodes * (n + 1)
 

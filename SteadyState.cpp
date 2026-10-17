@@ -49,7 +49,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
 #include <print>
 #include <string_view>
 
@@ -224,10 +223,6 @@ int SystemSolver::nlsLSolve(N_Vector b)
             steadyJacSetup(nlsU);
             nlsSolvesSinceBuild = 0;
         }
-        // Before the solve overwrites b, which is -F at the iterate: the
-        // objective test's estimate is z^T F there, from the build just made.
-        if (objectiveTestActive())
-            estimateObjectiveError(b);
         solveJacEq(b, nlsTmp);
     }
     catch (std::exception &e)
@@ -263,6 +258,21 @@ int SystemSolver::nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, 
     // The correction is at round-off in the error weights: the iteration has
     // nothing left to do, whichever test is being made.
     const bool stoppedMoving = delnrm <= NLS_PASS_OUTRIGHT * tol;
+
+    if (objectiveTestActive())
+    {
+        // A C callback: anything the objective's dg throws is carried out to
+        // steadyNewtonSolve and rethrown there, as nlsSys does.
+        try
+        {
+            estimateObjectiveError(del);
+        }
+        catch (...)
+        {
+            nlsException = std::current_exception();
+            return -1;
+        }
+    }
 
     if (m == 0)
     {
@@ -442,30 +452,20 @@ double SystemSolver::objectiveAlgebraicTolerance(Index g, double G) const
     return objectiveBudgetAlgebraic * std::max(rel * std::abs(G), abs);
 }
 
-// See the declaration. z^T F is the dual-weighted estimate of G(y) - G(y*): with
-// J^T z = dG/dy, z^T F = (dG/dy) J^-1 F, the first-order change in G a Newton
-// step from y would make -- the same number estimateObjective forms as
-// (dG/dy) . delta from a forward solve, here from the adjoint so that the same
-// solve gives the sensitivities a caller may want. The build at nlsU is the one
-// the Newton step about to be taken uses, so the operator is exact there under
-// full Newton, and the last build's under NewtonJacobianReuse > 1.
-void SystemSolver::estimateObjectiveError(N_Vector minusF)
+// See the declaration. z^T F is the dual-weighted estimate of G(y) - G(y*), and
+// with J^T z = dG/dy it is (dG/dy) J^-1 F: the first-order change in G that the
+// Newton correction from y makes. The iteration has just solved for that
+// correction with the build at nlsU, so the estimate is a dot product with it --
+// the same number an adjoint solve from that build would give, without the
+// assembly, the nCells factorisations and the per-objective solves
+// solveAdjointAt spends on its own copy of J^T: a quarter to a third of a whole
+// Newton iteration on a C++ case whose physics is cheap.
+void SystemSolver::estimateObjectiveError(N_Vector correction)
 {
     const Index ng = adjointProblem->getNg();
     DGSoln state(nVars, grid, k, N_VGetArrayPointer(nlsU), nScalars, nAux, nField);
-
-    std::vector<Index> objectives(ng);
-    std::iota(objectives.begin(), objectives.end(), Index{0});
-    solveAdjointAt(*adjointProblem, objectives, state);
-
-    double const *b = N_VGetArrayPointer(minusF);
+    double const *d = N_VGetArrayPointer(correction);
     const Index cellDOF = static_cast<Index>(localDOF);
-    const Index nLambda = nVars * (nCells + 1);
-    const Index lambdaStart = nCells * cellDOF;
-    const Index fieldStart = lambdaStart + nLambda + nScalars;
-
-    if (superconvergent)
-        postprocessor->computeUStar(state);
 
     nlsObjectivePrevTest = nlsObjectiveTest;
     nlsObjectiveError.resize(ng);
@@ -473,18 +473,17 @@ void SystemSolver::estimateObjectiveError(N_Vector minusF)
     double worst = 0.0;
     for (Index g = 0; g < ng; ++g)
     {
-        AdjointSolution const *z = adjointSolution(g, state);
-        double zb = 0.0;
+        // dG/dy has no trace or field block, so only the cells contribute.
+        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, state, t0);
+        double change = 0.0;
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
-            zb += z->squ[i].dot(Eigen::Map<const Vector>(b + i * cellDOF, cellDOF));
-        zb += z->lambda.dot(Eigen::Map<const Vector>(b + lambdaStart, nLambda));
-        if (nField > 0)
-            zb += z->field.dot(Eigen::Map<const Vector>(b + fieldStart, nField));
+            change += Gy[i].dot(Eigen::Map<const Vector>(d + i * cellDOF, cellDOF));
 
+        if (superconvergent)
+            postprocessor->computeUStar(state);
         const double G = superconvergent ? adjointProblem->GFn(g, state, *postprocessor)
                                          : adjointProblem->GFn(g, state);
-        // b is -F, so z^T F = -zb; only its size is tested.
-        nlsObjectiveError(g) = std::abs(zb);
+        nlsObjectiveError(g) = std::abs(change);
         nlsObjectiveTolerance(g) = objectiveAlgebraicTolerance(g, G);
         const double ratio = nlsObjectiveError(g) == 0.0
                                  ? 0.0
