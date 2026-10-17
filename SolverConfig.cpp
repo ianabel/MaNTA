@@ -307,6 +307,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(OutputPoints, int);
     READ(OutputFilename, std::string);
     READ(solveAdjoint, bool);
+    READ(WriteAdjoints, bool);
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
@@ -954,6 +955,13 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setInitialTimestep(config.initialTimestep);
     system.setInputFile(config.OutputFilename);
     system.setSolveAdjoint(config.solveAdjoint);
+    // The adjoint states it would write are solved at the end of a run only when
+    // solveAdjoint is set, so without it there is nothing to write.
+    if (config.WriteAdjoints && !config.solveAdjoint)
+        throw std::invalid_argument(
+            "WriteAdjoints needs solveAdjoint: the adjoint states it writes are the ones the "
+            "end-of-run adjoint solve leaves.");
+    system.setWriteAdjoints(config.WriteAdjoints);
     system.setNOutput(config.OutputPoints);
     system.setMinStepSize(config.MinStepSize);
     system.setZeroFlux(config.zeroFlux);

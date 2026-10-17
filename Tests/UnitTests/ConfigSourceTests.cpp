@@ -319,6 +319,25 @@ BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_field_solve_settings_throug
     BOOST_TEST(sys.getFieldSolveMaxAdjointSweeps() == 9);
 }
 
+BOOST_AUTO_TEST_CASE(write_adjoints_reaches_the_solver_and_needs_solve_adjoint)
+{
+    // The adjoint states WriteAdjoints writes are the ones the end-of-run adjoint
+    // solve leaves, so without solveAdjoint there is nothing to write -- refused
+    // rather than writing an empty group.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+    BOOST_TEST(!load(minimal).WriteAdjoints);
+    BOOST_TEST(!sys.getWriteAdjoints());
+
+    applySolverConfig(load(minimal + "solveAdjoint = true\nWriteAdjoints = true\n"), sys);
+    BOOST_TEST(sys.getWriteAdjoints());
+
+    SystemSolver other(grid, 1, &problem);
+    BOOST_CHECK_THROW(applySolverConfig(load(minimal + "WriteAdjoints = true\n"), other),
+                      std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_defaulted)
 {
     // As for SteadyStateSolver: a typo would otherwise silently pick a

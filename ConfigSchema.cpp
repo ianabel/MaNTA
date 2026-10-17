@@ -92,6 +92,9 @@ const std::vector<Entry> &table()
          "Base name for output files; defaults to the config file's stem."},
         {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
          "Build the adjoint problem and solve for dG/dp after the integration."},
+        {"WriteAdjoints", {}, Type::Bool, Category::Solver, false, false, false,
+         "Write G, dG/dp and each objective's adjoint state z into the netCDF output at the "
+         "end of the run; needs solveAdjoint. See docs/adjoints.rst."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
          "Arms steady-state termination by its presence. Its value is compared against dy/dt "
          "under TimeMarch, and against a mesh-independent weighted norm of the steady residual "

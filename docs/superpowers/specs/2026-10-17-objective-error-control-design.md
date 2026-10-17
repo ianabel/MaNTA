@@ -159,7 +159,7 @@ The `Runner`, and `FFIRunner` for the host-side reads, gains:
 | call | returns | phase |
 |---|---|---|
 | `solve_adjoint(g=None)` | solves at the current state, on demand -- between slices, not only at the end -- reusing the last build | 1 |
-| `adjoint_state(g)` | `z` as nodal arrays per variable: `sigma`, `q`, `u`, `aux`, the traces, the scalars, the field DOFs | 1 |
+| `adjoint_state(g)` | `z` as nodal arrays per variable: `sigma`, `q`, `u`, `aux`, the traces, the field DOFs (no scalars: see Phase 1 as built) | 1 |
 | `objective_gradient(g)` | `G_y`, the right-hand side, in the same layout | 1 |
 | `objective_sensitivity(g)` | `w` for the flux and the sources, per node and channel, with node positions | 1 |
 | `objectiveEstimate()` | exists; gains the discretisation estimate and the per-cell `eta_K` | 3 |
@@ -189,6 +189,52 @@ calls.
    `DegreeAdaptation` and `MeshAdaptation`. Measured: does the adapted run meet
    `eps_G` against a closed form or a converged reference, and at what cost
    against `AdaptationTarget = "Solution"` tuned to the same accuracy in G?
+
+## Phase 1 as built
+
+Where the build departs from the text above, or measured something it did not
+anticipate:
+
+* **"Reusing the build" means its physics derivatives, not its factorisation.**
+  The forward factorisation is of `MX` at the build's alpha (IDA's `cj`, or
+  `1/dt` in continuation), and the adjoint wants `dF/dy` at alpha = 0. So every
+  `updateMatricesForJacSolve` keeps the derivative blocks it took
+  (`jacobianDerivatives`), and `assembleAdjointOperator` builds `M^T` from them
+  at alpha = 0 into factorisations of its own. That costs an assembly and `nCells`
+  dense factorisations per adjoint solve, and no physics call; it also means an
+  adjoint solve between forward ones no longer disturbs them (the field blocks,
+  which the adjoint does share, are put back lazily by `solveJacEq`).
+* **The end-of-run adjoint is evaluated afresh only when it has to be.** It is
+  defined at the final state `y` and time `jt`, where the last build usually is
+  not: IDA's last build is at one of its iterates, and a Newton solve stops one
+  correction past its last. So `adjointDerivativesAt` reuses the build when it was
+  taken at that state bit for bit, which a steady solve that estimated its
+  objective guarantees, and otherwise evaluates the derivatives once -- once, not
+  once per objective as before. Every existing gradient, adjoint state and
+  objective estimate in the three suites and `python-examples/adjoints` is bit for
+  bit unchanged (441 hashed values over the suites, 305 over the examples).
+* **The current state** is the one `getSolution()` reads: the final state after
+  a run, the last slice's between slices. The operator is exact there when the
+  last build was there, which `operator_at_state` reports; otherwise it is the
+  last iterate's Jacobian.
+* **No scalars.** The adjoint operator has never carried the scalar bordering
+  (`v`, `w`, `N`): the end-of-run adjoint ignores scalars entirely. The new calls
+  refuse `nScalars > 0` rather than return a `z` for a different `J`, and
+  `adjoint_state` has no scalar block. The end-of-run path is unchanged and still
+  silently scalar-free; that belongs with the field-model note below.
+* **`w` covers the flux and the sources**, not the auxiliary constraints, which
+  the finite-difference check does not reach.
+* **The discrete adjoint converges slowly per node, and that bears on phase 3.**
+  `w` matches finite differences of `G` to 2e-12 of its size, so it is the exact
+  derivative of the discrete objective. Against the continuum sensitivities
+  (`Int z l_m dx`, `-Int z' l_m dx`) the per-node error falls, 8 to 16 cells, at
+  orders 2.1, 3.1, 2.0, 3.0 for k = 1..4 without `Superconvergent` and 2.1, 3.0,
+  4.0, 3.0 with it -- below the solution's. Part of the reason is that
+  `G = sum_m w_m g(u_m)` has gradient `diag(w) dg` rather than the mass-matrix
+  Riesz representer, an alternating mean-free difference within each cell that
+  `z` inherits: at k = 4, with `z` a quartic the basis represents, `z_h` is off
+  by 2.4e-4 of `max |z|`. An estimator built on `z - z_h` has to see past that
+  pattern.
 
 ## Open questions
 

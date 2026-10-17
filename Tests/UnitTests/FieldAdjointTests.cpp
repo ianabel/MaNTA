@@ -20,6 +20,8 @@
 // that never sees the coupling passes for the wrong reason.
 #include <boost/test/unit_test.hpp>
 
+#include <cstring>
+
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
@@ -1433,6 +1435,81 @@ BOOST_AUTO_TEST_CASE(a_differential_field_dof_is_differentiated_at_alpha_zero)
                                                           << fd.transpose() << ", relative error "
                                                           << relativeError(base.gradient(), fd));
     BOOST_TEST(relativeError(base.gradient(), fd) < 1e-6);
+}
+
+BOOST_AUTO_TEST_CASE(an_adjoint_solve_leaves_the_forward_field_blocks_alone)
+{
+    // The adjoint applies the field coupling at alpha = 0 through the forward
+    // solve's own A1, a2 and the model's B, and solveJacEq puts the last build's
+    // back before it uses them. Only a *differential* field DOF can tell: there
+    // B = dRdpsi + alpha dRddpsidt depends on alpha, so after a transient --
+    // whose last build was at IDA's cj -- the two B's differ.
+    const Vector p0 = baseParameters();
+    auto run = differentialRun(p0, /*nCells=*/4, /*k=*/3, "field_adjoint_restore",
+                               SystemSolver::FieldSolveMode::Exact);
+    run->setSolveAdjoint(false);
+    integrateQuietly(run, 1.0);
+    SystemSolver &sys = *run;
+    BOOST_REQUIRE(sys.jacobianDerivatives.valid);
+    BOOST_REQUIRE(sys.jacobianDerivatives.alpha > 0.0);
+
+    N_Vector r = N_VClone(sys.Y), d1 = N_VClone(sys.Y), d2 = N_VClone(sys.Y),
+             d3 = N_VClone(sys.Y);
+    {
+        double *rr = N_VGetArrayPointer(r);
+        for (sunindextype i = 0; i < N_VGetLength(r); ++i)
+            rr[i] = std::sin(0.7 + 0.3 * static_cast<double>(i));
+    }
+    const auto length = static_cast<size_t>(N_VGetLength(r));
+    auto same = [&](N_Vector a, N_Vector b)
+    {
+        return std::memcmp(N_VGetArrayPointer(a), N_VGetArrayPointer(b),
+                           length * sizeof(double)) == 0;
+    };
+
+    sys.solveJacEq(r, d1);
+    sys.solveAdjointAt(*run.adjoint, {0}, sys.yJac);
+    BOOST_REQUIRE(sys.fieldBlocksHoldAdjoint);
+    sys.solveJacEq(r, d2);
+    BOOST_TEST(same(d1, d2), "a forward solve after an adjoint one differs from one before it");
+
+    // Not vacuous: skip the restore, and the forward solve sees the adjoint's B.
+    sys.solveAdjointAt(*run.adjoint, {0}, sys.yJac);
+    sys.fieldBlocksHoldAdjoint = false;
+    sys.solveJacEq(r, d3);
+    BOOST_TEST(!same(d1, d3), "the adjoint's field blocks are the forward ones here, so the "
+                              "restore is not being tested");
+
+    for (N_Vector v : {r, d1, d2, d3})
+        N_VDestroy(v);
+}
+
+BOOST_AUTO_TEST_CASE(the_coupled_adjoint_on_demand_is_the_end_of_run_one)
+{
+    // At the final state the on-demand solve uses the derivatives the end-of-run
+    // adjoint evaluated, field coupling included, so z agrees bit for bit --
+    // transport block, trace and z_psi.
+    for (auto mode : {SystemSolver::FieldSolveMode::Exact, SystemSolver::FieldSolveMode::Iterative})
+    {
+        auto run = multiDofRun(baseParameters(), /*nCells=*/4, /*k=*/3, "field_adjoint_on_demand",
+                               mode);
+        integrateQuietly(run);
+        SystemSolver &sys = *run;
+        auto const *z = sys.adjointSolution(0, sys.yJac);
+        BOOST_REQUIRE(z != nullptr);
+        BOOST_REQUIRE(z->field.size() == ManufacturedFieldVector::N);
+        const auto squ = z->squ;
+        const Vector lambda = z->lambda, field = z->field;
+
+        sys.solveAdjointAt(*run.adjoint, {0}, sys.yJac);
+        z = sys.adjointSolution(0, sys.yJac);
+        BOOST_REQUIRE(z != nullptr);
+        BOOST_TEST(z->operatorAtState);
+        bool identical = z->lambda == lambda && z->field == field;
+        for (size_t i = 0; i < squ.size(); ++i)
+            identical = identical && z->squ[i] == squ[i];
+        BOOST_TEST(identical);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(the_adjoint_solve_inverts_the_transpose_of_the_jacobian)

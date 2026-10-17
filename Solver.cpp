@@ -71,6 +71,16 @@ void SystemSolver::initialize()
 	// Jacobian build.
 	haveJacobianKappa = false;
 
+	// Nor the derivatives the last run's Jacobian builds left for an adjoint
+	// solve to reuse, nor the adjoint states solved from them: a reused solver
+	// may be running a case whose parameters have changed, at a state that
+	// happens to match.
+	jacobianDerivatives.valid = false;
+	adjointDerivatives.valid = false;
+	fieldBlocksHoldAdjoint = false;
+	adjointSolutions.clear();
+	adjointSolutionState.clear();
+
 	// A tau frozen per continuation step is set by the continuation loop, and a
 	// time march has none: tau would stay at the initial condition's for the
 	// whole run.
@@ -951,7 +961,8 @@ void SystemSolver::finishRun()
 		try
 		{
 			runAdjointSolve();
-			// WriteAdjoints();
+			if (writeAdjoints && writeOutput)
+				WriteAdjoints();
 		}
 		catch (std::exception const &e)
 		{
@@ -1104,10 +1115,10 @@ void SystemSolver::runAdjointSolve()
 	// This used to refuse a field model outright, because the adjoint matrices
 	// carried neither geometry nor a transpose of the coupling and so would have
 	// returned a silently wrong gradient beside a perfectly good G. Both are now
-	// here: initializeMatricesForAdjointSolve fills geometry before it evaluates
-	// anything and stores A1^T and A2^T beside M^T, and solveAdjointState
-	// eliminates them exactly (FieldSolve = exact) or sweeps to a checked
-	// backward error that *throws* if it is not reached.
+	// here: the adjoint fills geometry before it evaluates anything
+	// (physicsNodesAt), assembleAdjointOperator stores A1^T and A2^T beside M^T,
+	// and solveAdjointState eliminates them exactly (FieldSolve = exact) or
+	// sweeps to a checked backward error that *throws* if it is not reached.
 	//
 	// Two limits survive the lifting and are deliberate rather than overlooked.
 	// An objective whose integrand reads State::geom directly loses its dG/dpsi

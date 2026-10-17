@@ -62,6 +62,7 @@ struct SolverConfig
     int                      OutputPoints;
     std::string              OutputFilename;
     bool                     solveAdjoint;
+    bool                     WriteAdjoints;
     bool                     WriteOutput;
     bool                     WriteDatFile;
     bool                     WriteDebugDatFiles;

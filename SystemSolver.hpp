@@ -351,10 +351,9 @@ class SystemSolver
         // A solve stops when ||F|| is small, not when G is: an optimisation sweep
         // comparing G at two parameter points needs to know how much of the
         // difference is the answer moving and how much is each solve stopping
-        // short. Both quantities that answer it are already assembled -- dG/dy is
-        // G_y, which initializeMatricesForAdjointSolve builds per objective, and
-        // the Newton step to the solution is J^-1 F from the matrix the solve has
-        // already factorised -- so
+        // short. Both quantities that answer it are cheap -- dG/dy needs only the
+        // objective's own dg (assembleObjectiveGradient), and the Newton step to
+        // the solution is J^-1 F from one residual and one Jacobian build -- so
         //
         //     corrected   = value - (dG/dy) . J^-1 F
         //     uncertainty = ||dG/dy|| ||J^-1 F||
@@ -487,6 +486,83 @@ class SystemSolver
         // What estimateObjective() last reported, filled at the end of a steady
         // solve. Invalid when the run had no AdjointProblem.
         ObjectiveEstimate lastObjectiveEstimate() const { return objectiveEstimate; };
+
+        // ---- The adjoint on demand.
+        //
+        // One objective's adjoint state z, with J^T z = dG/dy, in the solution
+        // vector's own layout: per cell [ sigma | q | u | aux ], then lambda
+        // variable-major over the nCells + 1 faces, then the field DOFs. G_y and
+        // G_field are the right-hand side it was solved against, in the same
+        // layout; dG/dy has no trace block, so there is no lambda entry to keep.
+        struct AdjointSolution
+        {
+            std::vector<Vector> squ;
+            Vector lambda;
+            Vector field;
+            std::vector<Vector> G_y;
+            Vector G_field;
+            // Whether the operator was built at the state the right-hand side was
+            // taken at. False when it is the last Jacobian build's and that
+            // build was at an earlier iterate -- see solveAdjointAt.
+            bool operatorAtState = false;
+        };
+
+        // Solve J^T z = dG/dy for each objective in `objectives`, at `state`,
+        // and keep the answers for adjointSolution().
+        //
+        // **This makes no physics call.** The operator is dF/dy at alpha = 0,
+        // assembled from the physics derivatives the last Jacobian build took --
+        // the same blocks updateMatricesForJacSolve assembled, transposed -- so
+        // the case is not asked for anything. The only hooks called are the
+        // objective's own: AdjointProblem::dg, once per objective, for the
+        // right-hand side (and, with a field model, the model's geometry and
+        // its B factorisation). Requires a build to reuse, so it refuses a
+        // solver that has never built a Jacobian.
+        //
+        // The operator is exact when that build was at `state`: a run whose
+        // adjoint was solved at its end (solveAdjoint), and a steady solve that
+        // estimated its objective on the way out, both leave one there. Between
+        // Newton iterations, or after a run that did neither, it is the last
+        // build's -- the Jacobian at an earlier iterate, against dG/dy at this
+        // one -- and AdjointSolution::operatorAtState says so.
+        //
+        // Refused with global scalars, whose bordering the adjoint operator does
+        // not carry, and under a non-constant tau, whose d tau/dy it does not.
+        void solveAdjointAt(AdjointProblem &objective, std::vector<Index> const &objectives,
+                            DGSoln const &state);
+
+        // What the last adjoint solve left for objective g -- solveAdjointAt's,
+        // or the end-of-run one computeAdjointGradients makes -- provided it was
+        // solved at `state`. nullptr otherwise, including after the state has
+        // moved on.
+        AdjointSolution const *adjointSolution(Index g, DGSoln const &state) const;
+
+        // dG/dy for objective gIndex at `state`, per cell in the [ sigma | q | u
+        // | aux ] layout: G_y, the adjoint's right-hand side. Calls only the
+        // objective's dg, at the physics nodes physicsNodesAt gives -- u* on the
+        // star nodes under the superconvergent scheme, so that this is the exact
+        // derivative of the objective GFn reports.
+        std::vector<Vector> assembleObjectiveGradient(AdjointProblem &objective, Index gIndex,
+                                                      DGSoln const &state, Time tEval);
+
+        // w = dG/dGamma: how the objective moves with the physics outputs Gamma
+        // at each physics node -- the flux sigma_hat the case returns, and its
+        // sources -- per variable. The residual reads both linearly, through the
+        // test-space projection P (the cell mass matrix on the k+1 basis nodes,
+        // A9 on the k+2 star nodes under the superconvergent scheme):
+        //
+        //     sigma row:  + P Gamma_flux     =>  w_flux    = -P^T z_sigma
+        //     u row:      - P Gamma_source   =>  w_sources = +P^T z_u
+        //
+        // from w = -z^T dF/dGamma. Rows are variables, columns physics nodes, in
+        // the order `points` lists them. No physics call.
+        struct ObjectiveSensitivity
+        {
+            std::vector<Position> points;
+            Matrix flux;
+            Matrix sources;
+        };
+        ObjectiveSensitivity objectiveSensitivity(AdjointSolution const &z) const;
 
         // Why the last steady solve stopped. Set before either failure path
         // throws, so it survives being caught.
@@ -1074,8 +1150,19 @@ class SystemSolver
         // Adjoints
         void setSolveAdjoint(bool a) { solveAdjoint = a; }
 
+        // Write each objective's adjoint state beside the solution, and G and
+        // G_p, into the netCDF output at the end of the run. Needs solveAdjoint
+        // and WriteOutput; applySolverConfig refuses it without the first.
+        void setWriteAdjoints(bool w) { writeAdjoints = w; }
+        bool getWriteAdjoints() const { return writeAdjoints; }
+
         void initializeMatricesForAdjointSolve(Index gIndex = 0);
 
+        // The adjoint operator, and dG/dy for objective gIndex, at the state the
+        // solver is in (y, jt). The derivatives are the last Jacobian build's
+        // when it was taken at that state, and evaluated afresh -- once, not
+        // per objective -- when it was not; see adjointDerivativesAt.
+        //
         // Solve J^T z = dG/dy at the state the matrices above were built from.
         // Dispatches on whether a field model is attached, exactly as solveJacEq
         // does forwards: without one this *is* solveTransportAdjoint.
@@ -1199,8 +1286,8 @@ class SystemSolver
         // Hoisted out of solveAdjointState because the coupled paths apply A^-T
         // repeatedly -- nField + 1 times for the exact Schur complement, once
         // per sweep for the iterative one -- and neither of these depends on the
-        // right-hand side. Filled by initializeMatricesForAdjointSolve, which is
-        // also the only place MXSolvers holds M^T.
+        // right-hand side. Filled by assembleAdjointOperator, from the M^T
+        // factorisations it keeps in adjointMXSolvers.
         std::vector<Matrix> adjoint_SQU_0;
 
 
@@ -1498,6 +1585,89 @@ class SystemSolver
         // it -- A sigma = -( sigma_hat, phi )_K -- so that row holds exactly.
         void assignSigmaFromFlux(DGSoln &Y, Time tEval);
 
+        // ---- What the adjoint operator is assembled from.
+        //
+        // The field coupling's three blocks as FieldResidualPrime and the
+        // geometry chain report them, before alpha is applied. A1 does not
+        // depend on alpha; A2 and B do, which is why the forward Jacobian and
+        // the adjoint (at alpha = 0) apply one evaluation differently.
+        struct FieldCouplingDerivatives
+        {
+            GlobalStateMatrix dR{0}, dRdot{0};
+            Matrix dRdpsi, dRddpsidt;
+            std::vector<Matrix> A1;
+        };
+
+        // The physics derivatives at one state and time: everything
+        // updateMatricesForJacSolve reads from the case, kept so that the
+        // adjoint operator -- the same blocks at alpha = 0, transposed -- can be
+        // assembled again without asking the case for anything. `state` is the
+        // flat solution vector they were taken at, kept to say bit for bit
+        // whether a later state is the same one.
+        struct PhysicsDerivatives
+        {
+            bool valid = false;
+            std::vector<double> state;
+            std::vector<double> stateDot;   // with a field model only: its rows read psi'
+            Time t = 0.0;
+            double alpha = 0.0;   // what the forward build applied; see applyFieldCoupling
+            GlobalStateMatrix dSigma{0}, dSource{0}, dAux{0};
+            FieldCouplingDerivatives field;
+
+            bool isAt(DGSoln const &Y, Time tEval) const;
+        };
+
+        // Every updateMatricesForJacSolve's, moved here once its blocks are
+        // factorised. What solveAdjointAt reuses.
+        PhysicsDerivatives jacobianDerivatives;
+        // The end-of-run adjoint's, when the last build was not at the final
+        // state. Kept apart from the above so the forward field blocks can still
+        // be put back from it.
+        PhysicsDerivatives adjointDerivatives;
+
+        // The derivatives at (Y, tEval) for the end-of-run adjoint: the last
+        // build's when it was taken there, bit for bit, and otherwise one
+        // ComputePhysicsDerivatives at that state -- the Adjoint site of the
+        // evaluation plan. Ydot is the field rows' psi', as the forward
+        // coupling is handed it. A case whose sources read du/dt is always
+        // evaluated afresh, since a build carries its own udot and the adjoint
+        // is defined at none.
+        PhysicsDerivatives &adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEval);
+
+        // Assemble M^T per cell from src at alpha = 0, factorise it into
+        // adjointMXSolvers, the transposed trace operator, and with a field model
+        // A1^T and A2^T. The transposed copy of assembleCellMatrix: the two must
+        // be kept in step block for block. No physics call.
+        void assembleAdjointOperator(PhysicsDerivatives &src);
+
+        // Keep what solveAdjointState just left, for adjointSolution().
+        void storeAdjointSolution(Index gIndex, DGSoln const &state, bool operatorAtState);
+
+        // The physics and field-model half of the field coupling, and the half
+        // that writes it into A1_cellwise, a2 and the model's B at a given alpha.
+        // assembleFieldCoupling is the two in sequence.
+        FieldCouplingDerivatives evaluateFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                                       PhysicsNodes const &nodes, Time tEval);
+        void applyFieldCoupling(FieldCouplingDerivatives const &d, double alphaValue);
+
+        // True once an adjoint operator has written its alpha = 0 field blocks
+        // over the forward Jacobian's. solveJacEq puts the forward ones back from
+        // jacobianDerivatives before using them, so an adjoint solve between two
+        // forward ones -- between slices of a steady solve, say -- does not
+        // change the forward solve.
+        bool fieldBlocksHoldAdjoint = false;
+
+        // M^T per cell, factorised. Kept apart from MXSolvers so that an adjoint
+        // solve leaves the forward Jacobian's factorisation as it found it.
+        std::vector<EigenCellwiseSolver> adjointMXSolvers;
+
+        // What adjointSolution() returns: one entry per objective, and the state
+        // they were solved at.
+        std::vector<std::optional<AdjointSolution>> adjointSolutions;
+        std::vector<double> adjointSolutionState;
+
+        bool writeAdjoints = false;
+
         // The variables' time derivatives sampled on the nodes the physics is
         // evaluated at, or an *empty* matrix when no variable's source reads
         // them -- which is what GlobalState::setVariableDot takes to mean "do
@@ -1526,8 +1696,8 @@ class SystemSolver
         // forward solve, and 0 where dF/dy alone is wanted, which is what makes
         // it shareable with anything that needs dF/dy alone. It is the *only*
         // place this block layout is written down for the forward direction;
-        // initializeMatricesForAdjointSolve holds the transposed copy and has to
-        // be kept in step with it block for block.
+        // assembleAdjointOperator holds the transposed copy and has to be kept
+        // in step with it block for block.
         // dSourceDot_vals is dS/d(udot), and enters weighted by alphaValue
         // beside the mass term. An empty one -- which is what
         // evaluatePhysicsDerivatives leaves when no variable declares
@@ -1595,11 +1765,11 @@ class SystemSolver
         // the objective has no trace dependence (AdjointProblem::dg reports four
         // blocks, none of them lambda), and neither has A2 -- a field residual
         // is handed a GlobalState, which has no trace slot at all.
-        // initializeMatricesForAdjointSolve *checks* the second of those rather
-        // than assuming it.
+        // transposeFieldCoupling *checks* the second of those rather than
+        // assuming it.
         //
         // Needs adjoint_SQU_0 and adjoint_K, so only meaningful after
-        // initializeMatricesForAdjointSolve.
+        // assembleAdjointOperator.
         void solveTransportAdjoint(std::vector<Vector> const &rhs,
                                    std::vector<Vector> &squOut, Vector &lambdaOut);
 

@@ -32,6 +32,7 @@
 
 set(MANTA_TEST_SOURCES
   AFnTests.cpp
+  AdjointOnDemandTests.cpp
   AdjointProblemTests.cpp
   AdjointTests.cpp
   AutodiffAuxTests.cpp
