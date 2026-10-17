@@ -341,6 +341,14 @@ in six sweeps. The bound holds throughout -- replaying every continuation step
 of a tight ``Residual`` solve, it is 1.04x the true error at its tightest and
 2.3x at its loosest.
 
+To stop a solve on this quantity rather than estimate it afterwards, set
+``SteadyStateTest = "Objective"``: the undamped Newton solve then ends when
+:math:`|(\partial G/\partial y)\cdot J^{-1}F|` — :math:`G - G_{\text{corrected}}`
+at the iterate, which is :math:`|z^T F|` for the adjoint state :math:`z` — is
+inside the algebraic share of ``ObjectiveTolerance`` for every objective. It
+reads the number off the correction the iteration solves for anyway, so it costs
+no adjoint solve and no physics call. See :ref:`objective-steady-test`.
+
 .. warning::
 
    :math:`G_{\text{err}}` bounds *solver* error only. It says how far this solve

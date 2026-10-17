@@ -516,6 +516,51 @@ Adjoints and superconvergence
        past it is refused before its first evaluation. 0 sets no cap. See
        :ref:`adaptivity-batch-cap`.
 
+.. _objective-tolerance-config:
+
+Stopping on an objective
+------------------------
+
+Read only under ``SteadyStateTest = "Objective"``, which needs ``solveAdjoint``:
+the objectives are the ones the case's adjoint problem defines. Under any other
+test the three keys are refused, since they would change nothing. See
+:ref:`objective-steady-test` for the test itself.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 12 62
+
+   * - Key
+     - Default
+     - Meaning
+   * - ``ObjectiveTolerance``
+     - ``1e-3``
+     - The accuracy asked of each objective :math:`G`, relative to :math:`|G|`:
+       a number for every objective, or an array with one per objective. An
+       array's length must be the adjoint problem's number of objectives, which
+       is checked when the solve starts.
+   * - ``ObjectiveAbsoluteTolerance``
+     - ``0.0``
+     - The floor under it, in the objective's own units, for an objective near
+       zero: the tolerance is :math:`\max(\epsilon\,|G|, \epsilon_\mathrm{abs})`.
+       A number or an array, as above. With no floor, an objective that is zero
+       at the answer asks for an accuracy no solve resolves, and the solve ends
+       ``Stalled``.
+   * - ``ObjectiveBudget``
+     - ``[0.5, 0.5]``
+     - How the tolerance is divided between the discretisation error and the
+       algebraic error, as ``[discretisation, algebraic]``: non-negative,
+       summing to 1. The steady test spends the algebraic share; the other is
+       reserved for the error of the discrete fixed point against the continuum.
+
+.. warning::
+
+   **Only the named objectives are controlled.** The solve stops when they are
+   converged, and anything else the run reports — the profiles themselves, a
+   flux, a second quantity read off the answer — may be less converged than
+   ``SteadyStateTest = "NewtonStep"`` would leave it. Name every output that
+   matters as an objective.
+
 Coupling to a magnetic-field model
 ----------------------------------
 

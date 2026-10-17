@@ -850,6 +850,95 @@ the two tests on one run; both solves return it as ``correction_norm`` in
 ``steadyStats()``, and a ``NewtonStep`` solve also returns the tested
 :math:`s\|\delta\|` as ``correction_test``.
 
+.. _objective-steady-test:
+
+Stopping on the objective: ``SteadyStateTest = "Objective"``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``NewtonStep`` converges every component of the solution to the run's
+tolerances, and what that leaves in the output a study reports is nowhere
+written down: on Shestakov's problem at its default it leaves the particle
+inventory :math:`6.5\times10^{-4}` to :math:`1.8\times10^{-3}` from the fixed
+point. ``SteadyStateTest = "Objective"`` asks
+for the output instead. It stops when, for every objective :math:`G_g` the
+case's adjoint problem defines,
+
+.. math::
+
+   |z_g^T F| \le \beta_\mathrm{alg}\,
+   \max\left(\epsilon_g\,|G_g|,\ \epsilon^\mathrm{abs}_g\right),
+   \qquad J^T z_g = \frac{\partial G_g}{\partial y},
+
+with :math:`\epsilon_g` = ``ObjectiveTolerance``, :math:`\epsilon^\mathrm{abs}_g` =
+``ObjectiveAbsoluteTolerance`` and :math:`\beta_\mathrm{alg}` the algebraic share
+of ``ObjectiveBudget`` (default one half), :math:`G_g` and :math:`F` taken at the
+iterate. :math:`z^T F` is the dual-weighted estimate of
+:math:`G(y) - G(y^\star)`, how far the objective at the iterate is from its value
+at the discrete fixed point. Each tolerance is one value for every objective or
+an array with one per objective. It needs ``solveAdjoint``, which is what
+attaches the objectives; see :ref:`objective-tolerance-config`.
+
+.. warning::
+
+   **It controls only the named objectives.** It stops when they are converged
+   and says nothing about anything else the run reports, which may be less
+   converged than ``NewtonStep`` would have left it: on the two-temperature
+   problem at a tolerance of :math:`10^{-2}` the stored energies stop
+   :math:`1.3\times10^{-3}` from the fixed point and the temperature profiles,
+   pointwise, :math:`2.7\times10^{-3}`. Name every output that matters as an
+   objective; each is held to its own tolerance.
+
+What it is, against ``NewtonStep``:
+
+* **The same continuation.** Damped steps are ``NewtonStep``'s, step for step;
+  only the undamped solve that ends the run is tested differently.
+* **No adjoint solve, and no physics call.** With :math:`J^T z = \partial
+  G/\partial y`, :math:`z^T F = (\partial G/\partial y)\,J^{-1}F`, which is the
+  change in :math:`G` that the Newton correction the iteration has just solved
+  for makes. So the test costs the objective's ``dg`` and ``GFn`` per undamped
+  iteration and nothing of the case's: an objective solve spends exactly the
+  residuals, builds and solves a ``NewtonStep`` one does over the same
+  iterations.
+* **When the estimate is trusted.** From the second iteration on, once the
+  corrections contract; on the first only when that correction is already
+  within one unit of the error weights — the gauge the continuation uses for a
+  state that has stopped moving. A first-order estimate from far off means
+  little.
+* **What is returned is better than what was tested.** The estimate is made at
+  the iterate the correction starts from, and the correction is then applied, so
+  the state returned is one Newton step past the one judged. On the four
+  benchmarks in ``python-examples/objective-tolerance/`` every stop is inside its
+  share, most by orders of magnitude.
+* **What it saves is the last iteration or two, at a loose tolerance**, and what
+  it buys is the accuracy asked for: on Jardin at :math:`10^{-2}`, four Newton
+  iterations against ``NewtonStep``'s five; on Shestakov at :math:`10^{-3}`, two
+  more than ``NewtonStep`` takes, and the inventory :math:`6.4\times10^{-8}`
+  from the fixed point rather than :math:`6.5\times10^{-4}`. That example's
+  README has the table.
+
+**A tolerance the arithmetic cannot resolve ends** ``Stalled``. If the
+correction reaches round-off in the error weights, or ``NewtonStep``'s own test
+passes and the estimate stops falling, with the objective test still unmet, the
+solve stops there and returns ``SteadyOutcome.Stalled`` — not ``Converged``, and
+not a budget spent iterating to the cap — with the state as converged as the
+iteration can make it. An objective that is zero at the answer with no
+``ObjectiveAbsoluteTolerance`` is the usual way to get one.
+
+``steadyStats()`` reports the verdict at the last undamped iteration:
+``objective_error``, the estimates :math:`|z_g^T F|`; ``objective_tolerance``,
+what each was held to; and ``objective_test``, the larger ratio of the two,
+which is at most 1 on convergence. ``adjoint_solves`` is zero. The estimate is
+of the **algebraic** error only — the solve against its own fixed point; the
+discretisation share of ``ObjectiveBudget`` is reserved for the error of that
+fixed point, which nothing estimates yet.
+
+Refused, each where it can first be seen: without ``solveAdjoint``, under
+``SteadyStateSolver = "TimeMarch"``, and an ``Objective*`` key under any other
+test, in the configuration; a tolerance list neither one value nor one per
+objective, an objective given neither tolerance, global scalars and
+``tauScaling = "Diffusive"`` — whose :math:`\mathrm{d}\tau/\mathrm{d}y` the
+operator does not carry — when the solve starts.
+
 Output from a steady solve
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -971,7 +1060,8 @@ it and writes nothing. ``runner.configure(...)`` while a loop is live abandons i
 the same way.
 
 ``OutOfSteps`` is *returned*, not raised — a budget, ``MaxContinuationSteps`` or
-``MaxRejectedSteps``, is spent and nothing is wrong. A genuine ``SolverFailed`` raises, having written the last state it
+``MaxRejectedSteps``, is spent and nothing is wrong. So is ``Stalled``, under the
+objective test, which ends the loop. A genuine ``SolverFailed`` raises, having written the last state it
 reached, so a driver tells the two apart without reading a message.
 
 The state between slices is the state reached: each slice refreshes what
