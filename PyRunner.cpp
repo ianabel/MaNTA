@@ -478,6 +478,9 @@ py::dict PyRunner::steadyStats(void) const {
       "newton_iterations"_a = s.newtonIters, "residual_evaluations"_a = s.residualEvals,
       "jacobian_builds"_a = s.jacBuilds, "jacobian_solves"_a = s.jacSolves,
       "correction_norm"_a = s.correctionNorm, "correction_test"_a = s.correctionTest,
+      "adjoint_solves"_a = s.adjointSolves, "objective_test"_a = s.objectiveTest,
+      "objective_error"_a = s.objectiveError,
+      "objective_tolerance"_a = s.objectiveTolerance,
       "pseudo_transient_step"_a = system->getPseudoTransientStep());
 }
 

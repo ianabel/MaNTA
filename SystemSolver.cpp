@@ -3967,6 +3967,7 @@ void SystemSolver::transposeFieldCoupling()
 // and nothing else, which is what keeps every existing adjoint run what it was.
 void SystemSolver::solveAdjointState()
 {
+    ++nAdjointSolves;
     if (!fieldModel)
     {
         solveTransportAdjoint(G_y, adjoint_squ, adjoint_lambdas);

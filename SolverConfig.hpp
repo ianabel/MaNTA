@@ -82,6 +82,13 @@ struct SolverConfig
     double                   NewtonStepTolerance;
     std::string              NewtonScaling;
     std::string              SteadyStateTest;
+    // SteadyStateTest = "Objective". Each tolerance list is one value for every
+    // objective or one per objective, which the solver checks against the
+    // objective's ng when it starts a solve; the budget is the [discretisation,
+    // algebraic] pair.
+    std::vector<double>      ObjectiveTolerance;
+    std::vector<double>      ObjectiveAbsoluteTolerance;
+    std::vector<double>      ObjectiveBudget;
     double                   SteadyStateStepTolerance;
     bool                     SteadyStateMeasureCorrection;
     bool                     SteadyStateDiagnostics;

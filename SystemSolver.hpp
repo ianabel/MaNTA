@@ -298,9 +298,42 @@ class SystemSolver
         // distance to the solution per component, in units of the run's own
         // tolerances. docs/superpowers/specs/2026-10-11-steady-state-termination-
         // design.md has the measurements behind both claims.
-        enum class SteadyTest { Residual, NewtonStep };
+        //
+        //  * Objective: NewtonStep's continuation, with the undamped solve
+        //    stopped on the objectives instead of on the whole solution: when
+        //    |z^T F|, the dual-weighted estimate of how far each G is from its
+        //    value at the fixed point, is within the algebraic share of
+        //    ObjectiveTolerance for every objective. z is the adjoint state at
+        //    the iterate, solved from the build that iterate already made, so the
+        //    test asks the case for nothing (solveAdjointAt). It controls only
+        //    the named objectives: anything else the run reports may be less
+        //    converged than NewtonStep would leave it.
+        //    docs/superpowers/specs/2026-10-17-objective-error-control-design.md.
+        enum class SteadyTest { Residual, NewtonStep, Objective };
         void setSteadyTest(SteadyTest test) { steadyTest = test; };
         SteadyTest getSteadyTest() const { return steadyTest; };
+
+        // The accuracy asked of each objective under SteadyTest::Objective:
+        //
+        //     eps_g = max( relative_g |G_g|, absolute_g )
+        //
+        // with G_g at the iterate being tested. Each list is one value for every
+        // objective or one per objective; which is checked against the
+        // objective's ng when a solve starts, since only then is it attached.
+        void setObjectiveTolerance(std::vector<double> relative, std::vector<double> absolute);
+
+        // How eps_g is divided between the two parts of the error in G: the
+        // discretisation's (G at the discrete fixed point against the continuum)
+        // and the algebraic one (the solve stopping before that fixed point). The
+        // steady test spends the algebraic share; the discretisation share is
+        // for the estimate of the other part. Non-negative, summing to one.
+        void setObjectiveBudget(double discretisation, double algebraic);
+        std::vector<double> const &getObjectiveTolerance() const { return objectiveRelTol; };
+        std::vector<double> const &getObjectiveAbsoluteTolerance() const { return objectiveAbsTol; };
+        std::pair<double, double> getObjectiveBudget() const
+        {
+            return {objectiveBudgetDiscretisation, objectiveBudgetAlgebraic};
+        };
 
         // epsNewt for the NewtonStep test. 0.33 is IDA's corrector constant
         // (ida.c, epcon); IDACalcIC uses a hundredth of it.
@@ -375,12 +408,20 @@ class SystemSolver
         // abandoned outright, SolverFailed, which throws. So a caller that
         // catches can still tell a solve that ran out of budget -- a partial
         // answer, and often a usable one -- from one that failed.
+        //
+        // SteadyTest::Objective adds a fifth, Stalled, which returns: the Newton
+        // correction reached round-off in the run's error weights with an
+        // objective's estimate still above its tolerance. The state is as
+        // converged as the iteration can make it, and the tolerance is below
+        // what it can resolve -- an objective at zero with no absolute floor is
+        // the ordinary way to ask for that.
         enum class SteadyOutcome
         {
             NotRun,
             Converged,
             OutOfSteps,
             SolverFailed,
+            Stalled,
         };
 
         struct ObjectiveEstimate
@@ -416,6 +457,13 @@ class SystemSolver
             double relaxation = 1.0;     // NewtonStep: the fraction of a damped step's correction applied
             double correctionNorm = std::numeric_limits<double>::quiet_NaN();
             double correctionTest = std::numeric_limits<double>::quiet_NaN();
+
+            // Objective only: max over the objectives of |z^T F| / (algebraic
+            // share of eps_g) at the step's last undamped iteration -- the number
+            // compared with 1 -- and the adjoint solves the step made, one per
+            // objective per undamped iteration.
+            double objectiveTest = std::numeric_limits<double>::quiet_NaN();
+            long adjointSolves = 0;
         };
 
         // What one steady solve cost. The two halves are gathered differently
@@ -453,6 +501,19 @@ class SystemSolver
             // extra solve at the state it stopped in. NaN otherwise.
             double correctionNorm = std::numeric_limits<double>::quiet_NaN();
             double correctionTest = std::numeric_limits<double>::quiet_NaN();
+
+            // Adjoint solves, one per objective each (solveAdjointState calls).
+            // Only SteadyTest::Objective makes any inside a solve.
+            long adjointSolves = 0;
+
+            // SteadyTest::Objective's verdict at the last undamped iteration: per
+            // objective, the estimate |z^T F| of how far G there is from its value
+            // at the fixed point, and the algebraic share of eps_g it was held to;
+            // and the larger ratio of the two, which is at most 1 on convergence.
+            // Empty and NaN otherwise.
+            Vector objectiveError;
+            Vector objectiveTolerance;
+            double objectiveTest = std::numeric_limits<double>::quiet_NaN();
 
             // Fold one finished continuation step into the totals. The KINSOL
             // fields are the only ones that must come through here: the three
@@ -1438,6 +1499,52 @@ class SystemSolver
         bool measureSteadyCorrection = false;
         void solveSteadyStateNewtonStep(bool resume);
 
+        // SteadyTest::Objective. The tolerances and the budget as configured;
+        // see setObjectiveTolerance and setObjectiveBudget.
+        std::vector<double> objectiveRelTol{1.0e-3};
+        std::vector<double> objectiveAbsTol{0.0};
+        double objectiveBudgetDiscretisation = 0.5;
+        double objectiveBudgetAlgebraic = 0.5;
+
+        // Whether the iteration under way is one the objective test judges: an
+        // undamped solve under SteadyTest::Objective. Damped continuation is
+        // judged by nothing -- each step is one iteration taken as it stands --
+        // and makes no adjoint solve, since far from the fixed point a
+        // first-order estimate of the distance to it means little.
+        bool objectiveTestActive() const
+        {
+            return steadyTest == SteadyTest::Objective && !nlsSingleIteration;
+        }
+
+        // The refusals, made when a solve starts: no objective attached, global
+        // scalars or a non-constant tau (which the adjoint operator does not
+        // carry), and tolerance lists that are neither one value nor one per
+        // objective.
+        void checkObjectiveTest() const;
+
+        // The algebraic share of eps_g for objective g, given its value G there.
+        double objectiveAlgebraicTolerance(Index g, double G) const;
+
+        // The estimate at the iterate nlsU, from minusF = -F(nlsU), the right-hand
+        // side of the Newton step about to be solved. One adjoint solve per
+        // objective from the build at that iterate -- no physics call -- and
+        // z^T F against each objective's tolerance. Fills the three below.
+        void estimateObjectiveError(N_Vector minusF);
+        double nlsObjectiveTest = std::numeric_limits<double>::quiet_NaN();
+        double nlsObjectivePrevTest = std::numeric_limits<double>::quiet_NaN();
+        Vector nlsObjectiveError;
+        Vector nlsObjectiveTolerance;
+        // Set when the iteration stopped moving with the test unmet; the solve
+        // then ends Stalled.
+        bool nlsObjectiveStalled = false;
+
+        // nlsConvTest's verdict under the objective test. `trusted` says whether
+        // the iteration is far enough into Newton's regime for a first-order
+        // estimate to mean what it says, `stoppedMoving` whether the correction
+        // is at round-off in the error weights.
+        int objectiveVerdict(bool trusted, bool stoppedMoving);
+        bool objectiveStalled(double correctionTest, double tol) const;
+
         // One SUNNonlinSol solve from Y at the current ptcStep, which is
         // infinite for an undamped one. On success Y holds the converged
         // iterate, which -- as in IDA -- is never evaluated. Fills the NewtonStep
@@ -1516,6 +1623,7 @@ class SystemSolver
         long nResidualEvals = 0;
         long nJacBuilds = 0;
         long nJacSolves = 0;
+        long nAdjointSolves = 0;   // solveAdjointState calls, one objective each
         bool steadyDiagnostics = false;
         bool steadyStepDiagnostics = false;
         SteadyStats steadyStats;

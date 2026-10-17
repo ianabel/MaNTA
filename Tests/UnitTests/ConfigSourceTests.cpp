@@ -338,6 +338,97 @@ BOOST_AUTO_TEST_CASE(write_adjoints_reaches_the_solver_and_needs_solve_adjoint)
                       std::invalid_argument);
 }
 
+BOOST_AUTO_TEST_CASE(the_objective_tolerances_reach_the_solver_from_either_source)
+{
+    // One value for every objective or one each, on both readers, and the
+    // budget as its [discretisation, algebraic] pair.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+    applySolverConfig(load(minimal + "solveAdjoint = true\nSteadyStateTest = \"Objective\"\n"
+                                     "ObjectiveTolerance = [1e-2, 1e-4]\n"
+                                     "ObjectiveAbsoluteTolerance = 1e-9\n"
+                                     "ObjectiveBudget = [0.25, 0.75]\n"),
+                      sys);
+    BOOST_TEST((sys.getSteadyTest() == SystemSolver::SteadyTest::Objective));
+    BOOST_TEST(sys.getObjectiveTolerance() == (std::vector<double>{1e-2, 1e-4}),
+               boost::test_tools::per_element());
+    BOOST_TEST(sys.getObjectiveAbsoluteTolerance() == (std::vector<double>{1e-9}),
+               boost::test_tools::per_element());
+    BOOST_TEST(sys.getObjectiveBudget().first == 0.25);
+    BOOST_TEST(sys.getObjectiveBudget().second == 0.75);
+
+    MapConfigSource map_src;
+    map_src.values = {
+        {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
+        {"LowerBoundary", 0.0}, {"UpperBoundary", 1.0},
+        {"OutputFilename", std::string("objective")},
+        {"solveAdjoint", true}, {"SteadyStateTest", std::string("Objective")},
+        {"ObjectiveTolerance", std::vector<double>{1e-2, 1e-4}},
+        {"ObjectiveAbsoluteTolerance", std::vector<double>{1e-9}},
+        {"ObjectiveBudget", std::vector<double>{0.25, 0.75}},
+    };
+    const auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
+    BOOST_TEST(fromMap.ObjectiveTolerance == (std::vector<double>{1e-2, 1e-4}),
+               boost::test_tools::per_element());
+    BOOST_TEST(fromMap.ObjectiveAbsoluteTolerance == (std::vector<double>{1e-9}),
+               boost::test_tools::per_element());
+    BOOST_TEST(fromMap.ObjectiveBudget == (std::vector<double>{0.25, 0.75}),
+               boost::test_tools::per_element());
+
+    // The defaults: 1e-3 relative, no floor, half and half.
+    SystemSolver other(grid, 1, &problem);
+    applySolverConfig(load(minimal), other);
+    BOOST_TEST(other.getObjectiveTolerance() == (std::vector<double>{1e-3}),
+               boost::test_tools::per_element());
+    BOOST_TEST(other.getObjectiveAbsoluteTolerance() == (std::vector<double>{0.0}),
+               boost::test_tools::per_element());
+    BOOST_TEST(other.getObjectiveBudget().second == 0.5);
+}
+
+BOOST_AUTO_TEST_CASE(the_objective_test_refuses_what_cannot_work)
+{
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    auto refused = [&](std::string const &body, std::string const &needle)
+    {
+        SystemSolver sys(grid, 1, &problem);
+        try
+        {
+            applySolverConfig(load(minimal + body), sys);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            BOOST_TEST_MESSAGE(e.what());
+            return std::string(e.what()).find(needle) != std::string::npos;
+        }
+        return false;
+    };
+
+    // No objective to stop on.
+    BOOST_TEST(refused("SteadyStateTest = \"Objective\"\n", "solveAdjoint"));
+    // Tolerances that nothing reads.
+    BOOST_TEST(refused("ObjectiveTolerance = 1e-2\n", "ObjectiveTolerance"));
+    BOOST_TEST(refused("solveAdjoint = true\nObjectiveAbsoluteTolerance = 1e-6\n",
+                       "ObjectiveAbsoluteTolerance"));
+    BOOST_TEST(refused("SteadyStateTest = \"Residual\"\nObjectiveBudget = [0.5, 0.5]\n",
+                       "ObjectiveBudget"));
+    // A time march stops on dy/dt.
+    BOOST_TEST(refused("solveAdjoint = true\nSteadyStateTest = \"Objective\"\n"
+                       "SteadyStateSolver = \"TimeMarch\"\n",
+                       "time march"));
+    // A budget that is not two shares of one.
+    const std::string objective = "solveAdjoint = true\nSteadyStateTest = \"Objective\"\n";
+    BOOST_TEST(refused(objective + "ObjectiveBudget = [1.0]\n", "ObjectiveBudget"));
+    BOOST_TEST(refused(objective + "ObjectiveBudget = [0.5, 0.6]\n", "ObjectiveBudget"));
+    BOOST_TEST(refused(objective + "ObjectiveBudget = [-0.5, 1.5]\n", "ObjectiveBudget"));
+    // Negative tolerances, and two lists of different lengths.
+    BOOST_TEST(refused(objective + "ObjectiveTolerance = -1e-3\n", "ObjectiveTolerance"));
+    BOOST_TEST(refused(objective + "ObjectiveTolerance = [1e-3, 1e-3]\n"
+                                   "ObjectiveAbsoluteTolerance = [0.0, 0.0, 0.0]\n",
+                       "agree"));
+}
+
 BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_defaulted)
 {
     // As for SteadyStateSolver: a typo would otherwise silently pick a

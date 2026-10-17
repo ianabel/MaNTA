@@ -327,6 +327,9 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(NewtonStepTolerance, double);
     READ(NewtonScaling, std::string);
     READ(SteadyStateTest, std::string);
+    READ(ObjectiveTolerance, std::vector<double>);
+    READ(ObjectiveAbsoluteTolerance, std::vector<double>);
+    READ(ObjectiveBudget, std::vector<double>);
     READ(SteadyStateStepTolerance, double);
     READ(SteadyStateMeasureCorrection, bool);
     READ(SteadyStateDiagnostics, bool);
@@ -384,6 +387,16 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                     "and {} would be ignored. Give GridSize to remesh, or remove {} to "
                     "resume on the file's mesh.",
                     *s, *s, *s));
+
+    // The objective tolerances are read by the Objective steady test and by
+    // nothing else, so under any other test they would be accepted and ignored.
+    if (c.SteadyStateTest != "Objective")
+        for (const char *key : {"ObjectiveTolerance", "ObjectiveAbsoluteTolerance", "ObjectiveBudget"})
+            if (auto s = spelling(key))
+                throw std::invalid_argument(std::format(
+                    "{} is given, but SteadyStateTest is \"{}\": the objective tolerances are "
+                    "read only by SteadyStateTest = \"Objective\", and would change nothing.",
+                    *s, c.SteadyStateTest));
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
@@ -990,9 +1003,27 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setSteadyTest(SystemSolver::SteadyTest::Residual);
     else if (config.SteadyStateTest == "NewtonStep")
         system.setSteadyTest(SystemSolver::SteadyTest::NewtonStep);
+    else if (config.SteadyStateTest == "Objective")
+    {
+        // The objectives are the adjoint problem's, and only solveAdjoint
+        // attaches one.
+        if (!config.solveAdjoint)
+            throw std::invalid_argument(
+                "SteadyStateTest = \"Objective\" needs solveAdjoint: it stops on the objectives "
+                "the case's adjoint problem defines, and without solveAdjoint there is none.");
+        if (config.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "SteadyStateTest = \"Objective\" applies to SteadyStateSolver = "
+                "\"PseudoTransient\" or \"Newton\"; a time march stops on dy/dt instead.");
+        if (config.ObjectiveBudget.size() != 2)
+            throw std::invalid_argument(std::format(
+                "ObjectiveBudget is the array [discretisation, algebraic]; got {} values.",
+                config.ObjectiveBudget.size()));
+        system.setSteadyTest(SystemSolver::SteadyTest::Objective);
+    }
     else
         throw std::invalid_argument(
-            "SteadyStateTest must be \"Residual\" or \"NewtonStep\"; got \"" +
+            "SteadyStateTest must be \"Residual\", \"NewtonStep\" or \"Objective\"; got \"" +
             config.SteadyStateTest + "\".");
     system.setMeasureSteadyCorrection(config.SteadyStateMeasureCorrection);
 
@@ -1045,6 +1076,9 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
         system.setNewtonStepTolerance(config.NewtonStepTolerance);
         system.setSteadyStateStepTolerance(config.SteadyStateStepTolerance);
+        system.setObjectiveTolerance(config.ObjectiveTolerance, config.ObjectiveAbsoluteTolerance);
+        if (config.ObjectiveBudget.size() == 2)
+            system.setObjectiveBudget(config.ObjectiveBudget[0], config.ObjectiveBudget[1]);
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
         system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
 

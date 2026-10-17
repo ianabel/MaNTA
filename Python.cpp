@@ -675,7 +675,10 @@ PYBIND11_MODULE(_manta, m) {
       "OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. "
       "Not a failure: the state reached is the last accepted one, and "
       "continue_steady() resumes from it and the pseudo-time step.\n"
-      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n\n"
+      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n"
+      "Stalled: SteadyStateTest = Objective only. The Newton correction reached "
+      "round-off with an objective's estimated error still above its tolerance; "
+      "the state is as converged as the solve can make it.\n\n"
       "An IntEnum, so a traced outcome compares with the members under jit: "
       "jnp.equal(outcome, SteadyOutcome.Converged).")
       .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
@@ -688,6 +691,11 @@ PYBIND11_MODULE(_manta, m) {
              "continue_steady() resumes from it and the pseudo-time step.")
       .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
              "KINSol failed in a way pseudo-transient damping cannot answer.")
+      .value("Stalled", SystemSolver::SteadyOutcome::Stalled,
+             "SteadyStateTest = Objective only: the Newton correction reached round-off "
+             "with an objective's estimated error still above its tolerance. The state "
+             "is as converged as the solve can make it; an objective near zero needs "
+             "ObjectiveAbsoluteTolerance.")
       .finalize();
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")

@@ -549,6 +549,7 @@ class SteadyOutcome(enum.IntEnum):
     Converged: ||F|| fell below SteadyStateTolerance.
     OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. Not a failure: the state reached is the last accepted one, and continue_steady() resumes from it and the pseudo-time step.
     SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.
+    Stalled: SteadyStateTest = Objective only. The Newton correction reached round-off with an objective's estimated error still above its tolerance; the state is as converged as the solve can make it.
     
     An IntEnum, so a traced outcome compares with the members under jit: jnp.equal(outcome, SteadyOutcome.Converged).
     """
@@ -556,6 +557,7 @@ class SteadyOutcome(enum.IntEnum):
     NotRun: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.NotRun: 0>
     OutOfSteps: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.OutOfSteps: 2>
     SolverFailed: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.SolverFailed: 3>
+    Stalled: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.Stalled: 4>
     @classmethod
     def __new__(cls, value):
         ...

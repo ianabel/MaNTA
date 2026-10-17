@@ -143,7 +143,25 @@ const std::vector<Entry> &table()
          "corrector test passes on the undamped Newton correction, ss*||J^-1 F|| in the run's "
          "error weights at or below SteadyStateStepTolerance, and takes each damped step as one "
          "Newton iteration (Kelley-Keyes); Residual stops when the weighted residual norm falls below "
-         "SteadyStateTolerance and keeps a continuation step only if that norm fell."},
+         "SteadyStateTolerance and keeps a continuation step only if that norm fell; Objective "
+         "continues as NewtonStep and stops when the adjoint estimate |z^T F| of every objective's "
+         "remaining error is within the algebraic share of ObjectiveTolerance. Objective needs "
+         "solveAdjoint, and controls only the objectives: see docs/running.rst."},
+        {"ObjectiveTolerance", {}, Type::DoubleList, Category::Solver, false, false,
+         std::vector<double>{1e-3},
+         "Under SteadyStateTest = Objective, the accuracy asked of each objective G, relative to "
+         "|G|: one value for every objective, or an array with one per objective. The tolerance "
+         "is max(ObjectiveTolerance |G|, ObjectiveAbsoluteTolerance), split by ObjectiveBudget."},
+        {"ObjectiveAbsoluteTolerance", {}, Type::DoubleList, Category::Solver, false, false,
+         std::vector<double>{0.0},
+         "The floor under ObjectiveTolerance, in the objective's own units, for an objective "
+         "near zero: one value, or one per objective. 0 sets none, and an objective at zero then "
+         "asks for an accuracy no solve resolves (outcome Stalled)."},
+        {"ObjectiveBudget", {}, Type::DoubleList, Category::Solver, false, false,
+         std::vector<double>{0.5, 0.5},
+         "How ObjectiveTolerance is divided between the discretisation error and the algebraic "
+         "error, as the array [discretisation, algebraic]: non-negative, summing to 1. The "
+         "Objective steady test spends the algebraic share."},
         {"SteadyStateStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.33,
          "The NewtonStep test's threshold, in units of the run's error weights. 0.33 is IDA's "
          "corrector constant; IDACalcIC uses 0.0033. Must be positive."},
