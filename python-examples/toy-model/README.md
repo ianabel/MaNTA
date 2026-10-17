@@ -130,6 +130,8 @@ gets process noise `kappa` times the predicted change, and is updated with each
 new sample. What differs between the arms is the variance assigned to a sample:
 none (raw, as before), one global level (uniform), or the reported error
 (weighted). `reporting.py`'s docstring has the details.
+`docs/superpowers/notes/2026-10-17-noisy-flux-error-bars-notes.md` interprets
+the results and relates them to the literature and to the surrogate design.
 
     python known_noise_study.py      # 168 solves, ~15 s on 6 workers
 
