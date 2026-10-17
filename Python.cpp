@@ -715,6 +715,22 @@ PYBIND11_MODULE(_manta, m) {
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
       .def("objectiveEstimate", &PyRunner::objectiveEstimate)
+      .def("solve_adjoint", &PyRunner::solve_adjoint, py::arg("g") = py::none(),
+           "Solve the adjoint J^T z = dG/dy at the current state for objective "
+           "g, or for every objective when g is None, from the last Jacobian "
+           "build and without calling the physics. Read the answer with "
+           "adjoint_state() and objective_sensitivity().")
+      .def("adjoint_state", &PyRunner::adjoint_state, py::arg("g"),
+           "The adjoint state z of objective g, as nodal arrays per variable, "
+           "the traces and the field DOFs. Needs solve_adjoint() at this state.")
+      .def("objective_gradient", &PyRunner::objective_gradient, py::arg("g"),
+           "dG/dy for objective g at the current state, in adjoint_state()'s "
+           "layout: the right-hand side of the adjoint solve.")
+      .def("objective_sensitivity", &PyRunner::objective_sensitivity,
+           py::arg("g"),
+           "dG/dGamma for objective g: how G moves with the flux and the "
+           "sources the case returns, per physics node and variable. Needs "
+           "solve_adjoint() at this state.")
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)

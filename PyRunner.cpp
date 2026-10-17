@@ -565,6 +565,102 @@ py::tuple PyRunner::getAdjointGradients(void) {
   return py::make_tuple(G, gp);
 }
 
+AdjointProblem &PyRunner::objectiveProblem() {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before its objective can be used.");
+  if (adjoint != nullptr)
+    return *adjoint;
+  if (objectiveOnlyAdjoint == nullptr)
+    objectiveOnlyAdjoint = pProblem->createAdjointProblem();
+  return *objectiveOnlyAdjoint;
+}
+
+py::dict PyRunner::nodalLayout(std::vector<Vector> const &cells,
+                               Vector const &lambda,
+                               Vector const &field) const {
+  using namespace pybind11::literals;
+  const Index nCells = system->nCells, k = system->k;
+  const Index nVars = system->nVars, nAux = system->nAux;
+  const Index nPoints = nCells * (k + 1);
+
+  // (nPoints, nVars), the orientation a batched case's GlobalState arrives in.
+  auto block = [&](Index offset, Index width) {
+    Matrix out(nPoints, width);
+    for (Index i = 0; i < nCells; ++i)
+      for (Index v = 0; v < width; ++v)
+        out.block(i * (k + 1), v, k + 1, 1) =
+            cells[i].segment(offset + v * (k + 1), k + 1);
+    return out;
+  };
+  Matrix lam(nCells + 1, nVars);
+  for (Index v = 0; v < nVars; ++v)
+    lam.col(v) = lambda.segment(v * (nCells + 1), nCells + 1);
+
+  return py::dict("x"_a = system->yJac.getPoints(),
+                  "x_faces"_a = getCellBoundaries(),
+                  "sigma"_a = block(0, nVars),
+                  "q"_a = block(nVars * (k + 1), nVars),
+                  "u"_a = block(2 * nVars * (k + 1), nVars),
+                  "aux"_a = block(3 * nVars * (k + 1), nAux), "lambda"_a = lam,
+                  "field"_a = field);
+}
+
+void PyRunner::solve_adjoint(std::optional<Index> g) {
+  AdjointProblem &ap = objectiveProblem();
+  std::vector<Index> objectives;
+  if (g)
+    objectives.push_back(*g);
+  else
+    for (Index i = 0; i < ap.getNg(); ++i)
+      objectives.push_back(i);
+  system->solveAdjointAt(ap, objectives, system->yJac);
+}
+
+py::dict PyRunner::adjoint_state(Index g) const {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before reading an adjoint state.");
+  auto const *z = system->adjointSolution(g, system->yJac);
+  if (z == nullptr)
+    throw std::runtime_error(
+        "No adjoint state for objective " + std::to_string(g) +
+        " at the current state: call solve_adjoint() first, and again after "
+        "the state moves.");
+  py::dict out = nodalLayout(z->squ, z->lambda, z->field);
+  out["operator_at_state"] = z->operatorAtState;
+  return out;
+}
+
+py::dict PyRunner::objective_gradient(Index g) {
+  AdjointProblem &ap = objectiveProblem();
+  if (g < 0 || g >= ap.getNg())
+    throw std::out_of_range("Objective " + std::to_string(g) +
+                            " requested, but the adjoint problem defines " +
+                            std::to_string(ap.getNg()) + ".");
+  const std::vector<Vector> Gy =
+      system->assembleObjectiveGradient(ap, g, system->yJac, system->jt);
+  return nodalLayout(Gy, Vector::Zero(system->nVars * (system->nCells + 1)),
+                     Vector::Zero(system->getFieldDOF()));
+}
+
+py::dict PyRunner::objective_sensitivity(Index g) const {
+  using namespace pybind11::literals;
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before reading a sensitivity.");
+  auto const *z = system->adjointSolution(g, system->yJac);
+  if (z == nullptr)
+    throw std::runtime_error(
+        "No adjoint state for objective " + std::to_string(g) +
+        " at the current state: call solve_adjoint() first, and again after "
+        "the state moves.");
+  const auto w = system->objectiveSensitivity(*z);
+  return py::dict("x"_a = w.points, "flux"_a = Matrix(w.flux.transpose()),
+                  "sources"_a = Matrix(w.sources.transpose()),
+                  "operator_at_state"_a = z->operatorAtState);
+}
+
 Vector
 PyRunner::getDerivative(Index var,
                         std::optional<std::vector<Position>> const &points) {

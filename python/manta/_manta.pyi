@@ -421,6 +421,10 @@ class Runner:
         ...
     def abandon_steady(self) -> None:
         ...
+    def adjoint_state(self, g: typing.SupportsInt | typing.SupportsIndex) -> dict:
+        """
+        The adjoint state z of objective g, as nodal arrays per variable, the traces and the field DOFs. Needs solve_adjoint() at this state.
+        """
     def configure(self, arg0: dict) -> None:
         ...
     def continue_steady(self, estimate: bool = True) -> SteadyOutcome:
@@ -441,6 +445,14 @@ class Runner:
         ...
     def objectiveEstimate(self) -> dict:
         ...
+    def objective_gradient(self, g: typing.SupportsInt | typing.SupportsIndex) -> dict:
+        """
+        dG/dy for objective g at the current state, in adjoint_state()'s layout: the right-hand side of the adjoint solve.
+        """
+    def objective_sensitivity(self, g: typing.SupportsInt | typing.SupportsIndex) -> dict:
+        """
+        dG/dGamma for objective g: how G moves with the flux and the sources the case returns, per physics node and variable. Needs solve_adjoint() at this state.
+        """
     @typing.overload
     def run(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
@@ -449,6 +461,10 @@ class Runner:
         ...
     def run_ss(self) -> None:
         ...
+    def solve_adjoint(self, g: typing.SupportsInt | typing.SupportsIndex | None = None) -> None:
+        """
+        Solve the adjoint J^T z = dG/dy at the current state for objective g, or for every objective when g is None, from the last Jacobian build and without calling the physics. Read the answer with adjoint_state() and objective_sensitivity().
+        """
     def start_steady(self, estimate: bool = True) -> SteadyOutcome:
         ...
     def steadyStats(self) -> dict:
