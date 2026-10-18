@@ -72,6 +72,7 @@ else:
     multinode = False
 
 from functools import partial
+from typing import Callable
 import manta as MaNTA
 from manta.jax import FFIRunner
 from yancc_wrapper import yancc_data
@@ -85,6 +86,7 @@ if "TEST_STELLARATOR" in os.environ:
 else:
     from dke_sol import compute_dke_sol, dke_field_jac
 
+from itg_wrapper import ITGFlux, SumFlux
 
 from manta.jax import State, Physics_Decorator, vmap_batched
 from stellarator_state import (
@@ -162,6 +164,41 @@ def MaNTA_Decorator(func):
 
     return wrapper
 
+
+class FieldJac(eqx.Module):
+    """`dke_field_jac` for any flux with `compute_dke_sol`'s signature.
+
+    The jacobian over `(field, vp, vpp)` of the flux the case actually
+    evaluates. With the ITG term on, that is `SumFlux`, which reads V' and V''
+    as well as the neoclassical solve does; differentiating `compute_dke_sol`
+    alone would drop that half. A module, not a closure, so `vmap_batched`'s
+    `filter_jit` traces the ITG arrays rather than recompiling per run.
+    """
+
+    flux: Callable
+
+    def __call__(
+        self, states, positions, t, field, vp, vpp, pitchgrid, speedgrid, params,
+        evolveDensity=False,
+    ):
+        def flux_of(tree_in):
+            _field, _vp, _vpp = tree_in
+            return self.flux(
+                states, positions, t, _field, _vp, _vpp, pitchgrid, speedgrid,
+                params, evolveDensity,
+            )
+
+        return eqx.filter_jacrev(flux_of)((field, vp, vpp))
+
+
+def itg_geometry_jac(itg: ITGFlux, geometry, states, x, vp, vpp, params, evolveDensity):
+    """d(ITG flux)/d(signals) at one point: the adjoint's ITG columns."""
+    return eqx.filter_jacrev(
+        lambda g: itg.local(g, states, x, 0.0, vp, vpp, params, evolveDensity)
+    )(geometry)
+
+
+vmap_axes_itg_geometry = (None, 0, State.vmap_axes(), 0, 0, 0, None, None)
 
 # Magic tuple to make vmap work
 vmap_axes = (State.vmap_axes(), 0)
@@ -250,7 +287,10 @@ def _unpad_state(tree, length):
 class StellaratorTransport(MaNTA.TransportSystem):
     regrid = MaNTA.Regrid.InPlace
 
-    def __init__(self, config, yancc_wrapper: yancc_data):
+    def __init__(self, config, yancc_wrapper: yancc_data, itg: ITGFlux = None):
+        """`itg`, an `itg_wrapper.ITGFlux`, adds the NN ITG heat flux to the
+        neoclassical one; it is required when the config sets `useITGProxy`
+        and refused otherwise, so the config says what physics a run had."""
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
 
@@ -264,6 +304,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
         config = StellaratorConfig(rhoUpper=self.xR, **st_config)
 
         self.params = StellaratorParams(config, _B0=5.0, _a=1.0)
+
+        if self.params.config.useITGProxy and itg is None:
+            raise ValueError("useITGProxy is set but no ITGFlux was passed")
+        if itg is not None and not self.params.config.useITGProxy:
+            raise ValueError("an ITGFlux was passed but useITGProxy is not set")
+        self.itg = itg
+        # what ComputePhysics evaluates: an eqx.Module when the ITG term is on,
+        # so its arrays are traced, not baked in
+        self.flux_fn = compute_dke_sol if itg is None else SumFlux(compute_dke_sol, itg)
         # if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
         #     raise RuntimeError(
         #         "Superconvergent is not compatible with this physics case"
@@ -599,7 +648,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def ComputePhysics(self, states, positions, t):
 
         dke_data = self._evaluate(
-            compute_dke_sol,
+            self.flux_fn,
             states,
             positions,
             t,
@@ -620,7 +669,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def ComputePhysicsDerivatives(self, states, positions, t):
 
         ddke_data = self._evaluate(
-            eqx.filter_jacrev(compute_dke_sol),
+            eqx.filter_jacrev(self.flux_fn),
             states,
             positions,
             t,
@@ -768,7 +817,25 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.npoints = npoints
         # add 1 for vp and 1 for vpp, which we also take gradients with respect to
         # -2 is for NFP and source, integer leaves which we don't get gradients of
-        self.np_cell = len(flat) - 2 + 1 + 1
+        self.np_field = len(flat) - 2 + 1 + 1
+
+        # The ITG geometry at each node -- its signals -- is a spatial
+        # parameter block of its own after V'': n_itg columns, one node's
+        # signals ravelled. objective.py contracts these columns with the
+        # tangent of the same quantity.
+        self.itg = transport_system.itg
+        self.flux_fn = transport_system.flux_fn
+        if self.itg is not None:
+            self.itg_geometry = self.itg.geometry_at(
+                jnp.pad(points, (0, self.pad_width), mode="edge")
+            )
+            node0 = jax.tree.map(lambda leaf: leaf[0], self.itg_geometry)
+            self.n_itg = jax.flatten_util.ravel_pytree(node0)[0].size
+        else:
+            self.itg_geometry = None
+            self.n_itg = 0
+
+        self.np_cell = self.np_field + self.n_itg
         self.np = self.np_cell
         self.np_boundary = 0
 
@@ -813,10 +880,12 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         grad_unraveled = jnp.stack(
             [jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0
         )
-        # zero columns for V', V'' and the boundary sensitivities: g reads none
-        # of them explicitly
+        # zero columns for V', V'', the ITG geometry and the boundary
+        # sensitivities: g reads none of them explicitly
         grad_w_vprime = jnp.pad(
-            grad_unraveled, ((0, 0), (0, 2 + self.np_boundary)), mode="constant"
+            grad_unraveled,
+            ((0, 0), (0, 2 + self.n_itg + self.np_boundary)),
+            mode="constant",
         )
 
         return grad_w_vprime.transpose()
@@ -837,7 +906,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         rounds = -(-self.npoints // self.batch_size)
         nchunks = 0 if self.batch_size == 0 else rounds
         ddke_data = vmap_batched(
-            dke_field_jac,
+            FieldJac(self.flux_fn),
             vmap_axes=vmap_axes_wfield,
             chunk_size=self.batch_size,
             nchunks=nchunks,
@@ -876,15 +945,47 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
             )
             return grad_unraveled.transpose()
 
+        if self.itg is not None:
+            ditg = vmap_batched(
+                itg_geometry_jac,
+                vmap_axes=vmap_axes_itg_geometry,
+                chunk_size=self.batch_size,
+                nchunks=nchunks,
+                sharding=data_sharding,
+            )(
+                self.itg,
+                self.itg_geometry,
+                states,
+                positions,
+                self.vp,
+                self.vpp,
+                self.params,
+                self.params.config.evolveDensity,
+            )
+
+        def with_itg(block, itg_block):
+            # rows: the field's np_field, then the ITG geometry's n_itg
+            if self.itg is None:
+                return block
+            if itg_block is None:  # the sources do not read the ITG geometry
+                return jnp.concatenate(
+                    [block, jnp.zeros((self.n_itg, block.shape[1]))], axis=0
+                )
+            return jnp.concatenate([block, unravel(itg_block)], axis=0)
+
         dsigma_out = []
         dsources_out = []
         daux_out = []
         for i in range(0, self.nVars):
-            dsigma_out.append(unravel(ddke_data[0][i]))
-            dsources_out.append(unravel(dsources[i]))
+            dsigma_out.append(
+                with_itg(unravel(ddke_data[0][i]), ditg[0][i] if self.itg is not None else None)
+            )
+            dsources_out.append(with_itg(unravel(dsources[i]), None))
 
         for i in range(0, self.nAux):
-            daux_out.append(unravel(ddke_data[1][i]))
+            daux_out.append(
+                with_itg(unravel(ddke_data[1][i]), ditg[1][i] if self.itg is not None else None)
+            )
 
         return [dsigma_out, dsources_out, daux_out]
 

@@ -25,6 +25,7 @@ class StellaratorConfig(eqx.Module):
     useSharding: bool
     useBatching: bool
     useITGProxy: bool
+    ITGScale: float
     batch_size: int
     nchunks: int
     adaptiveGrid: bool
@@ -52,6 +53,7 @@ class StellaratorConfig(eqx.Module):
         useSharding=True,
         useBatching=False,
         useITGProxy=False,
+        ITGScale=1.0,
         batch_size=16,
         nchunks=2,
         adaptiveGrid=False,
@@ -84,6 +86,8 @@ class StellaratorConfig(eqx.Module):
         self.useSharding = useSharding
         self.useBatching = useBatching
         self.useITGProxy = useITGProxy
+        # multiplies the NN ITG heat flux; 1 is the network's prediction
+        self.ITGScale = ITGScale
         self.batch_size = batch_size
         self.nchunks = nchunks
         self.adaptiveGrid = adaptiveGrid

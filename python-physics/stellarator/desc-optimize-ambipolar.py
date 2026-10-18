@@ -3,7 +3,8 @@ import os
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective
+from objective import make_objective, ObjectiveFromUserWithParams
+from itg_wrapper import ITGFluxBuilder, build_itg_proxy
 
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
@@ -79,7 +80,16 @@ st_config = {
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useBatching": True,
+    # NN ITG heat flux on top of the neoclassical one; needs torch and the
+    # itg-proxy model data (ITG_MODEL_DIR)
+    "useITGProxy": False,
+    # gyro-Bohm fluxes are large in MaNTA's units; turn the prediction down
+    "ITGScale": 1e-2,
 }
+
+ITG_MODEL_DIR = os.environ.get(
+    "ITG_MODEL_DIR", "/home/eatocco/projects/itg-proxy/demo/neural_networks"
+)
 
 
 rho_upper = 1.0
@@ -190,6 +200,24 @@ V0 = eqs[0].compute("V")["V"]
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
+
+# The ITG proxy is declared and built once, on the initial equilibrium (flux-tube
+# extent, transforms, weights); itg_builder(params) then gives the ITG flux at
+# any equilibrium of the same resolution, and is what the objective calls.
+# The table starts off the axis, where the shear-normalised GX coefficients are
+# singular; the flux is held at its innermost value inwards, and V' -> 0 there.
+use_itg = st_config.get("useITGProxy", False)
+itg_builder = None
+if use_itg:
+    itg_builder = ITGFluxBuilder(
+        build_itg_proxy(
+            eq_init,
+            np.linspace(0.1, rho_upper, 12),
+            ensemble_dir=os.path.join(ITG_MODEL_DIR, "cyclic_invariant_models"),
+            ensemble_csv=os.path.join(ITG_MODEL_DIR, "deephyper_exp", "results.csv"),
+            n_ensemble=10,
+        )
+    )
 ## %%
 
 #
@@ -275,7 +303,8 @@ for k in range(niters):
         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
     )
     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    itg = itg_builder(eq2.params_dict) if use_itg else None
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg)
     st.run()
 
     pi = st.getPressure()
@@ -319,8 +348,10 @@ manta_objective = make_objective(config, yancc_res=yancc_res)
 #     return stored_energy, pressure
 
 
-def objective_from_user_fun(grid, data):
-    # note: don't change the signature to this function
+def objective_from_user_fun(grid, data, params=None):
+    # note: keep (grid, data) first -- ObjectiveFromUser calls fun(grid, data);
+    # ObjectiveFromUserWithParams also passes params, which the ITG term needs.
+    # The data keys must stay written out here: DESC reads them from this source
     yancc_dat = {
         "B_sup_t": data["B^theta"],
         "B_sup_z": data["B^zeta"],
@@ -354,7 +385,10 @@ def objective_from_user_fun(grid, data):
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
-    g, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
+    tree_in = (fields, Vp, Vpp)
+    if params is not None:
+        tree_in = tree_in + (itg_builder(params),)
+    g, manta_pressure = manta_objective(tree_in, grid)
     print("------------ STORED ENERGY ----------------")
     print(g)
     print("-------------------------------------------")
@@ -439,7 +473,7 @@ objectives = [
     obj_mirror_ratio,
     Volume(eq=eq, target=V0, weight=1.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
-    ObjectiveFromUser(
+    (ObjectiveFromUserWithParams if use_itg else ObjectiveFromUser)(
         objective_from_user_fun,
         eqfam[-1],
         target=0.0,
