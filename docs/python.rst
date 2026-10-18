@@ -97,6 +97,11 @@ Module contents
      - The adjoint state :math:`z`, the right-hand side
        :math:`\partial G/\partial y`, and :math:`\partial G/\partial \Gamma`
        for the flux and the sources, as nodal arrays.
+   * - ``objectiveEstimate()``
+     - What the last steady solve estimated: ``value``, ``corrected`` and
+       ``uncertainty`` per objective, and with ``EstimateDiscretisationError``
+       ``discretisation``, ``discretisation_per_cell``, ``x_faces`` and
+       ``continuum``. See :ref:`discretisation-estimate`.
    * - ``physics_case``
      - The registered C++ case name this ``Runner`` was built from, or ``""``
        when it was handed a transport system object.

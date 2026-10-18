@@ -994,6 +994,17 @@ These are deliberate and tracked, not oversights:
   and a count of the case's entry points that has to stay at zero across an
   adjoint solve.
 
+  `Tests/UnitTests/DiscretisationEstimateTests.cpp` checks the discretisation
+  estimate against closed forms: effectivity within [0.9, 1.2] over three
+  manufactured problems, four objectives, `k = 1..4` and both schemes on eight
+  cells, within 2e-3 of 1 for linear diffusion with a linear objective, the
+  per-cell indicators summing to the total, the aux rows on sixteen cells, and
+  exactly one `ComputePhysics` and one `ComputePhysicsDerivatives` per estimate.
+  What it does not cover: a solution whose error decays only algebraically in
+  `k` (Shestakov's axis), where the estimate underestimates by a `k`-dependent
+  factor that is documented rather than tested. Its two disabled cases, `measure_effectivity` and
+  `measure_cost`, regenerate the tables in `docs/adjoints.rst`; run them by name.
+
   `python/Tests/test_adjoint_aux.py` does the same at `nAux = 2`, `nVars = 1`.
   That intersection -- adjoints *and* auxiliary variables -- was uncovered, and
   three defects lived in it, all fixed:

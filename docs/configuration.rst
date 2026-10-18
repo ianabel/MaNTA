@@ -456,6 +456,14 @@ Adjoints and superconvergence
      - Write :math:`G`, :math:`\mathrm{d}G/\mathrm{d}p` and each objective's
        adjoint state into the netCDF output at the end of the run. Requires
        ``solveAdjoint``; written only with ``WriteOutput``. See :doc:`adjoints`.
+   * - ``EstimateDiscretisationError``
+     - ``false``
+     - With the objective estimate at the end of each steady solve, also estimate
+       each objective's discretisation error and its per-cell contributions, on
+       a discretisation two degrees richer over the same mesh. One physics and one
+       derivative evaluation at the enriched nodes per estimate. Requires
+       ``solveAdjoint`` and ``EstimateObjectiveOnFinish``, and is refused under a
+       time march. See :ref:`discretisation-estimate`.
    * - ``Superconvergent``
      - ``false``
      - Switch the residual and Jacobian to the superconvergent interpolatory
@@ -551,7 +559,8 @@ test the three keys are refused, since they would change nothing. See
      - How the tolerance is divided between the discretisation error and the
        algebraic error, as ``[discretisation, algebraic]``: non-negative,
        summing to 1. The steady test spends the algebraic share; the other is
-       reserved for the error of the discrete fixed point against the continuum.
+       reserved for the error of the discrete fixed point against the continuum,
+       which ``EstimateDiscretisationError`` estimates.
 
 .. warning::
 

@@ -79,6 +79,13 @@ factor is calibrated; one that is erratic is rejected. The reference is always a
 closed form: two quadratures agreeing is not evidence that either is right (the
 `diag(w)` trap in `CLAUDE.md`).
 
+**Chosen: the enriched adjoint, two degrees beyond the scheme's physics
+interpolation** (`k + 2`, `k + 3` under `Superconvergent`), with the enriched
+residual from the physics at the enriched nodes. Both of the text's assumptions
+about the postprocessed candidate failed on measurement -- that it would be
+accurate enough, and that the `k+2` star nodes would carry enough physics -- so
+the estimate makes two physics calls per steady solve. See Phase 3 as built.
+
 ### The sensitivity to the physics outputs
 
 Let `Gamma_m` be a physics output -- the flux `sigma_hat` or a source `S`, per
@@ -290,6 +297,65 @@ anticipate:
   any other test, and a budget that is not two shares of one; at the start of a
   solve, a tolerance list neither 1 nor `ng` long, an objective with neither
   tolerance, global scalars and a `Diffusive` tau.
+
+## Phase 3 as built
+
+* **The estimator** (`DiscretisationEstimate.cpp`, `docs/adjoints.rst`
+  "The discretisation error"): `eta_disc = z_e . F_e(U~) + [G_h(u_h) - G_e(U~)]
+  - (dG/dy) . J^-1 F_h`, where `U~` is the state lifted to the enriched degree
+  `k_e` (u* in place of u_h under `Superconvergent`), `F_e` and `z_e` the plain
+  degree-`k_e` HDG scheme's residual and adjoint there, and the last term the
+  algebraic error `estimateObjective` already subtracts -- so `G ~ corrected -
+  eta_disc`. The middle term is the objective's own quadrature. The enriched
+  scheme is a second `SystemSolver` that never runs: its `initialiseMatrices`
+  skips `aFn`, and the residual's transport rows were split out
+  (`assembleTransportResidual`) so it can assemble them from physics values the
+  estimate evaluated. `eta_K` shares each face's trace rows between its two
+  cells, and the cells sum to the total to round-off.
+* **Two degrees, not one.** The plain scheme's `G` converges at `h^{k+2}` for
+  even `k` and `h^{k+1}` for odd (the `k+1`-point Chebyshev rule gains a degree
+  when `k+1` is odd), so for even `k` degree `k+1` converges no faster and an
+  estimate built on it is off by a constant ratio of errors that refinement
+  does not remove -- 1.055 at `k = 2`, 1.06 at `k = 4` on the linear
+  manufactured problem. `Superconvergent` at degree `k` gives the plain scheme's
+  `G` at `k+1` to every printed digit there, so its increment is 3. With an
+  increment of 1 under `Superconvergent` the estimate of `int u` and `int x u`
+  on the linear problem is zero to round-off for `k >= 2`.
+* **Effectivity**, over four manufactured problems x four objectives x `k = 1..5`
+  x 4, 8, 16 cells, errors above 1e-11: plain scheme median 1.000, range
+  0.84-1.44, 95% within 10%; superconvergent median 1.000, range 0.88-1.00, 99%
+  within 10%. The postprocessed adjoint: 0.999, -1.27-5.28, 67% (plain), and
+  1.000, 0.73-5.08, 78% (superconvergent) -- rejected as erratic. It fails on
+  nonlinear objectives (the `diag(w)` pattern phase 1 measured, inherited by
+  `z_h`) and on nonlinear physics. Park: 0.98-1.04 at `k = 1..5` on 2-16 cells,
+  both schemes. A fifth problem, the nonlinear flux through an aux variable, is
+  within 0.94-1.08 on 16 cells but pre-asymptotic below that, its error changing
+  sign between meshes. No calibration.
+* **Shestakov is the limit, and an honest one.** 0.75, 0.64, 0.55, 0.49, 0.43
+  for `k = 1..5` (plain, 40 cells; 0.91 down to 0.77 superconvergent), steady in
+  `h`. Its error is the boundary-cell flux deficit, `~ h / (k+1)^2`, which the
+  enriched scheme commits too, so the estimate is `e_k - e_{k_e}` and its
+  effectivity `1 - ((k+1)/(k+3))^2` = 0.75, 0.64, 0.56, 0.49, 0.44 -- as
+  measured. With `zeroFlux` the axis's `x^{4/3}` still limits the rate, and the
+  effectivity is 0.30-1.10 (plain), 1.17-1.91 (superconvergent); with the source
+  edge inside a cell it is -3.1 to 3.9. An error that does not decay faster in
+  `k` than the scheme's own is not seen.
+* **Cost**: one `ComputePhysics` and one `ComputePhysicsDerivatives` at
+  `N(k_e + 1)` points per estimate -- a new evaluation-plan kind,
+  `DiscretisationEstimate`, and cadence, `PerObjectiveEstimate`, listed whenever
+  the solver is configured to estimate (the estimate refuses any other solver,
+  so the listing is exact); `MaxPhysicsBatch` applies to it. In wall time on a
+  free case, 3.1-4.9x a residual plus a Jacobian build (the degree-`k_e`
+  assembly); on the Python benchmarks +7% to +35% of a steady solve.
+* **Exposure**: `EstimateDiscretisationError` (needs `solveAdjoint` and
+  `EstimateObjectiveOnFinish`, refused under `TimeMarch`; refused at
+  `initialize` with scalars, a field model, a non-constant tau, `k = 0`, or a
+  batch past `MaxPhysicsBatch`). `ObjectiveEstimate::discretisation` in C++,
+  `discretisation`, `discretisation_per_cell`, `x_faces` and `continuum` in
+  `Runner.objectiveEstimate()`, and one line per objective at the end of the
+  solve. Every existing output is unchanged: the regression configs' `.nc`
+  files byte for byte, and `G`, `G_p`, `objectiveEstimate` and the solutions of
+  the 32-run Python record bit for bit.
 
 ## Open questions
 

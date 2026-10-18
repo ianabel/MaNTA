@@ -641,9 +641,16 @@ The kinds, for :math:`N` cells at degree :math:`k`:
      - as ``Residual``
      - per Jacobian build
    * - ``Adjoint``
-     - ``ComputePhysicsDerivatives``, one call per objective
+     - ``ComputePhysicsDerivatives``
      - as ``Residual``
-     - per adjoint solve, including the objective estimate a steady solve makes
+     - at most once, for the adjoint at the end of a run, when the last Jacobian
+       build was not at the final state
+   * - ``DiscretisationEstimate``
+     - ``ComputePhysics`` and ``ComputePhysicsDerivatives``
+     - :math:`N(k+3)`, or :math:`N(k+4)` superconvergent: the nodes of the basis
+       two degrees beyond the physics interpolation
+     - only with ``EstimateDiscretisationError``: once per objective estimate,
+       at the end of each steady solve or slice
    * - ``InitialProjection``
      - pointwise ``InitialValue``, ``InitialDerivative``, ``InitialAuxValue``
      - :math:`30N` Gauss points
