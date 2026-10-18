@@ -484,9 +484,10 @@ Adjoints and superconvergence
        See :ref:`degree-adaptation`.
    * - ``DegreeTolerance``
      - ``1e-6``
-     - Target for ``DegreeAdaptation``: the estimated :math:`L^2` error relative
-       to the solution's own :math:`L^2` norm, worst variable, floored by
-       ``Absolute_tolerance``.
+     - Target for ``DegreeAdaptation`` under the solution target: the estimated
+       :math:`L^2` error relative to the solution's own :math:`L^2` norm, worst
+       variable, floored by ``Absolute_tolerance``. Refused under
+       ``AdaptationTarget = "Objective"``, whose target is ``ObjectiveTolerance``.
    * - ``MaxPolynomialDegree``
      - ``10``
      - Ceiling on the degree ``DegreeAdaptation`` may reach. Reaching it warns
@@ -501,7 +502,18 @@ Adjoints and superconvergence
      - ``10``
      - How much error one extra degree is assumed to buy, in
        :math:`\Delta k = \lceil \log_b(E/\epsilon) \rceil`. Between 10 and 100;
-       larger is more aggressive and so asks for fewer degrees.
+       larger is more aggressive and so asks for fewer degrees. 10 is the
+       cheapest measured for either target; see :ref:`adaptivity-objective`.
+   * - ``AdaptationTarget``
+     - ``"Solution"``
+     - What ``DegreeAdaptation`` and ``MeshAdaptation`` adapt to. ``"Solution"``:
+       the degree to ``DegreeTolerance`` on :math:`u^* - u_h`, the mesh from the
+       modal decay. ``"Objective"``: the degree until every objective's
+       estimated discretisation error is within the discretisation share of
+       ``ObjectiveTolerance``, the mesh from where that error is. ``"Objective"``
+       needs ``solveAdjoint``, turns ``EstimateDiscretisationError`` on, and makes
+       ``"Objective"`` the default ``SteadyStateTest``. Refused without one of the
+       two drivers. See :ref:`adaptivity-objective`.
    * - ``RebuildPhysicsOnRegrid``
      - ``false``
      - Let an adaptation driver destroy the physics case and build a new instance
@@ -529,10 +541,12 @@ Adjoints and superconvergence
 Stopping on an objective
 ------------------------
 
-Read only under ``SteadyStateTest = "Objective"``, which needs ``solveAdjoint``:
-the objectives are the ones the case's adjoint problem defines. Under any other
-test the three keys are refused, since they would change nothing. See
-:ref:`objective-steady-test` for the test itself.
+Read under ``SteadyStateTest = "Objective"`` and ``AdaptationTarget =
+"Objective"``, both of which need ``solveAdjoint``: the objectives are the ones
+the case's adjoint problem defines. The steady test spends the algebraic share
+and the adaptation target the discretisation share. Under neither the three keys
+are refused, since they would change nothing. See :ref:`objective-steady-test`
+for the test and :ref:`adaptivity-objective` for the adaptation.
 
 .. list-table::
    :header-rows: 1
@@ -558,9 +572,11 @@ test the three keys are refused, since they would change nothing. See
      - ``[0.5, 0.5]``
      - How the tolerance is divided between the discretisation error and the
        algebraic error, as ``[discretisation, algebraic]``: non-negative,
-       summing to 1. The steady test spends the algebraic share; the other is
-       reserved for the error of the discrete fixed point against the continuum,
-       which ``EstimateDiscretisationError`` estimates.
+       summing to 1. The steady test spends the algebraic share; the
+       discretisation share bounds the error of the discrete fixed point against
+       the continuum, which ``EstimateDiscretisationError`` estimates and
+       ``AdaptationTarget = "Objective"`` adapts to. Each needs its own share to
+       be positive.
 
 .. warning::
 

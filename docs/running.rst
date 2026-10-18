@@ -929,12 +929,14 @@ iteration can make it. An objective that is zero at the answer with no
 what each was held to; and ``objective_test``, the larger ratio of the two,
 which is at most 1 on convergence. ``adjoint_solves`` is zero. The estimate is
 of the **algebraic** error only — the solve against its own fixed point; the
-discretisation share of ``ObjectiveBudget`` is reserved for the error of that
-fixed point, which nothing estimates yet.
+discretisation share of ``ObjectiveBudget`` bounds the error of that fixed point,
+which ``EstimateDiscretisationError`` estimates (:ref:`discretisation-estimate`)
+and ``AdaptationTarget = "Objective"`` adapts the degree and the mesh to
+(:ref:`adaptivity-objective`).
 
 Refused, each where it can first be seen: without ``solveAdjoint``, under
 ``SteadyStateSolver = "TimeMarch"``, and an ``Objective*`` key under any other
-test, in the configuration; a tolerance list neither one value nor one per
+test unless ``AdaptationTarget = "Objective"`` reads it, in the configuration; a tolerance list neither one value nor one per
 objective, an objective given neither tolerance, global scalars and
 ``tauScaling = "Diffusive"`` — whose :math:`\mathrm{d}\tau/\mathrm{d}y` the
 operator does not carry — when the solve starts.
@@ -1458,6 +1460,13 @@ until it is good enough:
 
 On ``AdjointPoster`` at 6 cells that is four solves — ``k`` = 2, 5, 8, 10 —
 taking the estimated error 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10.
+
+That is the default target, the solution. ``AdaptationTarget = "Objective"``
+measures each level by the objectives instead — each one's estimated
+discretisation error against its share of ``ObjectiveTolerance`` — and is
+described, with what it costs and whether it meets its tolerance, in
+:ref:`adaptivity-objective`. The estimate below, and the fourth of the points
+after it, are the solution target's; the rest holds for both.
 
 The estimate is the gap between the solution and its own postprocessing,
 :math:`E_K^2 = \|u^* - u_h\|^2_{L^2(K)} / |K|` per cell (Capasso *et al.*

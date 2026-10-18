@@ -154,9 +154,10 @@ const std::vector<Entry> &table()
          "solveAdjoint, and controls only the objectives: see docs/running.rst."},
         {"ObjectiveTolerance", {}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{1e-3},
-         "Under SteadyStateTest = Objective, the accuracy asked of each objective G, relative to "
-         "|G|: one value for every objective, or an array with one per objective. The tolerance "
-         "is max(ObjectiveTolerance |G|, ObjectiveAbsoluteTolerance), split by ObjectiveBudget."},
+         "Under SteadyStateTest or AdaptationTarget = Objective, the accuracy asked of each "
+         "objective G, relative to |G|: one value for every objective, or an array with one per "
+         "objective. The tolerance is max(ObjectiveTolerance |G|, ObjectiveAbsoluteTolerance), "
+         "split by ObjectiveBudget."},
         {"ObjectiveAbsoluteTolerance", {}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{0.0},
          "The floor under ObjectiveTolerance, in the objective's own units, for an objective "
@@ -166,7 +167,8 @@ const std::vector<Entry> &table()
          std::vector<double>{0.5, 0.5},
          "How ObjectiveTolerance is divided between the discretisation error and the algebraic "
          "error, as the array [discretisation, algebraic]: non-negative, summing to 1. The "
-         "Objective steady test spends the algebraic share."},
+         "Objective steady test spends the algebraic share, AdaptationTarget = Objective the "
+         "discretisation share."},
         {"SteadyStateStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.33,
          "The NewtonStep test's threshold, in units of the run's error weights. 0.33 is IDA's "
          "corrector constant; IDACalcIC uses 0.0033. Must be positive."},
@@ -211,9 +213,9 @@ const std::vector<Entry> &table()
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
          "Superconvergent."},
         {"DegreeTolerance", {}, Type::Double, Category::Solver, false, false, 1.0e-6,
-         "Target for DegreeAdaptation: the estimated L2 error relative to the "
-         "solution's own L2 norm, worst variable. Relative so that one number means "
-         "the same thing for variables in different units."},
+         "Target for DegreeAdaptation under AdaptationTarget = Solution: the estimated L2 "
+         "error relative to the solution's own L2 norm, worst variable. Relative so that "
+         "one number means the same thing for variables in different units."},
         {"MaxPolynomialDegree", {}, Type::UInt, Category::Solver, false, false, 10u,
          "Ceiling on the degree DegreeAdaptation may reach. Reaching it warns and "
          "returns the best result available rather than failing."},
@@ -234,9 +236,10 @@ const std::vector<Entry> &table()
          "Objective the default SteadyStateTest. See docs/adaptivity.rst."},
         {"MeshAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Run the p -> h -> p sequence: solve uniform at PolynomialDegree, decide from "
-         "the per-cell modal decay rate whether an end of the domain wants grading, "
-         "regrade at the same cell count if so, then adapt the degree to "
-         "DegreeTolerance. Needs PolynomialDegree >= 3, because at 2 the decision is "
+         "the per-cell modal decay rate (or, under AdaptationTarget = Objective, from where "
+         "the objectives' discretisation error is) whether an end of the domain wants "
+         "grading, regrade at the same cell count if so, then adapt the degree. Needs "
+         "PolynomialDegree >= 3, because at 2 the decision is "
          "reversed rather than merely noisy. Steady solves only; implies "
          "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
         {"RebuildPhysicsOnRegrid", {}, Type::Bool, Category::Solver, false, false, false,

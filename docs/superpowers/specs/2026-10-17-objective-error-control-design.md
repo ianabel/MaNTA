@@ -1,6 +1,6 @@
 # Error control on an objective — design
 
-**Status:** agreed 2026-10-17; phases 1-4 below. Branch
+**Status:** agreed 2026-10-17; phases 1-4 below, all built. Branch
 `feat/objective-error-control`, from `main`.
 
 ## Goal
@@ -357,11 +357,67 @@ anticipate:
   files byte for byte, and `G`, `G_p`, `objectiveEstimate` and the solutions of
   the 32-run Python record bit for bit.
 
+## Phase 4 as built
+
+* **The degree** (`runAdaptiveDegree`, `objectiveAccuracy` in
+  `DegreeAdaptation.cpp`): the control quantity is the worst objective's
+  `|eta_g| / (beta_disc max(eps_g |G_g|, eps_abs_g))`, with `G_g` the fixed
+  point's (`corrected`) and the estimate the one each level's steady solve makes
+  on its way out, so measuring a level costs nothing beyond solving it. The rule
+  is Giorgiani's, unchanged, with target 1.
+* **The base stays 10.** Remeasured on 4 cells: the estimate falls 19-33x per
+  degree (geometric mean; Park, the manufactured nonlinear problem with `int u`
+  and `int u^2`) against 10-22x for `||u* - u_h||` -- the faster rate the text
+  expected -- but in steps of 2.8 to 390, as the Chebyshev rule gains a degree on
+  alternate `k`. Over nine runs at 1e-3, 1e-5 and 1e-8 a base of 10 took the
+  fewest levels (20; 20 and 30 took 21, 50 took 22, 100 took 23) and the fewest
+  physics evaluations, every run meeting its tolerance: an overshoot costs a
+  degree, an undershoot a whole solve.
+* **The mesh** (`objectiveGradingDecision`, `MeshAdaptation.cpp`): an end is
+  graded when the run does not yet meet its tolerance and the end region, the end
+  cell and its inward neighbour, holds at least 0.99 of the per-cell indicator
+  `sum_g |eta_{g,K}| / tol_g`. Two cells, because the estimate shares each face's
+  trace rows between the cells either side and a singular end's error sits as
+  much on that face as in the end cell (half each on `x - x^{4/3}`). Measured on
+  uniform meshes of 3-20 cells at `k = 3..6`: singular ends hold 0.998 or more,
+  smooth problems at most 0.948 at 3 cells and 0.773 from 4. The share is a
+  constant (`objectiveEndShare`), not a key.
+* **What the target implies**, in `loadSolverConfig`: `solveAdjoint` required,
+  `EstimateObjectiveOnFinish` kept on, `EstimateDiscretisationError` turned on, the
+  `Objective` steady test the default (a named test is kept), a positive
+  discretisation share, and the solution target's `DegreeTolerance`,
+  `MeshAdaptationThreshold` and `MeshAdaptationNeighbourMargin` refused.
+  `MeshAdaptation` keeps its `k >= 3` floor.
+* **`ParallelFill` and `MaxPhysicsBatch` are unchanged**, but the estimate's batch
+  (`N(k+4)` under the superconvergent scheme the drivers use) is not a recurring
+  one and so not counted by them, while `initialize()` refuses a level whose
+  estimate breaks the cap. The objective target therefore holds its degree
+  ceiling and a filled graded cell count to levels whose estimate fits
+  (`discretisationEstimateFits`).
+* **`Runner.G()` under `Superconvergent` read `u_h`** while
+  `getAdjointGradients()`, `objectiveEstimate()`, the objective test and
+  `WriteAdjoints` all read `u*`; it now reads `u*` too. Before, the two disagreed
+  in 9 of 16 superconvergent runs of the phase-2 record, by up to 7.3e-6 relative;
+  nothing else moved.
+* **Measured** (`python-examples/objective-tolerance/adaptation.py`,
+  `docs/adaptivity.rst`): against closed forms at 1e-3 and 1e-5 the objective
+  target meets `eps_G` wherever it can be met; the solution target with its
+  `DegreeTolerance` tuned on the closed form matches it, at 1e-1 to 1e-4 depending
+  on the row, for 1.2-1.7x fewer physics evaluations where both take the same
+  degrees -- the estimate's four sweeps per level. Against the default
+  `DegreeTolerance` it spends fewer in seven runs of ten. Over 180 runs, 153
+  converged within `eps_G` (closest 0.81 of it) and none outside; 27 stopped at
+  the ceiling with a warning, all on meshes the solution target also ends on with
+  the same error. **The adjoint's accuracy** (the open question below) does not
+  limit it there; the estimate's underestimate of errors that decay only
+  algebraically in `k` does, and the budget's other half is what absorbs it.
+
 ## Open questions
 
 * **The adjoint's own accuracy.** Each estimate uses `z` at the current state,
-  whose error is first order in the state's error. Stopping can tolerate that.
-  Whether adaptation can is measured in phase 4.
+  whose error is first order in the state's error. Stopping can tolerate that,
+  and so, measured in phase 4, can adaptation: no converged run of the 180
+  missed its tolerance.
 * **Time-dependent runs** are out of scope. An adjoint for a transient
   objective is a backward-in-time solve MaNTA does not have.
 * **Field models and scalars.** `w` and `eta_disc` cover the transport physics

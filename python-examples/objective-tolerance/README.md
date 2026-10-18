@@ -140,12 +140,83 @@ given one per objective.
 
 ## What the numbers do not say
 
-The error measured here is the **algebraic** error: the stop against the discrete
-fixed point. The error of that fixed point against the continuum is the other
-half of the budget, and nothing estimates it yet — `ObjectiveBudget` reserves
-its share, and the steady test spends only its own. The discretisation estimate
-is the next phase of
-`docs/superpowers/specs/2026-10-17-objective-error-control-design.md`.
+The error measured above is the **algebraic** error: the stop against the
+discrete fixed point. The error of that fixed point against the continuum is the
+other half of the budget: `EstimateDiscretisationError` estimates it
+(`docs/adjoints.rst`), and `AdaptationTarget = "Objective"` adapts the degree and
+the mesh to it, below.
 
 `toy-model/` is not among the problems: it is linear diffusion with no source
 under another name (see its README), and Park already covers a linear problem.
+
+# Adapting to the objective
+
+`AdaptationTarget = "Objective"` drives `DegreeAdaptation` and `MeshAdaptation`
+from the objectives rather than the solution: the degree rises until every
+objective's estimated discretisation error is within the discretisation share of
+`ObjectiveTolerance`, and the mesh is graded at an end only if the run does not
+yet meet that and the end region holds 99% of the error. `docs/adaptivity.rst`
+("Adapting to an objective") has the rule and the measurements behind it.
+
+    python adaptation.py            # the table below, seconds
+    python adaptation.py --sweep    # whether eps_G is met, over 180 runs
+
+The problems all have a closed-form objective, so the error is against the
+continuum, not the estimate: a manufactured nonlinear problem,
+`-d/dx[(1 + u^2) u'] = S` with `u = sin(pi x)` and `G = int u^2 dx = 1/2`;
+Park's stored energy `int x u dx = (e - 2)/2`; `u = x - x^(4/3)`, Shestakov's
+axis singularity in a linear problem, with `int u dx = 1/14`; and Shestakov's
+inventory `int n dx` at `n_b = 0.05`, from his closed-form steady state.
+
+Each objective-target run is set against the solution target at the default
+`DegreeTolerance = 1e-6` and at a tuned one, the loosest half-decade at which
+the error in `G` is within `eps_G` — which needs the closed form to find. Both
+targets stop each solve with the same `Objective` test, so only what a level is
+measured by differs. Columns: the relative error in `G` from `Runner.G()`; the
+degrees solved and the final mesh; whole sweeps of the physics (flux and
+derivative) / point evaluations. A graded mesh is 10 cells with the wall cell
+at 6.6e-6 of the domain. Measured 2026-10-18:
+
+| problem, driver, start | eps_G | Objective | Solution, 1e-6 | Solution, tuned |
+|---|---|---|---|---|
+| manufactured, degree, k = 1, 4 cells | 1e-3 | 1.8e-5; k 1, 2; 25 / 368 | 2.5e-12; k 1, 4, 7; 24 / 504 | 1e-1: 1.8e-5; k 1, 2; 18 / 240 |
+| | 1e-5 | 2.2e-8; k 1, 4; 27 / 488 | 2.5e-12; k 1, 4, 7; 26 / 552 | 3e-2: 8.3e-7; k 1-3; 26 / 392 |
+| Park, degree, k = 1, 4 cells | 1e-3 | 1.9e-5; k 1, 3; 18 / 320 | 2.2e-8; k 1, 4, 5; 18 / 384 | 1e-2: 9.4e-5; k 1, 2; 12 / 168 |
+| | 1e-5 | 8.1e-8; k 1, 4; 18 / 356 | 2.2e-8; k 1, 4, 5; 18 / 384 | 1e-4: 8.1e-8; k 1, 4; 12 / 216 |
+| Park, mesh, k = 3, 10 cells | both | 4.6e-7; k 3, uniform; 9 / 490 | 3.6e-10; k 3, 4, uniform; 12 / 660 | 1e-1: 4.6e-7; k 3, uniform; 6 / 300 |
+| x - x^(4/3), mesh, k = 3, 10 cells | 1e-3 | 5.8e-6; k 3, **uniform**; 9 / 490 | 2.7e-7; k 3, 6, 9, 12, graded; 30 / 2580 | 3e-2: 3.5e-4; k 3, 4, graded; 18 / 960 |
+| | 1e-5 | 3.4e-6; k 3, 6-9, graded; 55 / 4610 | 2.7e-7; k 3, 6, 9, 12, graded; 30 / 2580 | 1e-3: 7.9e-6; k 3, 5-8, graded; 36 / 2640 |
+| Shestakov, mesh, k = 3, 10 cells | 1e-3 | 4.9e-5; k 3, graded; 52 / 2680 | 2.8e-7; k 3, 4, graded; 50 / 2560 | 1e-1: 4.9e-5; k 3, graded; 44 / 2200 |
+| | 1e-5 | 5.0e-7; k 3, graded; 62 / 3180 | 7.3e-7; k 3, 4, graded; 60 / 3060 | 1e-1: 5.0e-7; k 3, graded; 54 / 2700 |
+| Shestakov, degree only, k = 3, 10 cells | both | 1.3e-3, at the ceiling | 1.3e-3, at the ceiling | not reachable |
+
+**It meets `eps_G` wherever that can be met, without knowing the answer**, and
+where it cannot — Shestakov's problem by the degree alone, whose error the
+singularity caps — it stops at `MaxPolynomialDegree` with a warning, as the
+solution target does. The tuned solution target matches it, but its
+`DegreeTolerance` runs from 1e-1 to 1e-4 across the rows, and no single value
+serves: 1e-1, enough for four rows, leaves Park's stored energy 12x outside 1e-3.
+
+**It pays for the estimate**: per level, the objective estimate's residual and
+Jacobian build and the discretisation estimate's two sweeps at the enriched
+nodes. Where both targets take the same degrees that is 1.2-1.7x the tuned
+target's point evaluations. Against the default `DegreeTolerance` it spends
+fewer in seven runs of ten, and 5x fewer on `x - x^(4/3)` at 1e-3, where the
+uniform sample already meets the tolerance and it grades nothing, while the
+solution target grades and climbs to k = 12. On the same problem at 1e-5 it
+climbs one degree at a time, the estimate falling only 2.5x per degree on the
+graded mesh against the 10x the rule assumes, and takes a level more than the
+default.
+
+**Over 180 runs** (`--sweep`: the manufactured problem and Park by both drivers,
+`x - x^(4/3)` and Shestakov's by `MeshAdaptation`, from k = 3 and 4 on 5, 10
+and 20 cells, at `eps_G` from 1e-3 to 1e-7): 153 converged, every one within
+`eps_G`, the closest at 0.81 of it, and none outside it; 27 stopped at the
+ceiling with a warning, 4 of them within `eps_G` anyway. All 27 are meshes that
+cannot carry the accuracy, and the solution target settles on the same mesh with
+the same error: Shestakov's at 5 cells grades a layer holding the source edge at
+`x = 0.1` inside a cell, and at 20 cells puts 19 cells into `[0, 0.05]` and one
+across the edge; `x - x^(4/3)` at 20 cells past 1e-6 and 10 cells past 1e-7 runs
+the single bulk cell out of degree. The estimate underestimates an error that
+decays only algebraically in `k`, so on the singular problems the margin is the
+budget's other half rather than the estimate's.
