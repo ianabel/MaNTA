@@ -154,18 +154,21 @@ under another name (see its README), and Park already covers a linear problem.
 `AdaptationTarget = "Objective"` drives `DegreeAdaptation` and `MeshAdaptation`
 from the objectives rather than the solution: the degree rises until every
 objective's estimated discretisation error is within the discretisation share of
-`ObjectiveTolerance`, and the mesh is graded at an end only if the run does not
-yet meet that and the end region holds 99% of the error. `docs/adaptivity.rst`
-("Adapting to an objective") has the rule and the measurements behind it.
+`ObjectiveTolerance`, and the mesh is graded -- where the modal decay says, as
+for the solution target -- only if the sample does not meet that already.
+`docs/adaptivity.rst` ("Adapting to an objective") has the rule, the
+measurements behind it, and why the per-cell estimate does not choose the end.
 
     python adaptation.py            # the table below, seconds
-    python adaptation.py --sweep    # whether eps_G is met, over 180 runs
+    python adaptation.py --sweep    # whether eps_G is met, over 210 runs
+    python adaptation.py --starts   # ... and from 35 non-uniform meshes
 
 The problems all have a closed-form objective, so the error is against the
 continuum, not the estimate: a manufactured nonlinear problem,
 `-d/dx[(1 + u^2) u'] = S` with `u = sin(pi x)` and `G = int u^2 dx = 1/2`;
 Park's stored energy `int x u dx = (e - 2)/2`; `u = x - x^(4/3)`, Shestakov's
-axis singularity in a linear problem, with `int u dx = 1/14`; and Shestakov's
+axis singularity in a linear problem, with `int u dx = 1/14` (and in the sweeps
+its mirror image, singular at `x = 1`); and Shestakov's
 inventory `int n dx` at `n_b = 0.05`, from his closed-form steady state.
 
 Each objective-target run is set against the solution target at the default
@@ -208,15 +211,30 @@ climbs one degree at a time, the estimate falling only 2.5x per degree on the
 graded mesh against the 10x the rule assumes, and takes a level more than the
 default.
 
-**Over 180 runs** (`--sweep`: the manufactured problem and Park by both drivers,
-`x - x^(4/3)` and Shestakov's by `MeshAdaptation`, from k = 3 and 4 on 5, 10
-and 20 cells, at `eps_G` from 1e-3 to 1e-7): 153 converged, every one within
-`eps_G`, the closest at 0.81 of it, and none outside it; 27 stopped at the
-ceiling with a warning, 4 of them within `eps_G` anyway. All 27 are meshes that
-cannot carry the accuracy, and the solution target settles on the same mesh with
-the same error: Shestakov's at 5 cells grades a layer holding the source edge at
-`x = 0.1` inside a cell, and at 20 cells puts 19 cells into `[0, 0.05]` and one
-across the edge; `x - x^(4/3)` at 20 cells past 1e-6 and 10 cells past 1e-7 runs
-the single bulk cell out of degree. The estimate underestimates an error that
-decays only algebraically in `k`, so on the singular problems the margin is the
-budget's other half rather than the estimate's.
+**From uniform meshes** (`--sweep`, 210 runs: the manufactured problem and Park
+by both drivers, `x - x^(4/3)`, its mirror image and Shestakov's by
+`MeshAdaptation`, from k = 3 and 4 on 5, 10 and 20 cells, at `eps_G` from 1e-3 to
+1e-7): 176 converged, every one within `eps_G`, the closest at 0.81 of it, and
+none outside it; 34 stopped at the ceiling with a warning, 4 of them within
+`eps_G` anyway. All 34 are meshes that cannot carry the accuracy, and the
+solution target settles on the same mesh with the same error: Shestakov's at 5
+cells grades a layer holding the source edge at `x = 0.1` inside a cell, and at
+20 cells puts 19 cells into `[0, 0.05]` and one across the edge; `x - x^(4/3)`
+and its mirror at 20 cells past 1e-6 and 10 cells past 1e-7 run the single bulk
+cell out of degree.
+
+**From non-uniform meshes** (`--starts`, 350 runs: `MeshAdaptation` from k = 3 on
+35 meshes -- graded at either end, graded nine cells deep, and random -- for five
+of those problems at 1e-5 and 1e-7): 232 converged within `eps_G` and one outside
+it, the mirrored singularity from a random six-cell mesh at 1e-7, where the
+estimate in the split wall cell has the wrong sign and is 30x short (5.9e-7
+against 1e-7). 117 stopped at the ceiling, all on the singular problems --
+Shestakov's source edge inside a cell, an end the modal decay cannot judge, or a
+wall cell the degree no longer helps. Every smooth run converged within its
+tolerance on its starting mesh. The solution target at the default
+`DegreeTolerance` over the same starts converged outside `eps_G` 21 times, all on
+Shestakov's problem and by up to 1.2e-2, never having been told it.
+
+The estimate underestimates an error that decays only algebraically in `k`, so on
+the singular problems the margin is the budget's other half rather than the
+estimate's.

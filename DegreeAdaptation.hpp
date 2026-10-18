@@ -59,9 +59,8 @@ unsigned int degreeIncrement(double E, double eps, double base);
 //
 // with G_g the objective at the discrete fixed point (ObjectiveEstimate::corrected)
 // and `share` the first entry of ObjectiveBudget. `ratio` is the worst objective's
-// |eta_g| / tol_g, the quantity the degree rule drives to 1. `perCell` is what the
-// mesh decision reads: sum over objectives of |eta_{g,K}| / tol_g, so that each
-// counts by how far it is from its own tolerance and none by its units.
+// |eta_g| / tol_g: the quantity the degree rule drives to 1, and what the mesh
+// decision asks whether there is anything to grade for.
 //
 // Throws std::logic_error for a solver whose last steady solve made no
 // discretisation estimate -- which configuring for the target rules out.
@@ -72,7 +71,6 @@ struct ObjectiveAccuracy
     Vector eta;
     Vector tolerance;
     Vector G;
-    std::vector<double> perCell;
 };
 ObjectiveAccuracy objectiveAccuracy(SystemSolver const &system);
 

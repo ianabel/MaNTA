@@ -708,9 +708,9 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
             c.AdaptationTarget + "\".");
 
     // Adapting to the objectives drives the degree from their discretisation
-    // estimate and the mesh from where that error is, so it needs what the
-    // estimate needs, turns it on, and has nothing to do with the keys the
-    // solution target reads. The steady test it pairs with is the one that holds
+    // estimate and holds the mesh to where that error is, so it needs what the
+    // estimate needs, turns it on, and has no use for the solution target's
+    // tolerance. The steady test it pairs with is the one that holds
     // the other half of the same budget, so that is the default; another test
     // may still be named, and then the algebraic error is whatever it leaves.
     if (c.AdaptationTarget == "Objective")
@@ -730,14 +730,12 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "but the configuration sets EstimateDiscretisationError = false. Remove it to "
                 "have the estimate enabled automatically.");
         c.EstimateDiscretisationError = true;
-        for (const char *key : {"DegreeTolerance", "MeshAdaptationThreshold",
-                                "MeshAdaptationNeighbourMargin"})
-            if (auto s = spelling(key))
-                throw std::invalid_argument(std::format(
-                    "{} is given, but AdaptationTarget = \"Objective\": it belongs to the "
-                    "solution target and would change nothing. ObjectiveTolerance is the "
-                    "target here.",
-                    *s));
+        if (auto s = spelling("DegreeTolerance"))
+            throw std::invalid_argument(std::format(
+                "{} is given, but AdaptationTarget = \"Objective\": it is the solution "
+                "target's tolerance and would change nothing. ObjectiveTolerance is the "
+                "target here.",
+                *s));
         if (!spelling("SteadyStateTest"))
             c.SteadyStateTest = "Objective";
         if (c.ObjectiveBudget.size() != 2)

@@ -443,7 +443,13 @@ the two estimates add. The parts are also in ``DiscretisationEstimate`` in C++.
 
 :math:`\eta_K` is the same sum restricted to cell :math:`K`, each face's trace
 rows shared equally between the cells on either side of it, so the cells sum to
-the total to round-off.
+the total to round-off. **It is a split of the total, not a localisation of the
+error**: the residual of each cell is tested against the whole enriched adjoint
+rather than against the part of it the discretisation cannot represent, so
+neighbouring cells carry large contributions that cancel —
+:math:`\sum_K |\eta_K|` is 3700 times :math:`|\eta|` on :math:`u = x - x^{4/3}`
+at 10 cells and :math:`10^6` times on a manufactured :math:`\sin \pi x` problem.
+:ref:`adaptivity-objective-where` has what that means for adapting the mesh.
 
 **The enriched degree is two beyond the degree the scheme interpolates its
 physics at**: :math:`k_e = k + 2`, and :math:`k + 3` under ``Superconvergent``,

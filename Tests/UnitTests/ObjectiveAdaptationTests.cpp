@@ -1,8 +1,8 @@
 // Adaptation keyed off the objective: AdaptationTarget = "Objective".
 //
 // Three layers, as for the solution target. The control quantity and the mesh
-// decision are pure functions -- of an objective estimate, and of a per-cell
-// indicator -- and are checked on numbers chosen to separate the readings. The
+// decision are pure functions -- of an objective estimate, and of the decay's
+// decision and that quantity -- and are checked on chosen numbers. The
 // drivers are checked end to end against closed forms: every problem here has a
 // known steady state, so G is known to round-off and "meets its tolerance" means
 // against the continuum, not against the estimate that decided it.
@@ -13,6 +13,7 @@
 #include "CapturedOutput.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
+#include "SmoothnessSensor.hpp"
 #include "PhysicsInstance.hpp"
 #include "Postprocessing.hpp"
 #include "SolverConfig.hpp"
@@ -254,9 +255,6 @@ BOOST_AUTO_TEST_CASE(each_objective_is_held_to_its_own_share_of_its_tolerance)
     e.uncertainty = pair(0.0, 0.0);
     e.discretisation.valid = true;
     e.discretisation.total = pair(1e-4, -1e-2);
-    e.discretisation.perCell.resize(2, 4);
-    e.discretisation.perCell << 4e-5, 3e-5, 2e-5, 1e-5,
-                                -1e-3, -2e-3, -3e-3, -4e-3;
     sys.objectiveEstimate = e;
 
     const ObjectiveAccuracy acc = objectiveAccuracy(sys);
@@ -265,12 +263,6 @@ BOOST_AUTO_TEST_CASE(each_objective_is_held_to_its_own_share_of_its_tolerance)
     // 1e-4 / 5e-4 = 0.2 against 1e-2 / 2.5e-2 = 0.4: the second is the worse.
     BOOST_TEST(acc.worst == 1);
     BOOST_TEST(acc.ratio == 0.4, boost::test_tools::tolerance(1e-14));
-    BOOST_TEST_REQUIRE(acc.perCell.size() == 4u);
-    for (Index K = 0; K < 4; ++K)
-        BOOST_TEST(acc.perCell[K] ==
-                       std::abs(e.discretisation.perCell(0, K)) / acc.tolerance(0) +
-                           std::abs(e.discretisation.perCell(1, K)) / acc.tolerance(1),
-                   boost::test_tools::tolerance(1e-14));
 
     // An objective at zero with no floor asks for an accuracy nothing meets, and
     // reads as infinitely far from it rather than as a division by zero.
@@ -280,47 +272,43 @@ BOOST_AUTO_TEST_CASE(each_objective_is_held_to_its_own_share_of_its_tolerance)
 
 // ------------------------------------------------- the mesh decision -------
 
-BOOST_AUTO_TEST_CASE(the_mesh_decision_reads_where_the_objectives_error_is)
+BOOST_AUTO_TEST_CASE(the_objective_says_whether_to_grade_and_the_decay_where)
 {
-    using V = GradingVerdict;
-    auto verdict = [](std::vector<double> const &p, double ratio)
-    { return objectiveGradingDecision(p, ratio).verdict; };
+    // A rough lower end by its decay, 5.6x rougher than the interior.
+    std::vector<CellSmoothness> cells(6);
+    for (size_t i = 0; i < cells.size(); ++i)
+        cells[i].decayRate = i == 0 ? 1.0 : 5.6;
+    const GradingDecision decay = gradingDecision(cells, 4, 2.0);
+    BOOST_TEST_REQUIRE((decay.verdict == GradingVerdict::GradeLower));
 
-    // A singular end puts its error on the face it shares with its neighbour as
-    // much as in its own cell: the measured axis case holds half in each.
-    const std::vector<double> lower = {0.5, 0.495, 0.003, 0.001, 0.001};
-    const std::vector<double> upper(lower.rbegin(), lower.rend());
-    BOOST_TEST((verdict(lower, 5.0) == V::GradeLower));
-    BOOST_TEST((verdict(upper, 5.0) == V::GradeUpper));
+    // Not met: the decay's verdict, every number of it.
+    const GradingDecision unmet = objectiveGradingDecision(decay, 3.0);
+    BOOST_TEST((unmet.verdict == GradingVerdict::GradeLower));
+    BOOST_TEST((unmet.lowerEnd.reading == EndReading::Rough));
+    BOOST_TEST(unmet.lowerRatio == decay.lowerRatio);
+    BOOST_TEST(unmet.objectiveRatio == 3.0);
 
-    // Measured on smooth problems: an end region holds at most 0.77 of the error
-    // from 4 cells up. Not graded, however far from its tolerance the run is.
-    BOOST_TEST((verdict({0.40, 0.37, 0.12, 0.11}, 1e6) == V::Uniform));
-    BOOST_TEST((verdict({1.0, 1.0, 1.0, 1.0, 1.0}, 1e6) == V::Uniform));
+    // Met, at the tolerance or inside it: nothing graded, however rough.
+    for (double ratio : {1.0, 1e-3})
+    {
+        const GradingDecision met = objectiveGradingDecision(decay, ratio);
+        BOOST_TEST((met.verdict == GradingVerdict::Uniform));
+        BOOST_TEST((met.lowerEnd.reading == EndReading::Smooth));
+        BOOST_TEST(met.lowerRatio == decay.lowerRatio);
+    }
 
-    // A run that meets its tolerance grades nothing, wherever its error is.
-    const GradingDecision met = objectiveGradingDecision(lower, 1.0);
-    BOOST_TEST((met.verdict == V::Uniform));
-    BOOST_TEST((met.lowerEnd.reading == EndReading::Smooth));
-    BOOST_TEST(met.lowerEnd.share > 0.99);
-    BOOST_TEST((met.lowerEnd.reference == EndReference::Objective));
+    // And a smooth mesh is not graded however far from its tolerance.
+    std::vector<CellSmoothness> smooth(6);
+    for (auto &c : smooth)
+        c.decayRate = 5.6;
+    BOOST_TEST((objectiveGradingDecision(gradingDecision(smooth, 4, 2.0), 1e6).verdict ==
+                GradingVerdict::Uniform));
 
-    // The share is a sum of the two cells, read against the threshold inclusively.
-    const GradingDecision at = objectiveGradingDecision({0.5, 0.49, 0.005, 0.005}, 2.0);
-    BOOST_TEST(at.lowerEnd.share == 0.99, boost::test_tools::tolerance(1e-14));
-    BOOST_TEST((at.verdict == V::GradeLower));
-    BOOST_TEST((verdict({0.5, 0.48, 0.01, 0.01}, 2.0) == V::Uniform));
-
-    // Three cells: the regions share the middle one, so both ends can hold it;
-    // the larger share wins, and a tie goes to the lower end.
-    BOOST_TEST((verdict({0.003, 0.99, 0.007}, 2.0) == V::GradeUpper));
-    BOOST_TEST((verdict({0.005, 0.99, 0.005}, 2.0) == V::GradeLower));
-
-    // Nothing in the indicator: no end holds more than another.
-    BOOST_TEST((verdict({0.0, 0.0, 0.0, 0.0}, 2.0) == V::Uniform));
-
-    BOOST_CHECK_THROW(objectiveGradingDecision({1.0, 1.0}, 2.0), std::invalid_argument);
-    BOOST_CHECK_THROW(objectiveGradingDecision(lower, 2.0, 0.5), std::invalid_argument);
+    // An end the decay could not judge stays so: that is about the mesh.
+    std::vector<double> widths = {0.4, 0.05, 0.05, 0.05, 0.05, 0.4};
+    const GradingDecision wide = gradingDecision(smooth, widths, 4, 2.0);
+    BOOST_TEST_REQUIRE((wide.lowerEnd.reading == EndReading::Undecidable));
+    BOOST_TEST((objectiveGradingDecision(wide, 0.5).lowerEnd.reading == EndReading::Undecidable));
 }
 
 // ------------------------------------------------- the degree loop ---------
@@ -435,8 +423,8 @@ BOOST_AUTO_TEST_CASE(the_ceiling_keeps_the_estimate_within_max_physics_batch)
 BOOST_AUTO_TEST_CASE(mesh_adaptation_grades_where_the_objective_error_is_and_meets_it)
 {
     // u = x - x^(4/3) on 10 cells at k = 3: the uniform sample's estimate is 1.5x
-    // the discretisation share of 1e-5, and the lower end region holds 0.998 of
-    // it. So the lower end is graded, and the degree loop finishes the job.
+    // the discretisation share of 1e-5, and the decay reads the axis rough. So
+    // the lower end is graded, and the degree loop finishes the job.
     Grid uniform(0.0, 1.0, 10);
     Steady problem(Problem::Axis);
     Integral objective(false);
@@ -447,7 +435,6 @@ BOOST_AUTO_TEST_CASE(mesh_adaptation_grades_where_the_objective_error_is_and_mee
 
     BOOST_TEST((run.decision.verdict == GradingVerdict::GradeLower));
     BOOST_TEST(run.decision.objectiveRatio > 1.0);
-    BOOST_TEST(run.decision.lowerEnd.share >= objectiveEndShare);
     BOOST_TEST((*run.grid)[0].h() < 1e-4);
     BOOST_TEST(run.grid->getNCells() == 10u);
 
@@ -470,9 +457,8 @@ BOOST_AUTO_TEST_CASE(mesh_adaptation_grades_where_the_objective_error_is_and_mee
 
 BOOST_AUTO_TEST_CASE(a_smooth_problem_is_left_uniform_however_far_from_its_tolerance)
 {
-    // The negative control: the error of a smooth problem is spread through the
-    // mesh, so no end region holds the share, and the degree loop meets the
-    // tolerance on the uniform mesh.
+    // The negative control: a smooth problem's ends read smooth, so a tolerance
+    // the sample is far from is met by the degree loop on the uniform mesh.
     Grid uniform(0.0, 1.0, 10);
     Steady problem(Problem::Smooth);
     Integral objective(true);

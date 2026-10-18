@@ -507,10 +507,11 @@ Adjoints and superconvergence
    * - ``AdaptationTarget``
      - ``"Solution"``
      - What ``DegreeAdaptation`` and ``MeshAdaptation`` adapt to. ``"Solution"``:
-       the degree to ``DegreeTolerance`` on :math:`u^* - u_h`, the mesh from the
-       modal decay. ``"Objective"``: the degree until every objective's
-       estimated discretisation error is within the discretisation share of
-       ``ObjectiveTolerance``, the mesh from where that error is. ``"Objective"``
+       the degree to ``DegreeTolerance`` on :math:`u^* - u_h`. ``"Objective"``:
+       the degree until every objective's estimated discretisation error is
+       within the discretisation share of ``ObjectiveTolerance``, and the mesh
+       graded, where the modal decay says, only if the sample does not meet that
+       already. ``"Objective"``
        needs ``solveAdjoint``, turns ``EstimateDiscretisationError`` on, and makes
        ``"Objective"`` the default ``SteadyStateTest``. Refused without one of the
        two drivers. See :ref:`adaptivity-objective`.

@@ -159,8 +159,10 @@ Under `AdaptationTarget = "Objective"`:
   `|eta_disc| / (eps_disc |G|)`, in the same rule `dk = ceil(log_base(E / eps))`.
   The base is remeasured: functionals typically converge at a higher rate in
   `k` than the solution does.
-* `MeshAdaptation` decides which end to grade from the distribution of
-  `|eta_K|`, instead of each cell's modal decay.
+* `MeshAdaptation` grades only while the sample does not meet the
+  discretisation share, and then where the modal decay says. The distribution of
+  `|eta_K|` was measured as the reading of where, and is not one: see Phase 4 as
+  built.
 * The plan machinery (`ParallelFill`, `MaxPhysicsBatch`) is unchanged.
 
 ## Exposing the adjoint to Python
@@ -373,21 +375,31 @@ anticipate:
   fewest levels (20; 20 and 30 took 21, 50 took 22, 100 took 23) and the fewest
   physics evaluations, every run meeting its tolerance: an overshoot costs a
   degree, an undershoot a whole solve.
-* **The mesh** (`objectiveGradingDecision`, `MeshAdaptation.cpp`): an end is
-  graded when the run does not yet meet its tolerance and the end region, the end
-  cell and its inward neighbour, holds at least 0.99 of the per-cell indicator
-  `sum_g |eta_{g,K}| / tol_g`. Two cells, because the estimate shares each face's
-  trace rows between the cells either side and a singular end's error sits as
-  much on that face as in the end cell (half each on `x - x^{4/3}`). Measured on
-  uniform meshes of 3-20 cells at `k = 3..6`: singular ends hold 0.998 or more,
-  smooth problems at most 0.948 at 3 cells and 0.773 from 4. The share is a
-  constant (`objectiveEndShare`), not a key.
+* **The mesh: the objective says whether, the modal decay still says where**
+  (`objectiveGradingDecision`, `MeshAdaptation.cpp`). A sample that meets its
+  tolerance is not graded; one that does not is graded as the solution target
+  grades it. The text above had `|eta_K|`'s distribution decide which end, and
+  the measurement says it cannot:
+  * the per-cell estimates cancel -- they are the enriched residual tested against
+    the whole enriched adjoint, not its part the discretisation cannot represent
+    -- so `sum_K |eta_K|` is 3700x `|eta|` on `x - x^{4/3}` at 10 cells and 10^6 x
+    on the manufactured sine problem, the end cell and its neighbour on the first
+    `+1.00e-3` and `-1.00e-3` against a total of `5.4e-7`;
+  * an end region's share of `sum_K |eta_K|` (the end cell and its neighbour)
+    separates singular from smooth ends on uniform meshes (0.998 or more against
+    0.948 at most, 3-20 cells, `k = 3..6`), where the decay already does from 4
+    cells, and not off them: it reached 0.99 at 41 smooth ends of 1217 on graded,
+    random and deeply graded meshes, and singular ends the decay reads rough held
+    0.04 to 1;
+  * as a filter on the decay (a majority share required as well) it met the
+    tolerance from 490 non-uniform starts in 347 runs against 353 without.
+  This bears on phase 3: `ObjectiveEstimate::discretisation.perCell` sums to the
+  total but is not a localisation of the error.
 * **What the target implies**, in `loadSolverConfig`: `solveAdjoint` required,
   `EstimateObjectiveOnFinish` kept on, `EstimateDiscretisationError` turned on, the
   `Objective` steady test the default (a named test is kept), a positive
-  discretisation share, and the solution target's `DegreeTolerance`,
-  `MeshAdaptationThreshold` and `MeshAdaptationNeighbourMargin` refused.
-  `MeshAdaptation` keeps its `k >= 3` floor.
+  discretisation share, and the solution target's `DegreeTolerance` refused.
+  `MeshAdaptation` keeps its `k >= 3` floor and its decay keys.
 * **`ParallelFill` and `MaxPhysicsBatch` are unchanged**, but the estimate's batch
   (`N(k+4)` under the superconvergent scheme the drivers use) is not a recurring
   one and so not counted by them, while `initialize()` refuses a level whose
@@ -405,19 +417,23 @@ anticipate:
   `DegreeTolerance` tuned on the closed form matches it, at 1e-1 to 1e-4 depending
   on the row, for 1.2-1.7x fewer physics evaluations where both take the same
   degrees -- the estimate's four sweeps per level. Against the default
-  `DegreeTolerance` it spends fewer in seven runs of ten. Over 180 runs, 153
-  converged within `eps_G` (closest 0.81 of it) and none outside; 27 stopped at
+  `DegreeTolerance` it spends fewer in seven runs of ten. From uniform meshes,
+  210 runs: 176 converged within `eps_G` (closest 0.81 of it), none outside, 34 at
   the ceiling with a warning, all on meshes the solution target also ends on with
-  the same error. **The adjoint's accuracy** (the open question below) does not
-  limit it there; the estimate's underestimate of errors that decay only
-  algebraically in `k` does, and the budget's other half is what absorbs it.
+  the same error. From 35 non-uniform meshes, 350 runs: 232 converged within, one
+  outside -- a singular wall cell where the estimate has the wrong sign and is 30x
+  short -- and 117 at the ceiling, all on the singular problems. **The adjoint's
+  accuracy** (the open question below) does not limit it there; the estimate's
+  underestimate of errors that decay only algebraically in `k` does, and the
+  budget's other half is what absorbs it, all but once.
 
 ## Open questions
 
 * **The adjoint's own accuracy.** Each estimate uses `z` at the current state,
   whose error is first order in the state's error. Stopping can tolerate that,
-  and so, measured in phase 4, can adaptation: no converged run of the 180
-  missed its tolerance.
+  and so, measured in phase 4, can adaptation: one converged run of 560 missed
+  its tolerance, and that through the estimate on a singular cell, not the
+  adjoint.
 * **Time-dependent runs** are out of scope. An adjoint for a transient
   objective is a backward-in-time solve MaNTA does not have.
 * **Field models and scalars.** `w` and `eta_disc` cover the transport physics

@@ -663,41 +663,41 @@ point. The run is done at :math:`E \le 1`, and otherwise raises the degree by th
 same rule, :math:`\Delta k = \lceil \log_b E \rceil`. Measuring a level costs
 nothing the solve did not: the estimate is read off the end of it.
 
-**The mesh.** The sample's estimate comes per cell, :math:`\eta_{g,K}`. Each cell's
-indicator is :math:`\sum_g |\eta_{g,K}|` over the objectives' tolerances, as
-above, and an end is graded when the run does not yet meet its tolerance and the
-end region — the end cell and its inward neighbour — holds at least 0.99 of the
-indicator. Two cells rather than one because the estimate shares each face's
-trace rows equally between the cells either side, and a singular end puts as
-much of its error on the face it shares with its neighbour as in its own cell: on
-:math:`u = x - x^{4/3}` the two hold half each. The modal decay is not consulted,
-and nothing is graded while :math:`E \le 1`, wherever the error is. What happens
-once an end is chosen — the layer, the retries, the fallbacks, the degree loop
-after — is the driver above, unchanged.
+**The mesh.** The objective decides *whether* to grade, and the modal decay still
+decides *where*: a sample that meets its tolerance, :math:`E \le 1`, is not graded
+however rough an end reads, and one that does not is graded as the solution target
+would grade it. Measuring whether costs nothing either, being the sample's own
+estimate. Why the per-cell estimate does not choose the end is below, in
+:ref:`adaptivity-objective-where`.
 
 **What it implies.** ``solveAdjoint`` is required; ``EstimateDiscretisationError``
 is turned on, and ``EstimateObjectiveOnFinish`` has to stay on; the
 ``Objective`` steady test becomes the default ``SteadyStateTest``, so the
 algebraic error is held to the other share of the same budget — name another test
-and the algebraic error is whatever it leaves. ``DegreeTolerance``,
-``MeshAdaptationThreshold`` and ``MeshAdaptationNeighbourMargin`` are the solution
-target's and are refused. ``MeshAdaptation`` still needs ``PolynomialDegree >= 3``:
-grading only pays from :math:`k \ge 4`, and that is the degree the sample is solved
-at.
+and the algebraic error is whatever it leaves. ``DegreeTolerance`` is
+the solution target's and is refused; ``MeshAdaptationThreshold`` and
+``MeshAdaptationNeighbourMargin`` keep their meaning, since the decay reading is
+the same. ``MeshAdaptation`` still needs ``PolynomialDegree >= 3``, for the decay
+reading's sake.
 
-A run reports each level against its share — here :math:`x - x^{4/3}` at
-:math:`10^{-5}`, with the solve's own lines left out:
+A run reports the sample against its share, and each level after it — here
+:math:`x - x^{4/3}` at :math:`10^{-5}`, with the solves' own lines left out:
 
 .. code-block:: text
 
    Mesh adaptation: sampling at k = 3 on 10 uniform cells
-     objectives: discretisation error 1.51x its share of ObjectiveTolerance; lower end rough (holds 0.998 of the error), upper end smooth (holds 0.000 of the error), grading at 0.99 -> grade Lower
+     objectives: discretisation error 1.51x its share of ObjectiveTolerance; reading the decay
+     decay rate: lower end 0.298, interior median 6.06, upper end 8.02; measurable up to 31.5
+     roughness vs interior: lower 20.32x, upper 0.75x, threshold 2.00x -> grade Lower
      layer: 0.1 of the domain, the sampling mesh's end cell
      attempt 1: ratio 0.3, 9 cells in the layer, narrowest cell 6.561e-06 of the domain
    Mesh adaptation: adapting the degree on the regraded mesh
    Degree adaptation: starting at k = 3, ceiling 12, to the objectives' discretisation share 0.5 of ObjectiveTolerance, base 10
      k = 3: objective 0: discretisation error 7.510e-05 against 3.576e-07 (210x), G ~ 0.07143826966
      raising k from 3 to 6
+     ...
+     k = 9: objective 0: discretisation error 1.986e-07 against 3.571e-07 (0.556x), G ~ 0.07142861593
+     converged at k = 9 after 5 solves
 
 ``MaxPhysicsBatch`` and the fills are as above. The estimate's batch, at
 :math:`N(k+4)` points under the superconvergent scheme the drivers use, is not a
@@ -739,31 +739,38 @@ and 30 took 21 levels, 50 took 22 and 100 took 23, each more evaluations than 10
 Overshooting by a degree costs one degree; undershooting costs a whole solve. **The
 default stays at 10.**
 
-Where the error is
-~~~~~~~~~~~~~~~~~~
+.. _adaptivity-objective-where:
 
-The share an end region holds, on uniform meshes of 3 to 20 cells at
-:math:`k = 3`–6:
+Why the per-cell estimate does not choose the end
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. list-table::
-   :header-rows: 1
-   :widths: 50 25 25
+The estimate comes per cell, :math:`\eta_{g,K}`, and the obvious rule is to grade
+the end whose cells hold the error. Measured, it is not one:
 
-   * - Problem
-     - 3 cells
-     - 4 to 20 cells
-   * - :math:`x - x^{4/3}` at either end, Shestakov's axis
-     - :math:`\ge` 0.998
-     - :math:`\ge` 0.998
-   * - Park
-     - :math:`\le` 0.948
-     - :math:`\le` 0.773
-   * - :math:`\sin \pi x`, linear and nonlinear
-     - 0.75
-     - :math:`\le` 0.50
-
-At 3 cells an end region is two thirds of the mesh, which is where the margin is
-thinnest. Every smooth run of the sweep below stayed uniform.
+* **The per-cell estimates cancel.** Each is the enriched residual of its cell
+  tested against the whole enriched adjoint, not against the part of it the
+  discretisation cannot represent, so a cell's contribution is not its error. On
+  :math:`u = x - x^{4/3}` at 10 cells and :math:`k = 3` the end cell and its
+  neighbour carry :math:`+1.00\times10^{-3}` and :math:`-1.00\times10^{-3}`
+  against a total of :math:`5.4\times10^{-7}`; on the manufactured
+  :math:`\sin \pi x` problem :math:`\sum_K |\eta_K|` is :math:`10^6` times
+  :math:`|\eta|`. A rule on their size reads nothing about the error.
+* **Their distribution decides only where the decay already does.** The share of
+  :math:`\sum_K |\eta_K|` in an end region — the end cell and its neighbour, since
+  the estimate shares each face's trace rows between the cells either side —
+  separates the two populations on a uniform mesh: 0.998 or more at a singular
+  end (:math:`x^{4/3}` at either end, Shestakov's axis), at most 0.948 at a smooth
+  one at 3 cells and 0.773 from 4, at :math:`k = 3`–6. Off a uniform mesh it does
+  not: a wide smooth end cell beside narrow ones holds all of a smooth problem's
+  estimate, so the share reached 0.99 at 41 smooth ends of 1217 on graded, random
+  and deeply graded meshes, while singular ends the decay reads rough held shares
+  anywhere from 0.04 to 1. Only on three uniform cells does the share do better:
+  with one interior cell to compare with, the decay reads both ends of
+  :math:`\sin \pi x` rough at odd :math:`k`, for either target.
+* **As a filter on the decay it only loses.** Required to hold a majority of the
+  estimate as well as to read rough, an end was graded less often, and from 490
+  non-uniform starts over seven problems the run met its tolerance in 347 against
+  353 on the decay alone.
 
 What it buys, measured
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -869,31 +876,51 @@ rule assumes a rate; it does not measure one.
 Whether it meets the tolerance
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``adaptation.py --sweep`` runs the objective target over the manufactured problem
-and Park by both drivers, and :math:`x - x^{4/3}` and Shestakov's problem by
-``MeshAdaptation``, from :math:`k` = 3 and 4 on 5, 10 and 20 cells, at
-:math:`\epsilon_G` from :math:`10^{-3}` to :math:`10^{-7}`: 180 runs.
+``adaptation.py --sweep`` runs the objective target from uniform meshes — the
+manufactured problem and Park by both drivers, :math:`x - x^{4/3}`, its mirror
+image and Shestakov's problem by ``MeshAdaptation`` — from :math:`k` = 3 and 4 on
+5, 10 and 20 cells, at :math:`\epsilon_G` from :math:`10^{-3}` to
+:math:`10^{-7}`: 210 runs. ``--starts`` runs ``MeshAdaptation`` from :math:`k = 3`
+on 35 non-uniform meshes — graded at either end at three fractions and two
+ratios, graded nine cells deep as a uniform start's grading leaves a mesh, and
+random — for five of those problems at :math:`10^{-5}` and :math:`10^{-7}`: 350
+runs.
 
-* **153 converged, every one within** :math:`\epsilon_G` against the closed form;
-  the closest at 0.81 of it. **None converged outside it.**
-* **27 stopped at the ceiling**, with the warning — 4 of them within
-  :math:`\epsilon_G` all the same. All 27 are runs where the mesh the driver
-  settled on cannot carry the accuracy, and the solution target settles on the
-  same mesh with the same error. Shestakov's at 5 cells grades a layer
-  :math:`[0, 0.2]` that holds the source edge at :math:`x = 0.1` inside a cell; at
-  20 cells it grades 19 cells into :math:`[0, 0.05]` and leaves one cell over
-  :math:`[0.05, 1]`, across the same edge — the uniform start's layer is its end
-  cell, and filling it leaves the bulk to one cell. :math:`x - x^{4/3}` at 20 cells
-  past :math:`10^{-6}` and at 10 cells past :math:`10^{-7}` is that single bulk
-  cell's degree running out.
+* **From uniform meshes, 176 converged, every one within** :math:`\epsilon_G`
+  against the closed form, the closest at 0.81 of it; **none converged outside
+  it.** 34 stopped at the ceiling with the warning, 4 of them within
+  :math:`\epsilon_G` all the same.
+* **From non-uniform meshes, 232 converged within** :math:`\epsilon_G` **and one
+  outside it**: :math:`(1-x) - (1-x)^{4/3}` from a random six-cell mesh at
+  :math:`10^{-7}`, where the split wall cell is :math:`5.7\times10^{-3}` of the
+  domain and the estimate there reads :math:`+1.8\times10^{-8}` of a true
+  :math:`-5.9\times10^{-7}` — the wrong sign, and 30× short. 117 stopped at the
+  ceiling, one within :math:`\epsilon_G` anyway. The solution target at the default
+  ``DegreeTolerance`` over the same starts converged outside :math:`\epsilon_G` 21
+  times, all on Shestakov's problem and by up to :math:`1.2\times10^{-2}`: it was
+  never told the tolerance.
+* **Every ceiling is on a singular problem**, on a mesh that cannot carry the
+  accuracy, and the solution target reaches the same mesh. From uniform meshes:
+  Shestakov's at 5 cells grades a layer :math:`[0, 0.2]` holding the source edge
+  at :math:`x = 0.1` inside a cell, and at 20 cells puts 19 cells into
+  :math:`[0, 0.05]` and one across the edge — the uniform start's layer is its end
+  cell, and filling it leaves the bulk to one cell; :math:`x^{4/3}` at 20 cells
+  past :math:`10^{-6}` and at 10 past :math:`10^{-7}` runs that single bulk cell
+  out of degree. From non-uniform meshes: Shestakov's 67 of 70 — the source edge
+  inside a cell on most of those meshes, and on the rest an end the decay cannot
+  judge or a wall cell the degree no longer helps; :math:`x^{4/3}` and its mirror
+  25 of 70 each, for the same two reasons. Every smooth run of either
+  sweep converged within its tolerance on the mesh it started from.
 
 The margin is the budget's, not the estimate's. An error that decays only
 algebraically in :math:`k` is underestimated (:ref:`discretisation-estimate`
 measures Shestakov's effectivity at 0.43–0.80), so the discretisation share can
 be overspent: the converged runs closest to :math:`\epsilon_G` are the singular
-ones, and the other half of the budget is what keeps them inside it. On Shestakov's
-problem with the degree alone the run that stops at the ceiling estimates a
-relative error of :math:`8.2\times10^{-4}` against a true :math:`1.26\times10^{-3}`.
+ones, the other half of the budget is what keeps them inside it, and the one run
+in 560 that missed is a singular wall cell the estimate misread outright. On
+Shestakov's problem with the degree alone the run that stops at the ceiling
+estimates a relative error of :math:`8.2\times10^{-4}` against a true
+:math:`1.26\times10^{-3}`.
 
 .. _adaptivity-parallelism:
 

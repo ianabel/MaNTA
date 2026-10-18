@@ -1,7 +1,8 @@
 """Adaptation keyed off the objective, AdaptationTarget = "Objective".
 
     python adaptation.py            # the comparison table, a minute or so
-    python adaptation.py --sweep    # whether eps_G is met, over 180 runs
+    python adaptation.py --sweep    # whether eps_G is met, over 210 runs
+    python adaptation.py --starts   # ... and from 35 non-uniform meshes, 700 runs
 
 Four problems with a closed-form objective, each given ObjectiveTolerance 1e-3
 and 1e-5:
@@ -12,7 +13,8 @@ and 1e-5:
     W = int x u dx = (e - 2)/2, by DegreeAdaptation from k = 1 on 4 cells, and by
     MeshAdaptation from k = 3 on 10 as the case that wants no grading;
   * u = x - x^(4/3), the x^(4/3) singularity of Shestakov's axis in a linear
-    problem, with G = int u dx = 1/14, by MeshAdaptation from k = 3 on 10 cells;
+    problem, with G = int u dx = 1/14, by MeshAdaptation from k = 3 on 10 cells
+    (and its mirror image, singular at x = 1, in the sweeps);
   * Shestakov's (../shestakov-nonlinear, n_b = 0.05) with its inventory
     N = int u dx, from the closed-form steady state, by MeshAdaptation from k = 3
     on 10 cells, and by DegreeAdaptation alone for the limit of raising k.
@@ -202,6 +204,13 @@ class AxisSingular(manta.TransportSystem):
         return 0.0
 
 
+class WallSingular(AxisSingular):
+    """The same singularity at the other end: u = (1 - x) - (1 - x)^(4/3)."""
+
+    def Sources(self, i, state, x, t):
+        return (4.0 / 9.0) * (1.0 - x) ** (-2.0 / 3.0)
+
+
 def shestakov_inventory():
     n = lambda x: ExactSolution(x, N_B)  # noqa: E731
     # Split at the source edge, where the closed form changes branch.
@@ -218,6 +227,9 @@ PROBLEMS = {
         exact=(np.e - 2.0) / 2.0, extra={"UpperBoundary": 1.0}),
     "axis": dict(
         make=counted(AxisSingular, lambda: Weighted()),
+        exact=1.0 / 14.0, extra={"UpperBoundary": 1.0}),
+    "wall": dict(
+        make=counted(WallSingular, lambda: Weighted()),
         exact=1.0 / 14.0, extra={"UpperBoundary": 1.0}),
     "Shestakov": dict(
         make=counted(ShestakovNonlinear, lambda: Weighted(), n_b=N_B),
@@ -253,14 +265,15 @@ def captured(into):
             into.append(tmp.read().decode(errors="replace"))
 
 
-def run(problem, driver, cells, k0, tol, **settings):
+def run(problem, driver, cells, k0, tol, points=None, **settings):
     p = PROBLEMS[problem]
     case = p["make"]()
     runner = manta.Runner(case)
+    mesh = {"GridPoints": points} if points is not None else {"GridSize": cells}
     cfg = {
         "OutputFilename": "objective_adaptation",
         "PolynomialDegree": k0,
-        "GridSize": cells,
+        **mesh,
         "LowerBoundary": 0.0,
         "delta_t": 1.0,
         "Relative_tolerance": 1e-8,
@@ -295,17 +308,17 @@ def run(problem, driver, cells, k0, tol, **settings):
     }
 
 
-def objective(problem, driver, cells, k0, tol):
-    return run(problem, driver, cells, k0, tol, AdaptationTarget="Objective")
+def objective(problem, driver, cells, k0, tol, points=None):
+    return run(problem, driver, cells, k0, tol, points, AdaptationTarget="Objective")
 
 
-def solution(problem, driver, cells, k0, tol, degree_tolerance=None):
+def solution(problem, driver, cells, k0, tol, degree_tolerance=None, points=None):
     # The same steady test as the objective target's, and no estimate: the
     # solution target reads none.
     kw = {"SteadyStateTest": "Objective", "EstimateObjectiveOnFinish": False}
     if degree_tolerance is not None:
         kw["DegreeTolerance"] = degree_tolerance
-    return run(problem, driver, cells, k0, tol, **kw)
+    return run(problem, driver, cells, k0, tol, points, **kw)
 
 
 def describe(r):
@@ -342,7 +355,7 @@ def table():
 def sweep():
     """Over problems, drivers, meshes, starting degrees and tolerances."""
     cases = [(p, d) for p in ("manufactured", "Park") for d in ("DegreeAdaptation", "MeshAdaptation")]
-    cases += [("axis", "MeshAdaptation"), ("Shestakov", "MeshAdaptation")]
+    cases += [("axis", "MeshAdaptation"), ("wall", "MeshAdaptation"), ("Shestakov", "MeshAdaptation")]
     counts = {"met": 0, "ceiling, met anyway": 0, "ceiling": 0, "MISSED": 0}
     worst = 0.0
     for (problem, driver), cells, k0, tol in (
@@ -359,8 +372,62 @@ def sweep():
     print(counts, f"worst converged err / eps_G = {worst:.2f}")
 
 
+def graded(end, fraction, ratio, cells, layer=3):
+    """`layer` cells at `ratio` in `fraction` of the domain at `end`, the rest uniform."""
+    inner = [fraction * ratio ** j for j in range(layer - 1, -1, -1)]
+    points = np.array([0.0] + inner + list(np.linspace(fraction, 1.0, cells - layer + 1))[1:])
+    return list(points if end == "lower" else 1.0 - points[::-1])
+
+
+def start_meshes():
+    """Graded at either end, graded deeply (the mesh a uniform start's grading
+    leaves), and random."""
+    meshes = {}
+    for end in ("lower", "upper"):
+        for fraction in (0.1, 0.2, 0.3):
+            for ratio in (0.3, 0.5):
+                for cells in (6, 10):
+                    meshes[f"graded {end} {fraction} at {ratio}, {cells} cells"] = graded(
+                        end, fraction, ratio, cells)
+        meshes[f"graded {end} 0.1 at 0.3, 9 of 10 cells"] = graded(end, 0.1, 0.3, 10, 9)
+    rng = np.random.default_rng(1)
+    for cells in (4, 6, 10):
+        for seed in range(3):
+            meshes[f"random {cells} cells, {seed}"] = [0.0] + list(np.sort(rng.uniform(0, 1, cells - 1))) + [1.0]
+    return meshes
+
+
+def starts():
+    """MeshAdaptation from non-uniform meshes, both targets, at 1e-5 and 1e-7."""
+    counts = {target: {"met": 0, "ceiling, met anyway": 0, "ceiling": 0, "MISSED": 0, "failed": 0}
+              for target in ("Objective", "Solution, 1e-6")}
+    for problem in PROBLEMS:
+        for label, points in start_meshes().items():
+            for tol in (1e-5, 1e-7):
+                for target in counts:
+                    try:
+                        if target == "Objective":
+                            r = objective(problem, "MeshAdaptation", len(points) - 1, 3, tol, points)
+                        else:
+                            r = solution(problem, "MeshAdaptation", len(points) - 1, 3, tol, points=points)
+                    except RuntimeError as e:
+                        counts[target]["failed"] += 1
+                        print(f"  {problem:>12} {label:>34} eps {tol:.0e} {target:>15}: failed, {e}"[:160])
+                        continue
+                    ok = r["err"] <= tol
+                    key = (("ceiling, met anyway" if ok else "ceiling") if r["ceiling"]
+                           else ("met" if ok else "MISSED"))
+                    counts[target][key] += 1
+                    print(f"  {problem:>12} {label:>34} eps {tol:.0e} {target:>15}: {key:20s} "
+                          f"err {r['err']:.1e} {r['cells']} cells", flush=True)
+    for target, c in counts.items():
+        print(target, c)
+
+
 if __name__ == "__main__":
     if "--sweep" in sys.argv:
         sweep()
+    elif "--starts" in sys.argv:
+        starts()
     else:
         table()

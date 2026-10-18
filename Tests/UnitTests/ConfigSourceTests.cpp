@@ -520,9 +520,10 @@ BOOST_AUTO_TEST_CASE(the_objective_adaptation_target_takes_what_it_needs_and_ref
     BOOST_TEST(refused(target + "EstimateObjectiveOnFinish = false\n", "EstimateObjectiveOnFinish"));
     BOOST_TEST(refused(target + "EstimateDiscretisationError = false\n",
                        "EstimateDiscretisationError = false"));
-    // The solution target's keys, which would change nothing.
+    // The solution target's tolerance, which would change nothing. The decay
+    // keys are read by both targets' mesh decision.
     BOOST_TEST(refused(target + "DegreeTolerance = 1e-6\n", "DegreeTolerance"));
-    BOOST_TEST(refused(target + "MeshAdaptationThreshold = 3.0\n", "MeshAdaptationThreshold"));
+    BOOST_CHECK_NO_THROW(load(minimal + target + "MeshAdaptationThreshold = 3.0\n"));
     // A budget with no discretisation share leaves nothing to adapt to.
     BOOST_TEST(refused(target + "ObjectiveBudget = [0.0, 1.0]\n", "discretisation share"));
     BOOST_TEST(refused(target + "ObjectiveBudget = [1.0]\n", "ObjectiveBudget"));

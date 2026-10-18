@@ -158,8 +158,6 @@ ObjectiveAccuracy objectiveAccuracy(SystemSolver const &system)
     out.eta = e.discretisation.total;
     out.G = e.corrected;
     out.tolerance.resize(ng);
-    const Index nCells = e.discretisation.perCell.cols();
-    out.perCell.assign(static_cast<size_t>(nCells), 0.0);
     for (Index g = 0; g < ng; ++g)
     {
         const double tol = share * std::max(pick(rel, g) * std::abs(e.corrected(g)), pick(abs, g));
@@ -175,12 +173,6 @@ ObjectiveAccuracy objectiveAccuracy(SystemSolver const &system)
             out.ratio = r;
             out.worst = g;
         }
-        // Where such an objective's error is still says where to refine, so it
-        // counts in its own units rather than not at all.
-        for (Index K = 0; K < nCells; ++K)
-            out.perCell[static_cast<size_t>(K)] +=
-                tol > 0.0 ? std::abs(e.discretisation.perCell(g, K)) / tol
-                          : std::abs(e.discretisation.perCell(g, K));
     }
     return out;
 }

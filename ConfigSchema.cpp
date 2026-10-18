@@ -229,16 +229,17 @@ const std::vector<Entry> &table()
          "between 10 and 100."},
         {"AdaptationTarget", {}, Type::String, Category::Solver, false, false, std::string{"Solution"},
          "What DegreeAdaptation and MeshAdaptation adapt to. Solution (default): the degree "
-         "to DegreeTolerance on u* - u_h, the mesh from the per-cell modal decay. Objective: "
-         "the degree until every objective's estimated discretisation error is within the "
-         "discretisation share of ObjectiveTolerance, the mesh from where that error is. "
+         "to DegreeTolerance on u* - u_h. Objective: the degree until every objective's "
+         "estimated discretisation error is within the discretisation share of "
+         "ObjectiveTolerance, and the mesh graded, where the modal decay says, only if the "
+         "sample does not meet that already. "
          "Objective needs solveAdjoint, turns EstimateDiscretisationError on, and makes "
          "Objective the default SteadyStateTest. See docs/adaptivity.rst."},
         {"MeshAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Run the p -> h -> p sequence: solve uniform at PolynomialDegree, decide from "
-         "the per-cell modal decay rate (or, under AdaptationTarget = Objective, from where "
-         "the objectives' discretisation error is) whether an end of the domain wants "
-         "grading, regrade at the same cell count if so, then adapt the degree. Needs "
+         "the per-cell modal decay rate whether an end of the domain wants grading (under "
+         "AdaptationTarget = Objective, only if the objectives' tolerance is not yet met), "
+         "regrade at the same cell count if so, then adapt the degree. Needs "
          "PolynomialDegree >= 3, because at 2 the decision is "
          "reversed rather than merely noisy. Steady solves only; implies "
          "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
