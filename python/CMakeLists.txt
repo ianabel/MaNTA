@@ -87,7 +87,13 @@ if(MANTA_XLA_FFI)
       "configure with -DMANTA_XLA_FFI=OFF.")
   endif()
   target_include_directories(_manta SYSTEM PRIVATE "${MANTA_JAXLIB_DIR}/include")
-  target_compile_definitions(_manta PRIVATE XLA_FFI $<$<BOOL:${MANTA_CUDA}>:CUDA>)
+  # MANTA_FFI_FP64 sets the width of every floating-point FFI buffer. The
+  # extension reports it as manta._manta.ffi_float_bits, and manta.jax.ffi_runner
+  # declares its outputs -- and enables jax_enable_x64 -- from that, so the two
+  # sides cannot disagree.
+  target_compile_definitions(_manta PRIVATE XLA_FFI
+    $<$<BOOL:${MANTA_CUDA}>:CUDA>
+    $<$<BOOL:${MANTA_FFI_FP64}>:MANTA_FFI_FP64>)
 
   # The FFI headers are not -Werror clean. Each is probed rather than assumed,
   # because the list was written for gcc and an unknown -Wno- name is itself an

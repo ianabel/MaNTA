@@ -5,7 +5,8 @@ sys.path.append("..")
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective
+from objective import make_objective, ObjectiveFromUserWithParams
+from itg_wrapper import make_itg_builder, itg_at, with_itg
 
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
@@ -83,6 +84,8 @@ st_config = {
     "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
+    "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+    "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
     "useBatching": True,
     "nchunks": 3,
 }
@@ -237,7 +240,8 @@ yancc_wrapper = yancc_data.from_eq(
 # # # %%
 # with jax.log_compiles(True):
 #
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict))
 st.run()
 #
 # # %%
@@ -318,7 +322,9 @@ for k in range(niters):
         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
     )
     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    st = StellaratorTransport(
+        config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq2.params_dict)
+    )
     st.run()
 
     pi = st.getPressure()
@@ -353,8 +359,11 @@ manta_objective = make_objective(config, yancc_res=yancc_res)
 #     return stored_energy, pressure
 
 
-def objective_from_user_fun(grid, data):
-    # note: don't change the signature to this function
+def objective_from_user_fun(grid, data, params=None):
+    # keep (grid, data) first: ObjectiveFromUser calls fun(grid, data);
+    # ObjectiveFromUserWithParams also passes params, which the ITG term
+    # needs. The data keys must stay written out here: DESC reads them
+    # from this function's source
     yancc_dat = {
         "B_sup_t": data["B^theta"],
         "B_sup_z": data["B^zeta"],
@@ -388,7 +397,7 @@ def objective_from_user_fun(grid, data):
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
-    g, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
+    g, manta_pressure = manta_objective(with_itg((fields, Vp, Vpp), itg_builder, params), grid)
 
     print("------------ STORED ENERGY ----------------")
     print(g)
@@ -482,7 +491,7 @@ objectives = [
     Volume(eq=eq, target=V0, weight=100.0),
     QuasisymmetryTwoTerm(eq=eq, helicity=(1, eq.NFP), grid=yancc_desc_grid),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
-    ObjectiveFromUser(
+    (ObjectiveFromUserWithParams if itg_builder is not None else ObjectiveFromUser)(
         objective_from_user_fun,
         eq,
         target=0.0,

@@ -49,6 +49,7 @@ option(MANTA_PYTHON  "Build the manta Python extension"    ON)
 option(MANTA_OPENMP  "Enable the OpenMP pragmas in the batched physics wrappers" OFF)
 option(MANTA_XLA_FFI "Build the JAX XLA FFI bindings (needs jaxlib headers)" OFF)
 option(MANTA_CUDA    "With MANTA_XLA_FFI, also build the CUDA FFI targets"   OFF)
+option(MANTA_FFI_FP64 "With MANTA_XLA_FFI, pass floating-point data across the FFI as float64 (default float32)" OFF)
 
 include(MantaCompilerFlags)
 include(MantaDependencies)
