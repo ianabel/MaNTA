@@ -116,6 +116,11 @@ const std::vector<Entry> &table()
          "Estimate the objective and its remaining error at the end of each steady solve. Costs "
          "one residual, one Jacobian build and one solve, and needs solveAdjoint. Charged per "
          "solve, so a solve driven in slices pays it per slice."},
+        {"EstimateDiscretisationError", {}, Type::Bool, Category::Solver, false, false, false,
+         "With the objective estimate, also estimate each objective's discretisation error and "
+         "its per-cell contributions, dual-weighted on a richer discretisation of the same mesh. "
+         "Costs one physics and one derivative evaluation at the enriched nodes per estimate. "
+         "Needs solveAdjoint and EstimateObjectiveOnFinish. See docs/adjoints.rst."},
         {"MaxContinuationSteps", {}, Type::UInt, Category::Solver, false, false, 200u,
          "KINSol calls one steady solve may make before giving up. Each is a full Newton solve, "
          "so a healthy run uses ten or so and the default is a runaway backstop. Lower it to stop "

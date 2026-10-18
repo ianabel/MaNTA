@@ -527,8 +527,22 @@ py::dict PyRunner::objectiveEstimate(void) const {
   const auto e = system->lastObjectiveEstimate();
   if (!e.valid)
     return py::dict();
-  return py::dict("value"_a = e.value, "corrected"_a = e.corrected,
-                  "uncertainty"_a = e.uncertainty);
+  py::dict out("value"_a = e.value, "corrected"_a = e.corrected,
+               "uncertainty"_a = e.uncertainty);
+  // With EstimateDiscretisationError: G_h - G per objective, its per-cell
+  // contributions beside the cell faces they lie between, and the continuum G
+  // the two estimates together put the objective at.
+  if (e.discretisation.valid) {
+    Vector faces(system->grid.getNCells() + 1);
+    for (Index i = 0; i < static_cast<Index>(system->grid.getNCells()); ++i)
+      faces(i) = system->grid[i].x_l;
+    faces(system->grid.getNCells()) = system->grid.upperBoundary();
+    out["discretisation"] = e.discretisation.total;
+    out["discretisation_per_cell"] = e.discretisation.perCell;
+    out["x_faces"] = faces;
+    out["continuum"] = Vector(e.corrected - e.discretisation.total);
+  }
+  return out;
 }
 
 py::tuple PyRunner::getAdjointGradients(void) {

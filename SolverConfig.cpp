@@ -321,6 +321,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
     READ(EstimateObjectiveOnFinish, bool);
+    READ(EstimateDiscretisationError, bool);
     READ(MaxContinuationSteps, unsigned);
     READ(NewtonMaxIterations, unsigned);
     READ(NewtonJacobianReuse, unsigned);
@@ -975,6 +976,24 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
             "WriteAdjoints needs solveAdjoint: the adjoint states it writes are the ones the "
             "end-of-run adjoint solve leaves.");
     system.setWriteAdjoints(config.WriteAdjoints);
+    // The discretisation estimate rides on the objective estimate, which is made
+    // at the end of each steady solve for the adjoint problem solveAdjoint
+    // attaches; without either there is nothing to estimate, and a time march
+    // makes no estimate at all.
+    if (config.EstimateDiscretisationError)
+    {
+        if (!config.solveAdjoint || !config.EstimateObjectiveOnFinish)
+            throw std::invalid_argument(
+                "EstimateDiscretisationError needs solveAdjoint and EstimateObjectiveOnFinish: "
+                "it is made alongside the objective estimate, for the objectives the case's "
+                "adjoint problem defines.");
+        if (config.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "EstimateDiscretisationError applies to SteadyStateSolver = \"PseudoTransient\" "
+                "or \"Newton\": it is made at the end of a steady solve, which a time march "
+                "does not make.");
+    }
+    system.setEstimateDiscretisationError(config.EstimateDiscretisationError);
     system.setNOutput(config.OutputPoints);
     system.setMinStepSize(config.MinStepSize);
     system.setZeroFlux(config.zeroFlux);

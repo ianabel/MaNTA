@@ -338,6 +338,33 @@ BOOST_AUTO_TEST_CASE(write_adjoints_reaches_the_solver_and_needs_solve_adjoint)
                       std::invalid_argument);
 }
 
+BOOST_AUTO_TEST_CASE(estimate_discretisation_error_reaches_the_solver_and_what_it_needs)
+{
+    // It is made alongside the objective estimate at the end of a steady solve,
+    // for the adjoint problem solveAdjoint attaches, so each of those missing is
+    // refused rather than silently estimating nothing.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+    BOOST_TEST(!load(minimal).EstimateDiscretisationError);
+    BOOST_TEST(!sys.getEstimateDiscretisationError());
+
+    applySolverConfig(load(minimal + "solveAdjoint = true\nEstimateDiscretisationError = true\n"),
+                      sys);
+    BOOST_TEST(sys.getEstimateDiscretisationError());
+
+    for (std::string const &extra :
+         {std::string("EstimateDiscretisationError = true\n"),
+          std::string("solveAdjoint = true\nEstimateDiscretisationError = true\n"
+                      "EstimateObjectiveOnFinish = false\n"),
+          std::string("solveAdjoint = true\nEstimateDiscretisationError = true\n"
+                      "SteadyStateSolver = \"TimeMarch\"\n")})
+    {
+        SystemSolver other(grid, 1, &problem);
+        BOOST_CHECK_THROW(applySolverConfig(load(minimal + extra), other), std::invalid_argument);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(the_objective_tolerances_reach_the_solver_from_either_source)
 {
     // One value for every objective or one each, on both readers, and the
