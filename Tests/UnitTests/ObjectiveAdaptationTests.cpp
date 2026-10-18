@@ -455,6 +455,32 @@ BOOST_AUTO_TEST_CASE(mesh_adaptation_grades_where_the_objective_error_is_and_mee
     removeOutput();
 }
 
+BOOST_AUTO_TEST_CASE(a_given_mesh_has_its_singular_end_split_only_when_the_tolerance_asks)
+{
+    // A mesh given as boundaries keeps every face, and a rough end cell is split
+    // into a layer of its own. At 1e-5 the sample reads 2x its share and the
+    // decay reads the axis rough, so the end is split and the tolerance met at
+    // k = 3; at 1e-3 the sample already meets it and nothing moves.
+    const Grid given(std::vector<Position>{0.0, 0.1, 0.3, 0.6, 1.0});
+    for (double tol : {1e-5, 1e-3})
+        BOOST_TEST_CONTEXT("tolerance " << tol)
+        {
+            Steady problem(Problem::Axis);
+            Integral objective(false);
+            Adapted run = adapt(adaptiveConfig(toObjective + "MeshAdaptation = true\nObjectiveTolerance = " +
+                                                   std::format("{:g}", tol) + "\n",
+                                               3, 4),
+                                problem, objective, given, 3);
+            BOOST_TEST_MESSAGE(run.log);
+            const bool split = tol < 1e-4;
+            BOOST_TEST(run.grid->getNCells() == (split ? 7u : 4u));
+            BOOST_TEST(((*run.grid)[0].h() < 0.1) == split);
+            BOOST_TEST(run.grid->upperBoundary() == 1.0);
+            BOOST_TEST(std::abs(finalG(*run.sys, objective) - 1.0 / 14.0) <= tol / 14.0);
+        }
+    removeOutput();
+}
+
 BOOST_AUTO_TEST_CASE(a_smooth_problem_is_left_uniform_however_far_from_its_tolerance)
 {
     // The negative control: a smooth problem's ends read smooth, so a tolerance

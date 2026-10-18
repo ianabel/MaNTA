@@ -914,10 +914,9 @@ These are deliberate and tracked, not oversights:
   a real question rather than a missing line — an under-resolved `phi` would not
   raise the degree. Nor is a **multi-variable** case exercised, so the "worst
   variable wins" reduction and the per-variable `Absolute_tolerance` floor are
-  covered by inspection only. And nothing drives it with an **adjoint problem
-  attached**, so `setAdjointProblem` being re-applied to each level's solver is
-  untested — which matters, because forgetting it is silent: the run completes
-  and the gradients are simply never computed.
+  covered by inspection only. Under the solution target nothing reads the adjoint
+  problem, so `setAdjointProblem` being re-applied to each level's solver is
+  tested only through the objective target, below, whose every level needs it.
 
   Two numbers worth keeping. On `AdjointPoster` at 6 cells the loop runs
   `k` = 2, 5, 8, 10 and takes the estimate 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10 --
@@ -1002,8 +1001,27 @@ These are deliberate and tracked, not oversights:
   exactly one `ComputePhysics` and one `ComputePhysicsDerivatives` per estimate.
   What it does not cover: a solution whose error decays only algebraically in
   `k` (Shestakov's axis), where the estimate underestimates by a `k`-dependent
-  factor that is documented rather than tested. Its two disabled cases, `measure_effectivity` and
-  `measure_cost`, regenerate the tables in `docs/adjoints.rst`; run them by name.
+  factor that is documented rather than tested. Its two disabled cases,
+  `measure_effectivity` and `measure_cost`, regenerate the tables in
+  `docs/adjoints.rst`; run them by name.
+
+  `Tests/UnitTests/ObjectiveAdaptationTests.cpp` drives `AdaptationTarget =
+  "Objective"` against closed forms: the degree loop from `k = 1` meeting 1e-3,
+  1e-5 and 1e-7 on a manufactured nonlinear problem for `int u` and `int u^2`;
+  the target deciding where the solution indicator would decide the other way,
+  in both directions; the degree ceiling held to the estimate's batch under
+  `MaxPhysicsBatch`; `p -> h -> p` grading `x - x^(4/3)` at 1e-5 and meeting it,
+  and not grading it at 1e-3, which the uniform sample meets; the same from a mesh
+  given as boundaries, its end cell split at 1e-5 and not at 1e-3; a smooth
+  problem left uniform; and a named `"Solution"` target identical bit for bit to
+  the default. `EvaluationPlanTests.cpp` checks every batched call of an objective
+  degree loop and an objective `p -> h -> p` run against the plan in force when
+  it was made. What no test reaches: `ng > 1` end to end (the per-objective
+  tolerances are checked on fabricated estimates only), the objective target
+  from a `GradedGridBoundary` mesh, and `PhysicsParallelism` fills under it. Whether it meets its tolerance across problems, meshes and degrees is
+  measured, not tested -- 560 runs in
+  `python-examples/objective-tolerance/adaptation.py`, one of which converged
+  outside its tolerance (`docs/adaptivity.rst`).
 
   `python/Tests/test_adjoint_aux.py` does the same at `nAux = 2`, `nVars = 1`.
   That intersection -- adjoints *and* auxiliary variables -- was uncovered, and
