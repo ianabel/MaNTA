@@ -87,7 +87,9 @@ Module contents
    * - ``getPostprocessedSolution()``
      - The same, with :math:`u^\star` in place of :math:`u`.
    * - ``G()``
-     - The objective value, without gradients.
+     - The objective value, without gradients: under ``Superconvergent`` the
+       :math:`u^\star`-based one, which is what ``getAdjointGradients()``
+       differentiates and ``objectiveEstimate()`` reports and bounds.
    * - ``getAdjointGradients()``
      - :math:`\mathrm{d}G/\mathrm{d}p`.
    * - ``solve_adjoint(g=None)``

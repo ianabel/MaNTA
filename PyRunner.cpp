@@ -515,9 +515,20 @@ Vector PyRunner::G(void) {
   // GFn reads yJac, which holds the initial condition from initialize() and the
   // final solution after a run. So this does not run the solver -- call run() or
   // run_ss() first, exactly as for getAdjointGradients().
+  //
+  // Under Superconvergent the objective is the u*-based one, as it is for
+  // getAdjointGradients(), objectiveEstimate() and the objective test: that is
+  // the functional the gradient differentiates and the estimates bound, and the
+  // u_h-based one beside it converges more slowly and is held to nothing.
   Vector Gout(ap->getNg());
-  for (Index i = 0; i < ap->getNg(); i++)
-    Gout(i) = ap->GFn(i, system->yJac);
+  if (system->isSuperconvergent()) {
+    system->postprocessor->computeUStar(system->yJac);
+    for (Index i = 0; i < ap->getNg(); i++)
+      Gout(i) = ap->GFn(i, system->yJac, *system->postprocessor);
+  } else {
+    for (Index i = 0; i < ap->getNg(); i++)
+      Gout(i) = ap->GFn(i, system->yJac);
+  }
 
   return Gout;
 }
