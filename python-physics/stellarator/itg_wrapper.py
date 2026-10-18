@@ -432,3 +432,50 @@ def make_itg_flux(eq, rho, floor="subtract", floor_width=0.1, **proxy_kwargs):
     """One-shot: build the proxy and evaluate it at `eq`'s own parameters."""
     builder = ITGFluxBuilder(build_itg_proxy(eq, rho, **proxy_kwargs), floor, floor_width)
     return builder(eq.params_dict)
+
+
+# --- what the drivers call ---------------------------------------------------
+
+DEFAULT_ITG_MODEL_DIR = "/home/eatocco/projects/itg-proxy/demo/neural_networks"
+
+
+def make_itg_builder(st_config, eq, rho_upper=1.0, model_dir=None, n_rho=12,
+                     n_ensemble=10, **proxy_kwargs):
+    """The ITGFluxBuilder a driver needs, or None when `useITGProxy` is unset.
+
+    Builds the proxy once, on `eq` -- a driver's initial equilibrium; the
+    builder then serves any equilibrium of the same resolution. The table
+    starts off the axis, where the shear-normalised GX coefficients are
+    singular; the flux is held at its innermost value inwards, and V' -> 0
+    there. `model_dir` is the itg-proxy demo's `neural_networks/`, from the
+    ITG_MODEL_DIR environment variable when not given.
+    """
+    if not st_config.get("useITGProxy", False):
+        return None
+    import os
+
+    model_dir = model_dir or os.environ.get("ITG_MODEL_DIR", DEFAULT_ITG_MODEL_DIR)
+    proxy = build_itg_proxy(
+        eq,
+        np.linspace(0.1, rho_upper, n_rho),
+        ensemble_dir=os.path.join(model_dir, "cyclic_invariant_models"),
+        ensemble_csv=os.path.join(model_dir, "deephyper_exp", "results.csv"),
+        n_ensemble=n_ensemble,
+        **proxy_kwargs,
+    )
+    return ITGFluxBuilder(proxy)
+
+
+def itg_at(builder, params):
+    """`StellaratorTransport`'s `itg` argument: the ITGFlux at `params`, or
+    None without the ITG term."""
+    return None if builder is None else builder(params)
+
+
+def with_itg(tree_in, builder, params):
+    """`objective.py`'s `tree_in`, with the ITGFlux at `params` appended when
+    there is one. `params` is None when the objective is a plain
+    ObjectiveFromUser, which never passes it."""
+    if builder is None or params is None:
+        return tree_in
+    return tuple(tree_in) + (builder(params),)

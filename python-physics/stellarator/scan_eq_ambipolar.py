@@ -1,5 +1,6 @@
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective
+from objective import make_objective, ObjectiveFromUserWithParams
+from itg_wrapper import make_itg_builder, itg_at, with_itg
 from yancc_wrapper import yancc_data
 import yancc
 import jax.numpy as jnp
@@ -53,6 +54,8 @@ def make_config(fac):
         "T0": 1.0,
         "FusionFactor": 0.01,
         "evolveDensity": True,
+        "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+        "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
         "useBatching": True,
         "nchunks": 3,
     }
@@ -173,7 +176,8 @@ yancc_wrapper = yancc_data.from_eq(
 
 # with jax.log_compiles(True):
 
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict))
 st.run()
 # for fac in jnp.linspace(0.01, 1.0, 5):
 #
@@ -293,8 +297,11 @@ config = {
 manta_objective = make_objective(config, yancc_res=yancc_res)
 
 
-def objective_from_user_fun(grid, data):
-    # note: don't change the signature to this function
+def objective_from_user_fun(grid, data, params=None):
+    # keep (grid, data) first: ObjectiveFromUser calls fun(grid, data);
+    # ObjectiveFromUserWithParams also passes params, which the ITG term
+    # needs. The data keys must stay written out here: DESC reads them
+    # from this function's source
     yancc_dat = {
         "B_sup_t": data["B^theta"],
         "B_sup_z": data["B^zeta"],
@@ -328,7 +335,7 @@ def objective_from_user_fun(grid, data):
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
-    stored_energy, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
+    stored_energy, manta_pressure = manta_objective(with_itg((fields, Vp, Vpp), itg_builder, params), grid)
     print("------------ STORED ENERGY ----------------")
     print(stored_energy)
     print("-------------------------------------------")
@@ -373,7 +380,7 @@ stored_energy_weight = 1.0
 objective_from_user_weight = stored_energy_weight
 
 objectives = [
-    ObjectiveFromUser(
+    (ObjectiveFromUserWithParams if itg_builder is not None else ObjectiveFromUser)(
         objective_from_user_fun,
         eq,
         target=0,

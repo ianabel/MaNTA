@@ -4,7 +4,7 @@ import os
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective, ObjectiveFromUserWithParams
-from itg_wrapper import ITGFluxBuilder, build_itg_proxy
+from itg_wrapper import make_itg_builder
 
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
@@ -86,11 +86,6 @@ st_config = {
     # gyro-Bohm fluxes are large in MaNTA's units; turn the prediction down
     "ITGScale": 1e-2,
 }
-
-ITG_MODEL_DIR = os.environ.get(
-    "ITG_MODEL_DIR", "/home/eatocco/projects/itg-proxy/demo/neural_networks"
-)
-
 
 rho_upper = 1.0
 rtol = 1e-2
@@ -201,23 +196,11 @@ yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 
-# The ITG proxy is declared and built once, on the initial equilibrium (flux-tube
-# extent, transforms, weights); itg_builder(params) then gives the ITG flux at
-# any equilibrium of the same resolution, and is what the objective calls.
-# The table starts off the axis, where the shear-normalised GX coefficients are
-# singular; the flux is held at its innermost value inwards, and V' -> 0 there.
-use_itg = st_config.get("useITGProxy", False)
-itg_builder = None
-if use_itg:
-    itg_builder = ITGFluxBuilder(
-        build_itg_proxy(
-            eq_init,
-            np.linspace(0.1, rho_upper, 12),
-            ensemble_dir=os.path.join(ITG_MODEL_DIR, "cyclic_invariant_models"),
-            ensemble_csv=os.path.join(ITG_MODEL_DIR, "deephyper_exp", "results.csv"),
-            n_ensemble=10,
-        )
-    )
+# The ITG proxy is declared and built once, on the initial equilibrium;
+# itg_builder(params) then gives the ITG flux at any equilibrium of the same
+# resolution, and is what the objective calls. None when useITGProxy is unset.
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+use_itg = itg_builder is not None
 ## %%
 
 #

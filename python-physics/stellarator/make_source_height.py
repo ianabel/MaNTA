@@ -15,6 +15,7 @@ from typing import NamedTuple
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 import matplotlib.pyplot as plt
 from stellarator_multichannel import StellaratorTransport
+from itg_wrapper import make_itg_builder, itg_at
 from netCDF4 import Dataset
 from interpax import Akima1DInterpolator
 from desc.equilibrium import Equilibrium
@@ -156,6 +157,8 @@ def compute_physics(nt, nz, na, nx, Sn=0.0, Spi=0.0, Spe=0.0):
         "alpha": 6,
         "FusionFactor": 0.0,
         "evolveDensity": True,
+        "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+        "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
         "useBatching": False,
         "nchunks": 1,
     }
@@ -173,7 +176,8 @@ def compute_physics(nt, nz, na, nx, Sn=0.0, Spi=0.0, Spe=0.0):
 
     yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nt=nt, nz=nz, **yancc_res)
 
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    itg = itg_at(make_itg_builder(st_config, eq_init, rho_upper), eq_init.params_dict)
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg)
     states = make_test_state(points, st)
     st.layout = {}
     st.layout[len(points)] = (1, *yancc_wrapper.get_fields())
