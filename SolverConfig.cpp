@@ -345,6 +345,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MaxPolynomialDegree, unsigned);
     READ(MaxDegreeIncrement, unsigned);
     READ(DegreeAdaptationBase, double);
+    READ(AdaptationTarget, std::string);
     READ(MeshAdaptation, bool);
     READ(MeshAdaptationThreshold, double);
     READ(MeshAdaptationNeighbourMargin, double);
@@ -388,16 +389,6 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                     "and {} would be ignored. Give GridSize to remesh, or remove {} to "
                     "resume on the file's mesh.",
                     *s, *s, *s));
-
-    // The objective tolerances are read by the Objective steady test and by
-    // nothing else, so under any other test they would be accepted and ignored.
-    if (c.SteadyStateTest != "Objective")
-        for (const char *key : {"ObjectiveTolerance", "ObjectiveAbsoluteTolerance", "ObjectiveBudget"})
-            if (auto s = spelling(key))
-                throw std::invalid_argument(std::format(
-                    "{} is given, but SteadyStateTest is \"{}\": the objective tolerances are "
-                    "read only by SteadyStateTest = \"Objective\", and would change nothing.",
-                    *s, c.SteadyStateTest));
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
@@ -703,6 +694,73 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "MaxPolynomialDegree is below PolynomialDegree, so degree "
                 "adaptation has nothing it is allowed to do.");
     }
+
+    // What the adaptation drivers measure a level by. Nothing else reads it, so
+    // without them it is refused rather than ignored.
+    if (auto s = spelling("AdaptationTarget"); s && !c.DegreeAdaptation)
+        throw std::invalid_argument(std::format(
+            "{} is given, but neither DegreeAdaptation nor MeshAdaptation is on: it says "
+            "what they adapt to, and nothing else reads it.",
+            *s));
+    if (c.AdaptationTarget != "Solution" && c.AdaptationTarget != "Objective")
+        throw std::invalid_argument(
+            "AdaptationTarget must be \"Solution\" or \"Objective\"; got \"" +
+            c.AdaptationTarget + "\".");
+
+    // Adapting to the objectives drives the degree from their discretisation
+    // estimate and the mesh from where that error is, so it needs what the
+    // estimate needs, turns it on, and has nothing to do with the keys the
+    // solution target reads. The steady test it pairs with is the one that holds
+    // the other half of the same budget, so that is the default; another test
+    // may still be named, and then the algebraic error is whatever it leaves.
+    if (c.AdaptationTarget == "Objective")
+    {
+        if (!c.solveAdjoint)
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" needs solveAdjoint: it adapts to the "
+                "objectives the case's adjoint problem defines, and without solveAdjoint "
+                "there is none.");
+        if (!c.EstimateObjectiveOnFinish)
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" needs EstimateObjectiveOnFinish: each "
+                "level is measured by the objective estimate made at the end of its solve.");
+        if (spelling("EstimateDiscretisationError") && !c.EstimateDiscretisationError)
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" is driven by the discretisation estimate, "
+                "but the configuration sets EstimateDiscretisationError = false. Remove it to "
+                "have the estimate enabled automatically.");
+        c.EstimateDiscretisationError = true;
+        for (const char *key : {"DegreeTolerance", "MeshAdaptationThreshold",
+                                "MeshAdaptationNeighbourMargin"})
+            if (auto s = spelling(key))
+                throw std::invalid_argument(std::format(
+                    "{} is given, but AdaptationTarget = \"Objective\": it belongs to the "
+                    "solution target and would change nothing. ObjectiveTolerance is the "
+                    "target here.",
+                    *s));
+        if (!spelling("SteadyStateTest"))
+            c.SteadyStateTest = "Objective";
+        if (c.ObjectiveBudget.size() != 2)
+            throw std::invalid_argument(std::format(
+                "ObjectiveBudget is the array [discretisation, algebraic]; got {} values.",
+                c.ObjectiveBudget.size()));
+        if (!(c.ObjectiveBudget[0] > 0.0))
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" spends the discretisation share of "
+                "ObjectiveBudget, and it is zero.");
+    }
+
+    // The objective tolerances are read by the Objective steady test and the
+    // Objective adaptation target, so under neither they would be accepted and
+    // ignored.
+    if (c.SteadyStateTest != "Objective" && c.AdaptationTarget != "Objective")
+        for (const char *key : {"ObjectiveTolerance", "ObjectiveAbsoluteTolerance", "ObjectiveBudget"})
+            if (auto s = spelling(key))
+                throw std::invalid_argument(std::format(
+                    "{} is given, but SteadyStateTest is \"{}\" and AdaptationTarget is not "
+                    "\"Objective\": the objective tolerances are read by nothing else, and "
+                    "would change nothing.",
+                    *s, c.SteadyStateTest));
 
     return c;
 }

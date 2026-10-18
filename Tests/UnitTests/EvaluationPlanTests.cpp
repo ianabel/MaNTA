@@ -38,6 +38,9 @@ struct Call
 {
     EvaluationEntry entry;
     std::vector<Position> points;
+    // How many plans the case had been handed when the call was made, so that
+    // plans[plan - 1] is the one in force.
+    size_t plan;
 };
 
 std::string name(EvaluationEntry e)
@@ -61,11 +64,16 @@ struct Shape
 {
     bool readsUdot = false;
     bool scalar = false;
+    // An x^(4/3)-type singularity at the axis, for a driver to grade towards,
+    // and a case that follows a new plan in place, for a driver to move.
+    bool axis = false;
+    bool inPlace = false;
 };
 
 SystemSpec specFor(Shape shape)
 {
-    SystemSpec spec{.variables = numberedFields(1)};
+    SystemSpec spec{.variables = numberedFields(1),
+                    .regrid = shape.inPlace ? RegridPolicy::InPlace : RegridPolicy::Fixed};
     spec.variables[0].sourceReadsTimeDerivatives = shape.readsUdot;
     if (shape.scalar)
         spec.scalars = numberedScalars(1);
@@ -108,7 +116,7 @@ public:
     PhysicsOutput ComputePhysics(GlobalState const &states, std::vector<Position> const &x,
                                  Time t) override
     {
-        calls.push_back({EvaluationEntry::ComputePhysics, x});
+        calls.push_back({EvaluationEntry::ComputePhysics, x, plans.size()});
         return TransportSystem::ComputePhysics(states, x, t);
     }
     void ComputePhysicsDerivatives(std::array<std::reference_wrapper<GlobalStateMatrix>,
@@ -116,13 +124,13 @@ public:
                                    GlobalState const &states, std::vector<Position> const &x,
                                    Time t) override
     {
-        calls.push_back({EvaluationEntry::ComputePhysicsDerivatives, x});
+        calls.push_back({EvaluationEntry::ComputePhysicsDerivatives, x, plans.size()});
         TransportSystem::ComputePhysicsDerivatives(std::move(out), states, x, t);
     }
     void ComputeSourceTimeDerivatives(GlobalStateMatrix &out, GlobalState const &states,
                                       std::vector<Position> const &x, Time t) override
     {
-        calls.push_back({EvaluationEntry::ComputeSourceTimeDerivatives, x});
+        calls.push_back({EvaluationEntry::ComputeSourceTimeDerivatives, x, plans.size()});
         TransportSystem::ComputeSourceTimeDerivatives(out, states, x, t);
     }
 
@@ -148,9 +156,10 @@ public:
         v[0] = 1.0 + 0.25 * s.u(0) * s.u(0);
     }
 
-    Value Sources(Index, const State &s, Position, Time) override
+    Value Sources(Index, const State &s, Position x, Time) override
     {
-        return 1.0 + (shape.scalar ? s.scalar(0) : 0.0) + (shape.readsUdot ? 0.1 * s.udot(0) : 0.0);
+        return 1.0 + (shape.scalar ? s.scalar(0) : 0.0) + (shape.readsUdot ? 0.1 * s.udot(0) : 0.0) +
+               (shape.axis ? (4.0 / 9.0) * std::pow(x, -2.0 / 3.0) : 0.0);
     }
     void dSources_du(Index, VectorRef, const State &, Position, Time) override {}
     void dSources_dq(Index, VectorRef, const State &, Position, Time) override {}
@@ -176,14 +185,14 @@ public:
     Value ScalarG(Index, GlobalState const &y, GlobalState const &, std::vector<Position> const &x,
                   Values const &, Matrix const &, Time) override
     {
-        calls.push_back({EvaluationEntry::ScalarG, x});
+        calls.push_back({EvaluationEntry::ScalarG, x, plans.size()});
         return y.Scalars()(0) - 0.5;
     }
     void ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &, GlobalState const &,
                       GlobalState const &, std::vector<Position> const &x, Values const &,
                       Matrix const &, Time) override
     {
-        calls.push_back({EvaluationEntry::ScalarGPrime, x});
+        calls.push_back({EvaluationEntry::ScalarGPrime, x, plans.size()});
         dG[0].Scalars()(0) = 1.0;
     }
     void dSources_dScalars(Index, VectorRef v, const State &, Position x, Time) override
@@ -856,6 +865,62 @@ BOOST_AUTO_TEST_CASE(a_fixed_case_adapts_where_the_plan_cannot_change)
         BOOST_CHECK_NO_THROW(sys = runAdaptiveDegree(config, physics, uniform, 4, 1.0));
     }
     BOOST_TEST(problem.plans.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(an_objective_adaptation_asks_for_nothing_its_plans_do_not_announce)
+{
+    // AdaptationTarget = "Objective" evaluates nothing of its own: each level is
+    // measured by the discretisation estimate its steady solve made on the way
+    // out, at the DiscretisationEstimate sites of that level's plan. So every
+    // batched call of a degree loop and of a p -> h -> p run is checked against
+    // the plan in force when it was made, and every level's estimate sites are
+    // seen to be used.
+    for (bool mesh : {false, true})
+        BOOST_TEST_CONTEXT((mesh ? "MeshAdaptation" : "DegreeAdaptation"))
+        {
+            const SolverConfig config = adaptiveConfig(
+                std::string(mesh ? "MeshAdaptation = true\n" : "DegreeAdaptation = true\n") +
+                "MaxPolynomialDegree = 6\nsolveAdjoint = true\nAdaptationTarget = \"Objective\"\n"
+                "ObjectiveTolerance = 1e-6\nObjectiveAbsoluteTolerance = 1e-8\n");
+            Grid uniform(0.0, 1.0, 10);
+            RecordingCase problem({.axis = true, .inPlace = true});
+            SquareObjective objective;
+            PhysicsInstance physics(problem, uniform, &objective);
+            std::optional<AdaptiveMeshResult> adapted;
+            std::unique_ptr<SystemSolver> final;
+            {
+                CapturedOutput quiet;
+                if (mesh)
+                    adapted.emplace(runAdaptiveMesh(config, physics, uniform, 4, 1.0));
+                else
+                    final = runAdaptiveDegree(config, physics, uniform, 4, 1.0);
+            }
+
+            BOOST_TEST_REQUIRE(problem.plans.size() >= 2u);
+            if (mesh)
+                BOOST_TEST((adapted->decision.verdict == GradingVerdict::GradeLower));
+            for (Call const &c : problem.calls)
+            {
+                BOOST_TEST_REQUIRE(c.plan >= 1u);
+                BOOST_TEST(problem.plans[c.plan - 1].announces(c.entry, c.points),
+                           name(c.entry) << " was called at " << c.points.size()
+                                         << " points plan " << c.plan - 1 << " did not announce");
+            }
+            for (size_t i = 0; i < problem.plans.size(); ++i)
+            {
+                const auto sites = problem.plans[i].sitesOf(EvaluationKind::DiscretisationEstimate);
+                BOOST_TEST(sites.size() == 2u);
+                for (EvaluationSite const &site : sites)
+                    BOOST_TEST(std::any_of(problem.calls.begin(), problem.calls.end(),
+                                           [&](Call const &c)
+                                           {
+                                               return c.plan == i + 1 && c.entry == site.entry &&
+                                                      c.points == site.points;
+                                           }),
+                               "plan " << i << "'s estimate through " << name(site.entry)
+                                       << " was never called");
+            }
+        }
 }
 
 BOOST_AUTO_TEST_CASE(a_grid_ladder_moves_an_in_place_case_and_rebuilds_a_fixed_one)

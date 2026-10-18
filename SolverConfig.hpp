@@ -108,6 +108,9 @@ struct SolverConfig
     unsigned int             MaxPolynomialDegree;
     unsigned int             MaxDegreeIncrement;
     double                   DegreeAdaptationBase;
+    // "Solution" or "Objective": what the adaptation drivers measure a level
+    // by. See runAdaptiveDegree and runAdaptiveMesh.
+    std::string              AdaptationTarget;
     bool                     MeshAdaptation;
     double                   MeshAdaptationThreshold;
     double                   MeshAdaptationNeighbourMargin;

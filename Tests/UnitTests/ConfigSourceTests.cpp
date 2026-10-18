@@ -456,6 +456,82 @@ BOOST_AUTO_TEST_CASE(the_objective_test_refuses_what_cannot_work)
                        "agree"));
 }
 
+BOOST_AUTO_TEST_CASE(the_objective_adaptation_target_takes_what_it_needs_and_refuses_the_rest)
+{
+    const std::string steady = "SteadyStateSolve = true\n";
+    const std::string target = steady + "DegreeAdaptation = true\nsolveAdjoint = true\n"
+                                        "AdaptationTarget = \"Objective\"\n";
+
+    // The default is the solution target, and it reads nothing new.
+    const SolverConfig plain = load(minimal + steady + "DegreeAdaptation = true\n");
+    BOOST_TEST(plain.AdaptationTarget == "Solution");
+    BOOST_TEST(!plain.EstimateDiscretisationError);
+    BOOST_TEST(plain.SteadyStateTest == "NewtonStep");
+
+    // The objective target turns the estimate on and makes the Objective steady
+    // test the default; a test that is named is kept, and the objective
+    // tolerances are read whichever it is.
+    const SolverConfig c = load(minimal + target + "ObjectiveTolerance = 1e-4\n");
+    BOOST_TEST(c.AdaptationTarget == "Objective");
+    BOOST_TEST(c.EstimateDiscretisationError);
+    BOOST_TEST(c.SteadyStateTest == "Objective");
+    BOOST_TEST(c.ObjectiveTolerance == (std::vector<double>{1e-4}), boost::test_tools::per_element());
+    const SolverConfig named =
+        load(minimal + target + "SteadyStateTest = \"NewtonStep\"\nObjectiveBudget = [0.8, 0.2]\n");
+    BOOST_TEST(named.SteadyStateTest == "NewtonStep");
+    BOOST_TEST(named.ObjectiveBudget == (std::vector<double>{0.8, 0.2}), boost::test_tools::per_element());
+
+    // And through the other reader, as Runner.configure gives it.
+    MapConfigSource map_src;
+    map_src.values = {
+        {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
+        {"LowerBoundary", 0.0}, {"UpperBoundary", 1.0},
+        {"OutputFilename", std::string("objective")},
+        {"DegreeAdaptation", true}, {"solveAdjoint", true},
+        {"AdaptationTarget", std::string("Objective")},
+        {"ObjectiveTolerance", std::vector<double>{1e-4}},
+    };
+    const auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
+    BOOST_TEST(fromMap.AdaptationTarget == "Objective");
+    BOOST_TEST(fromMap.EstimateDiscretisationError);
+    BOOST_TEST(fromMap.SteadyStateTest == "Objective");
+
+    auto refused = [&](std::string const &body, std::string const &needle)
+    {
+        try
+        {
+            load(minimal + body);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            BOOST_TEST_MESSAGE(e.what());
+            return std::string(e.what()).find(needle) != std::string::npos;
+        }
+        return false;
+    };
+    // Read by the drivers only.
+    BOOST_TEST(refused(steady + "AdaptationTarget = \"Objective\"\n", "neither DegreeAdaptation"));
+    BOOST_TEST(refused(steady + "AdaptationTarget = \"Solution\"\n", "neither DegreeAdaptation"));
+    BOOST_TEST(refused(steady + "DegreeAdaptation = true\nAdaptationTarget = \"Output\"\n",
+                       "\"Solution\" or \"Objective\""));
+    // The objectives are the adjoint problem's, measured at the end of each solve.
+    BOOST_TEST(refused(steady + "DegreeAdaptation = true\nAdaptationTarget = \"Objective\"\n",
+                       "solveAdjoint"));
+    BOOST_TEST(refused(target + "EstimateObjectiveOnFinish = false\n", "EstimateObjectiveOnFinish"));
+    BOOST_TEST(refused(target + "EstimateDiscretisationError = false\n",
+                       "EstimateDiscretisationError = false"));
+    // The solution target's keys, which would change nothing.
+    BOOST_TEST(refused(target + "DegreeTolerance = 1e-6\n", "DegreeTolerance"));
+    BOOST_TEST(refused(target + "MeshAdaptationThreshold = 3.0\n", "MeshAdaptationThreshold"));
+    // A budget with no discretisation share leaves nothing to adapt to.
+    BOOST_TEST(refused(target + "ObjectiveBudget = [0.0, 1.0]\n", "discretisation share"));
+    BOOST_TEST(refused(target + "ObjectiveBudget = [1.0]\n", "ObjectiveBudget"));
+    // And without the objective target the objective tolerances are still refused
+    // under a test that does not read them.
+    BOOST_TEST(refused(steady + "DegreeAdaptation = true\nObjectiveTolerance = 1e-4\n",
+                       "ObjectiveTolerance"));
+}
+
 BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_defaulted)
 {
     // As for SteadyStateSolver: a typo would otherwise silently pick a

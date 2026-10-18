@@ -85,6 +85,10 @@ enum class EndReference
     Neighbour,
     // Neither applies: a wide end on a mesh with too few cells like it.
     None,
+    // AdaptationTarget = "Objective": not a rate at all, but the end region's
+    // share of the objectives' estimated discretisation error; see
+    // objectiveGradingDecision.
+    Objective,
 };
 
 struct EndDecision
@@ -98,6 +102,8 @@ struct EndDecision
     double ratio = 0.0;
     // How many interior cells made up the Peers median.
     size_t peers = 0;
+    // Objective only: the end region's share of the error, in [0, 1].
+    double share = 0.0;
 };
 
 // What the sensor concluded, and the numbers behind it, so a caller can log or
@@ -131,6 +137,11 @@ struct GradingDecision
     // what they were before these were added.
     EndDecision lowerEnd;
     EndDecision upperEnd;
+
+    // Objective only: the worst objective's discretisation estimate against its
+    // share of ObjectiveTolerance (ObjectiveAccuracy::ratio). Neither end is
+    // rough while it is at most 1. The rates and ratios above are unset.
+    double objectiveRatio = 0.0;
 };
 
 // The margin a graded end's neighbour test asks for, ratio > 1 + margin. Set
@@ -174,6 +185,35 @@ GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
                                 double neighbourMargin = defaultNeighbourMargin);
 GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
                                 unsigned int k, double threshold);
+
+// The share of the objectives' estimated discretisation error an end region must
+// hold before the objective target grades it. Measured on uniform meshes of 3 to
+// 20 cells at k = 3..6 (docs/adaptivity.rst): singular ends -- x^(4/3) at either
+// end, Shestakov's axis -- hold 0.998 or more; smooth problems at most 0.95, at 3
+// cells, where an end region is two thirds of the mesh, and 0.77 from 4 cells.
+inline constexpr double objectiveEndShare = 0.99;
+
+// Should this mesh be graded, and at which end -- read from where the objectives'
+// discretisation error is, for AdaptationTarget = "Objective".
+//
+// `perCell` is the per-cell indicator (ObjectiveAccuracy::perCell) and `ratio`
+// the worst objective's estimate against its tolerance. An end is rough when the
+// run has not met its tolerance (ratio > 1) and the end region -- the end cell
+// and its inward neighbour -- holds at least `share` of the indicator's sum. Two
+// cells rather than one because the indicator shares each face's trace rows
+// equally between the cells either side of it, and a singular end puts its error
+// on the face it shares with the neighbour as much as in its own interior: on
+// u = x - x^(4/3) the end cell and its neighbour hold half each. The verdict, for
+// a uniform start, is the rough end with the larger share.
+//
+// Scale-free, and blind to width: a narrow cell holds a small error, so a graded
+// end that has resolved its singularity stops dominating and reads smooth. And a
+// run that already meets its tolerance grades nothing, whatever the
+// distribution -- the decision is about the objectives, not the solution.
+//
+// Requires at least 3 cells.
+GradingDecision objectiveGradingDecision(std::vector<double> const &perCell, double ratio,
+                                         double share = objectiveEndShare);
 
 // The mesh a decision asks for, at the *same cell count* as the one it was made
 // on -- which is the point, per (1) above.
@@ -238,6 +278,11 @@ struct AdaptiveMeshResult
 //    count grows.
 //
 // Then runAdaptiveDegree to `DegreeTolerance` on whichever mesh won.
+//
+// Under AdaptationTarget = "Objective" the decision is objectiveGradingDecision
+// on the sample's discretisation estimate rather than gradingDecision on its
+// modal decay, and the degree loop adapts to ObjectiveTolerance; the regrades
+// themselves, the retries and the fallbacks are the same.
 //
 // **A grading that fails to solve is a rejected step, not an error.** Section 9
 // measured 15 of 52 hand-built gradings failing outright, non-monotonically in

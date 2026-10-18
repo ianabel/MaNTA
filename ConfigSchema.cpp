@@ -225,6 +225,13 @@ const std::vector<Entry> &table()
          "How much error one extra degree is assumed to buy, in Giorgiani's rule "
          "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
          "between 10 and 100."},
+        {"AdaptationTarget", {}, Type::String, Category::Solver, false, false, std::string{"Solution"},
+         "What DegreeAdaptation and MeshAdaptation adapt to. Solution (default): the degree "
+         "to DegreeTolerance on u* - u_h, the mesh from the per-cell modal decay. Objective: "
+         "the degree until every objective's estimated discretisation error is within the "
+         "discretisation share of ObjectiveTolerance, the mesh from where that error is. "
+         "Objective needs solveAdjoint, turns EstimateDiscretisationError on, and makes "
+         "Objective the default SteadyStateTest. See docs/adaptivity.rst."},
         {"MeshAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Run the p -> h -> p sequence: solve uniform at PolynomialDegree, decide from "
          "the per-cell modal decay rate whether an end of the domain wants grading, "

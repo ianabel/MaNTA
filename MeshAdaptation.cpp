@@ -190,6 +190,52 @@ GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold,
                            neighbourMargin);
 }
 
+GradingDecision objectiveGradingDecision(std::vector<double> const &perCell, double ratio,
+                                         double share)
+{
+    if (!(share > 0.5 && share <= 1.0))
+        throw std::invalid_argument(
+            "The objective grading share must be above 1/2 and at most 1: at or below a half "
+            "both ends of a mesh could hold it at once.");
+
+    if (perCell.size() < 3)
+        throw std::invalid_argument(
+            "Deciding whether to grade needs at least 3 cells: each end is read with its "
+            "inward neighbour, and with fewer the two ends are the whole mesh.");
+
+    GradingDecision d;
+    d.objectiveRatio = ratio;
+
+    const size_t n = perCell.size();
+    double total = 0.0;
+    for (double v : perCell)
+        total += v;
+
+    // An indicator with nothing in it -- every cell at zero -- has no end that
+    // holds more of it than another.
+    auto readEnd = [&](size_t end, size_t inward) -> EndDecision
+    {
+        EndDecision e;
+        e.reference = EndReference::Objective;
+        e.share = total > 0.0 && std::isfinite(total) ? (perCell[end] + perCell[inward]) / total
+                                                      : 0.0;
+        e.reading = ratio > 1.0 && e.share >= share ? EndReading::Rough : EndReading::Smooth;
+        return e;
+    };
+    d.lowerEnd = readEnd(0, 1);
+    d.upperEnd = readEnd(n - 1, n - 2);
+
+    // At 3 cells the two regions overlap in the middle cell, so both can be rough;
+    // the larger share wins, a tie going to the lower end as in gradingDecision.
+    const bool lower = d.lowerEnd.reading == EndReading::Rough;
+    const bool upper = d.upperEnd.reading == EndReading::Rough;
+    if (lower || upper)
+        d.verdict = lower && (!upper || d.lowerEnd.share >= d.upperEnd.share)
+                        ? GradingVerdict::GradeLower
+                        : GradingVerdict::GradeUpper;
+    return d;
+}
+
 std::vector<Grid::Position> gradedMeshFor(GradingDecision const &decision,
                                           Grid const &uniform,
                                           Grid::Index gradedCells,
@@ -295,12 +341,15 @@ const char *name(EndReference r)
     case EndReference::Peers:     return "vs peers";
     case EndReference::Neighbour: return "vs neighbour";
     case EndReference::None:      return "no reference";
+    case EndReference::Objective: return "objective share";
     }
     return "no reference";
 }
 
 std::string describe(EndDecision const &e)
 {
+    if (e.reference == EndReference::Objective)
+        return std::format("{} (holds {:.3f} of the error)", name(e.reading), e.share);
     if (e.reference == EndReference::None)
         return "undecidable (no cell of its width, and not narrower than its neighbour)";
     return std::format("{} ({} {:.2f}x)", name(e.reading), name(e.reference), e.ratio);
@@ -371,24 +420,44 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
     sample->runSolver(tFinal);
 
     // --- h: decide, and regrade ------------------------------------------------
-    result.decision = gradingDecision(sample->solution(), var,
-                                      config.MeshAdaptationThreshold,
-                                      config.MeshAdaptationNeighbourMargin);
+    //
+    // From the sample's modal decay, or under the objective target from where the
+    // discretisation estimate its steady solve made on the way out puts the
+    // objectives' error -- which costs nothing beyond the solve.
+    const bool toObjective = config.AdaptationTarget == "Objective";
+    if (toObjective)
+    {
+        const ObjectiveAccuracy acc = objectiveAccuracy(*sample);
+        result.decision = objectiveGradingDecision(acc.perCell, acc.ratio);
+    }
+    else
+        result.decision = gradingDecision(sample->solution(), var,
+                                          config.MeshAdaptationThreshold,
+                                          config.MeshAdaptationNeighbourMargin);
     auto const &d = result.decision;
 
-    std::println("  decay rate: lower end {:.3g}, interior median {:.3g}, upper end "
-                 "{:.3g}; measurable up to {:.3g}",
-                 d.lowerRate, d.interiorMedian, d.upperRate, d.rateCeiling);
-    if (kind == Start::Uniform)
-        std::println("  roughness vs interior: lower {:.2f}x, upper {:.2f}x, threshold "
-                     "{:.2f}x -> grade {}",
-                     d.lowerRatio, d.upperRatio, config.MeshAdaptationThreshold,
-                     name(d.verdict));
+    if (toObjective)
+        std::println("  objectives: discretisation error {:.3g}x its share of ObjectiveTolerance; "
+                     "lower end {}, upper end {}, grading at {:.2f} -> grade {}",
+                     d.objectiveRatio, describe(d.lowerEnd), describe(d.upperEnd),
+                     objectiveEndShare, d.objectiveRatio > 1.0 ? name(d.verdict) : "none, met");
     else
-        std::println("  lower end {}; upper end {}; thresholds {:.2f}x vs peers, "
-                     "{:.2f}x vs neighbour",
-                     describe(d.lowerEnd), describe(d.upperEnd),
-                     config.MeshAdaptationThreshold, 1.0 + config.MeshAdaptationNeighbourMargin);
+    {
+        std::println("  decay rate: lower end {:.3g}, interior median {:.3g}, upper end "
+                     "{:.3g}; measurable up to {:.3g}",
+                     d.lowerRate, d.interiorMedian, d.upperRate, d.rateCeiling);
+        if (kind == Start::Uniform)
+            std::println("  roughness vs interior: lower {:.2f}x, upper {:.2f}x, threshold "
+                         "{:.2f}x -> grade {}",
+                         d.lowerRatio, d.upperRatio, config.MeshAdaptationThreshold,
+                         name(d.verdict));
+        else
+            std::println("  lower end {}; upper end {}; thresholds {:.2f}x vs peers, "
+                         "{:.2f}x vs neighbour",
+                         describe(d.lowerEnd), describe(d.upperEnd),
+                         config.MeshAdaptationThreshold,
+                         1.0 + config.MeshAdaptationNeighbourMargin);
+    }
 
     // A candidate mesh at a given grading ratio, and a line saying what it is.
     struct Candidate
@@ -436,10 +505,20 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
         // planned by the sample's own configuration; see layerFor below for
         // where they go.
         const Grid::Index sampleCells = uniform.getNCells();
-        const Grid::Index gradedCount = filledCellCount(
+        Grid::Index gradedCount = filledCellCount(
             [&](Grid const &g, unsigned int kk) { return sample->evaluationPlanFor(g, kk); },
             uniform, k0, std::numeric_limits<Grid::Index>::max(), config.PhysicsParallelism,
             config.MaxPhysicsBatch);
+        // The objective target estimates at every level, and that batch is not
+        // a recurring one the fill counts; see discretisationEstimateFits.
+        if (toObjective)
+            while (gradedCount > sampleCells &&
+                   !discretisationEstimateFits(
+                       sample->evaluationPlanFor(Grid(uniform.lowerBoundary(),
+                                                      uniform.upperBoundary(), gradedCount),
+                                                 k0),
+                       config.MaxPhysicsBatch))
+                --gradedCount;
         const Grid filledUniform(uniform.lowerBoundary(), uniform.upperBoundary(), gradedCount);
 
         // The layer the filled mesh grades at a given ratio. Its boundaries sit

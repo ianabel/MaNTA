@@ -56,6 +56,7 @@ set(MANTA_TEST_SOURCES
   IntegratorTest.cpp
   LocalTauTests.cpp
   MeshAdaptationTests.cpp
+  ObjectiveAdaptationTests.cpp
   ObjectiveSteadyTests.cpp
   ParallelFillTests.cpp
   MMSAuxScalarTests.cpp
