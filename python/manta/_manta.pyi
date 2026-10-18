@@ -133,14 +133,17 @@ class EvaluationCadence:
       OncePerRun
     
       OncePerSolver
+    
+      PerObjectiveEstimate
     """
     OncePerRun: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.OncePerRun: 4>
     OncePerSolver: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.OncePerSolver: 5>
     PerAdjointSolve: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerAdjointSolve: 3>
     PerContinuationStep: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerContinuationStep: 2>
     PerJacobianBuild: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerJacobianBuild: 1>
+    PerObjectiveEstimate: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerObjectiveEstimate: 6>
     PerResidual: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerResidual: 0>
-    __members__: typing.ClassVar[dict[str, EvaluationCadence]]  # value = {'PerResidual': <EvaluationCadence.PerResidual: 0>, 'PerJacobianBuild': <EvaluationCadence.PerJacobianBuild: 1>, 'PerContinuationStep': <EvaluationCadence.PerContinuationStep: 2>, 'PerAdjointSolve': <EvaluationCadence.PerAdjointSolve: 3>, 'OncePerRun': <EvaluationCadence.OncePerRun: 4>, 'OncePerSolver': <EvaluationCadence.OncePerSolver: 5>}
+    __members__: typing.ClassVar[dict[str, EvaluationCadence]]  # value = {'PerResidual': <EvaluationCadence.PerResidual: 0>, 'PerJacobianBuild': <EvaluationCadence.PerJacobianBuild: 1>, 'PerContinuationStep': <EvaluationCadence.PerContinuationStep: 2>, 'PerAdjointSolve': <EvaluationCadence.PerAdjointSolve: 3>, 'OncePerRun': <EvaluationCadence.OncePerRun: 4>, 'OncePerSolver': <EvaluationCadence.OncePerSolver: 5>, 'PerObjectiveEstimate': <EvaluationCadence.PerObjectiveEstimate: 6>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
@@ -246,8 +249,11 @@ class EvaluationKind:
       InitialProjection
     
       MassMatrix
+    
+      DiscretisationEstimate
     """
     Adjoint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Adjoint: 9>
+    DiscretisationEstimate: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.DiscretisationEstimate: 12>
     FieldCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.FieldCoupling: 8>
     InitialCondition: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialCondition: 2>
     InitialProjection: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialProjection: 10>
@@ -259,7 +265,7 @@ class EvaluationKind:
     ScalarJacobian: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarJacobian: 6>
     TauFaces: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.TauFaces: 3>
     TauNodes: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.TauNodes: 4>
-    __members__: typing.ClassVar[dict[str, EvaluationKind]]  # value = {'Residual': <EvaluationKind.Residual: 0>, 'Jacobian': <EvaluationKind.Jacobian: 1>, 'InitialCondition': <EvaluationKind.InitialCondition: 2>, 'TauFaces': <EvaluationKind.TauFaces: 3>, 'TauNodes': <EvaluationKind.TauNodes: 4>, 'ScalarConstraint': <EvaluationKind.ScalarConstraint: 5>, 'ScalarJacobian': <EvaluationKind.ScalarJacobian: 6>, 'ScalarCoupling': <EvaluationKind.ScalarCoupling: 7>, 'FieldCoupling': <EvaluationKind.FieldCoupling: 8>, 'Adjoint': <EvaluationKind.Adjoint: 9>, 'InitialProjection': <EvaluationKind.InitialProjection: 10>, 'MassMatrix': <EvaluationKind.MassMatrix: 11>}
+    __members__: typing.ClassVar[dict[str, EvaluationKind]]  # value = {'Residual': <EvaluationKind.Residual: 0>, 'Jacobian': <EvaluationKind.Jacobian: 1>, 'InitialCondition': <EvaluationKind.InitialCondition: 2>, 'TauFaces': <EvaluationKind.TauFaces: 3>, 'TauNodes': <EvaluationKind.TauNodes: 4>, 'ScalarConstraint': <EvaluationKind.ScalarConstraint: 5>, 'ScalarJacobian': <EvaluationKind.ScalarJacobian: 6>, 'ScalarCoupling': <EvaluationKind.ScalarCoupling: 7>, 'FieldCoupling': <EvaluationKind.FieldCoupling: 8>, 'Adjoint': <EvaluationKind.Adjoint: 9>, 'InitialProjection': <EvaluationKind.InitialProjection: 10>, 'MassMatrix': <EvaluationKind.MassMatrix: 11>, 'DiscretisationEstimate': <EvaluationKind.DiscretisationEstimate: 12>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:

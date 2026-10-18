@@ -56,6 +56,9 @@ enum class EvaluationKind
     InitialProjection, // InitialValue, InitialDerivative and InitialAuxValue, pointwise at
                        // each cell's Gauss points, L2-projected onto the basis
     MassMatrix,        // aFn, pointwise at each cell's Gauss points
+    DiscretisationEstimate, // estimateDiscretisationError(): fluxes, sources and their
+                            // derivatives at the enriched nodes, the k + increment + 1
+                            // nodes of the degree-(k + increment) basis
 };
 
 /// Which TransportSystem entry point receives the points.
@@ -82,6 +85,8 @@ enum class EvaluationCadence
     OncePerRun,          // at most `calls` times a run, mostly inside initialize(): a
                          // restart or a steady solve skips some of them
     OncePerSolver,       // the first initialize() of a SystemSolver, at most
+    PerObjectiveEstimate, // every objective estimate: the end of each steady solve, or
+                          // of each slice of one
 };
 
 /// One kind of evaluation, through one entry point, at one cadence.
@@ -227,6 +232,7 @@ inline char const *toString(EvaluationKind kind)
     case EvaluationKind::Adjoint: return "Adjoint";
     case EvaluationKind::InitialProjection: return "InitialProjection";
     case EvaluationKind::MassMatrix: return "MassMatrix";
+    case EvaluationKind::DiscretisationEstimate: return "DiscretisationEstimate";
     }
     return "?";
 }

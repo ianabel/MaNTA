@@ -119,6 +119,23 @@ void SystemSolver::initialize()
 			"{} cells at k = {} hand the physics batches of {} points on every residual or "
 			"Jacobian build, past MaxPhysicsBatch = {}. Use fewer cells or a lower degree.",
 			nCells, k, plan->largestRecurringBatch(), maxPhysicsBatch));
+	// The discretisation estimate, checked here rather than at the end of the
+	// first solve it would make: what it refuses is fixed by now, and its batch,
+	// once a steady solve rather than every residual, is still a batch the case
+	// was promised it would not get.
+	if (estimateDiscretisation && adjointProblem != nullptr)
+	{
+		if (nScalars > 0 || fieldModel || k < 1 || tauScaling != TauScaling::Constant)
+			throw std::invalid_argument(
+				"EstimateDiscretisationError cannot estimate this run: it needs "
+				"PolynomialDegree >= 1, a constant tau, and no global scalars or field model.");
+		for (auto const &site : plan->sitesOf(EvaluationKind::DiscretisationEstimate))
+			if (maxPhysicsBatch > 0 && site.batchSize() > maxPhysicsBatch)
+				throw std::invalid_argument(std::format(
+					"EstimateDiscretisationError hands the physics a batch of {} points at the "
+					"end of each steady solve, past MaxPhysicsBatch = {}.",
+					site.batchSize(), maxPhysicsBatch));
+	}
 	problem->deliverEvaluationPlan(plan);
 
 	if (!initialised)

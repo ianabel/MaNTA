@@ -222,6 +222,7 @@ struct Run
     SystemSolver::TauKappa kappa = SystemSolver::TauKappa::Nodal;
     Shape shape;
     bool adjoint = false;
+    bool estimate = false; // EstimateDiscretisationError, with the adjoint
 };
 
 constexpr Index nCells = 5, k = 4;
@@ -248,6 +249,7 @@ void configure(SystemSolver &sys, Run const &run, AdjointProblem *adjoint)
     {
         sys.setAdjointProblem(adjoint);
         sys.setSolveAdjoint(true);
+        sys.setEstimateDiscretisationError(run.estimate);
     }
 }
 
@@ -335,6 +337,9 @@ BOOST_AUTO_TEST_CASE(every_call_is_announced_and_every_announced_site_is_used)
          .shape = {.scalar = true}},
         {.label = "steady_adjoint_superconvergent", .superconvergent = true, .steady = true,
          .adjoint = true},
+        {.label = "steady_estimate", .steady = true, .adjoint = true, .estimate = true},
+        {.label = "steady_estimate_superconvergent", .superconvergent = true, .steady = true,
+         .adjoint = true, .estimate = true},
     };
 
     for (Run const &run : runs)
@@ -382,8 +387,16 @@ BOOST_AUTO_TEST_CASE(every_call_is_announced_and_every_announced_site_is_used)
             // the k+1 basis nodes through ComputePhysics.
             BOOST_TEST((plan.points(EvaluationKind::InitialCondition) ==
                         plan.points(EvaluationKind::Residual)));
+            // The discretisation estimate is the one exception: its point set is
+            // the enriched basis's nodes, two degrees beyond the physics nodes.
+            BOOST_TEST(plan.has(EvaluationKind::DiscretisationEstimate) == run.estimate);
+            if (run.estimate)
+                BOOST_TEST(plan.points(EvaluationKind::DiscretisationEstimate).size() ==
+                           size_t(nCells * (perCell + 2)));
             for (Call const &c : problem.calls)
-                if (c.entry == EvaluationEntry::ComputePhysics)
+                if (c.entry == EvaluationEntry::ComputePhysics &&
+                    !(run.estimate &&
+                      c.points == plan.points(EvaluationKind::DiscretisationEstimate)))
                     BOOST_TEST((c.points == plan.points(EvaluationKind::Residual)));
 
             checkAgainstPlan(plan, problem);

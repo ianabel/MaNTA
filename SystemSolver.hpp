@@ -425,12 +425,49 @@ class SystemSolver
             Stalled,
         };
 
+        // The discretisation error of each objective at a state: an estimate of
+        // G_h - G, the objective the discretisation converges to at this level
+        // (the fixed point of its discrete equations) minus the continuum one.
+        // See estimateDiscretisationError for how, and docs/adjoints.rst for
+        // the derivation and the measured effectivity.
+        //
+        // `total` is the sum of three parts, kept for diagnosis:
+        //
+        //     total = residual + quadrature - algebraic
+        //
+        //  * residual:   z+ . F_e(U~), the enriched residual of the state tested
+        //                against an improved adjoint -- G(U~) - G(u) to first
+        //                order, with G the exact integral of g;
+        //  * quadrature: G_h(u_h) - G_e(U~), what the objective's own quadrature
+        //                leaves out, from its rule at the enriched nodes;
+        //  * algebraic:  (dG/dy) . delta = z_h^T F_h(u_h) for the Newton
+        //                correction delta, the algebraic error the residual part
+        //                also carries -- removed because it is what
+        //                ObjectiveEstimate::corrected already subtracts.
+        //
+        // So `total` estimates corrected - G(u), and G(u) ~ corrected - total.
+        //
+        // `perCell` is (ng x nCells): eta_K, the same three parts restricted to
+        // cell K, each face's trace rows shared equally between the cells on
+        // either side of it. Each row sums to `total` up to round-off.
+        struct DiscretisationEstimate
+        {
+            Vector total;
+            Matrix perCell;
+            Vector residual, quadrature, algebraic;
+            bool valid = false;
+        };
+
         struct ObjectiveEstimate
         {
             Vector value;        // G as the run actually converged it
             Vector corrected;    // G extrapolated to the fixed point
             Vector uncertainty;  // bound on |corrected - value|, and on the error left
             bool valid = false;  // false when there is no AdjointProblem to ask
+
+            // With EstimateDiscretisationError on, the discretisation error of
+            // `corrected`; invalid otherwise.
+            DiscretisationEstimate discretisation;
         };
 
         struct SteadyStepStats
@@ -533,6 +570,7 @@ class SystemSolver
         void readKinStats(SteadyStepStats &s) const;
         void reportSteadyStep(SteadyStepStats const &s) const;
         void reportSteadyStats(std::string_view outcome, SteadyStats const &s) const;
+        void reportObjectiveEstimate(ObjectiveEstimate const &e) const;
 
         // What the last steady solve cost, whether or not it was printed and
         // whether or not it converged -- a failed solve fills this in before
@@ -550,6 +588,52 @@ class SystemSolver
         // What estimateObjective() last reported, filled at the end of a steady
         // solve. Invalid when the run had no AdjointProblem.
         ObjectiveEstimate lastObjectiveEstimate() const { return objectiveEstimate; };
+
+        // ---- The discretisation estimate.
+        //
+        // The improved adjoint z+ the residual part is tested against:
+        //
+        //  * Enriched: the adjoint solved again on the enriched solver, from the
+        //    physics derivatives at the enriched nodes. What the estimate uses.
+        //  * Postprocessed: the discrete adjoint z_h, its u block replaced by the
+        //    reconstruction Postprocessor applies to a solution, with z_sigma in
+        //    the role q plays there: the adjoint's sigma column makes z_sigma the
+        //    weak derivative of z_u. It saves the derivative evaluation and the
+        //    enriched solve, and measured erratic -- on the plain scheme's
+        //    manufactured problems, within 10% of the true error in 67% of the
+        //    cases against the enriched adjoint's 95% -- so it is kept only as
+        //    the comparison DiscretisationEstimateTests measures; see
+        //    docs/adjoints.rst.
+        enum class DiscretisationAdjoint
+        {
+            Enriched,
+            Postprocessed,
+        };
+
+        // The discretisation error of every objective at `state`, given the
+        // Newton correction delta = J^-1 F there (alpha = 0, zero dydt), which
+        // the algebraic part is read off.
+        //
+        // The state is lifted into the enriched space, degree k +
+        // enrichmentIncrement() -- u_h, or u* under the superconvergent scheme,
+        // whose objective is a functional of u* -- and the residual's transport
+        // rows are assembled there from the physics at the enriched nodes; the
+        // enriched adjoint comes from the derivatives there. One ComputePhysics
+        // and one ComputePhysicsDerivatives at nCells * (k + increment + 1)
+        // points: the DiscretisationEstimate sites of the evaluation plan, which
+        // lists them only on a solver configured to estimate
+        // (setEstimateDiscretisationError), so this refuses any other.
+        //
+        // Also refused with global scalars, a field model, a non-constant tau,
+        // and at k = 0.
+        DiscretisationEstimate estimateDiscretisationError(AdjointProblem &objective,
+                                                           DGSoln const &state,
+                                                           DGSoln const &delta, Time tEval);
+
+        // Whether estimateObjective() also estimates the discretisation error,
+        // the EstimateDiscretisationError key.
+        void setEstimateDiscretisationError(bool on) { estimateDiscretisation = on; };
+        bool getEstimateDiscretisationError() const { return estimateDiscretisation; };
 
         // ---- The adjoint on demand.
         //
@@ -1112,6 +1196,16 @@ class SystemSolver
 
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
+
+        // The transport rows of the residual -- trace rows and every cell's
+        // sigma, q, u and aux rows -- from physics values already evaluated at
+        // this solver's physics nodes. residual() is this plus the physics call
+        // and the scalar and field rows; the discretisation estimate assembles
+        // the same rows on its enriched solver from values it evaluated itself.
+        // Expects the trace rows of `res` zeroed and the boundary data current
+        // (updateBoundaryConditions).
+        void assembleTransportResidual(DGSoln const &Y_h, DGSoln const &dYdt_h,
+                                       PhysicsOutput const &values, DGSoln &res);
 
         // Couple this solver to a magnetic-field model, whose unknowns join the
         // solution vector after the global scalars and whose geometry reaches
@@ -1732,6 +1826,35 @@ class SystemSolver
         // Every updateMatricesForJacSolve's, moved here once its blocks are
         // factorised. What solveAdjointAt reuses.
         PhysicsDerivatives jacobianDerivatives;
+
+        bool estimateDiscretisation = false;
+
+        // The two choices the discretisation estimate makes, as members rather
+        // than arguments so that evaluationPlanFor reads the same ones the
+        // estimate does: the enriched degree's increment over k (0 for the
+        // default, see enrichmentIncrement) and which improved adjoint it tests
+        // against. Measured in DiscretisationEstimateTests.cpp, where the other
+        // values are set; nothing else changes them.
+        unsigned int discretisationIncrement = 0;
+        DiscretisationAdjoint discretisationAdjoint = DiscretisationAdjoint::Enriched;
+        unsigned int enrichmentIncrement() const
+        {
+            return discretisationIncrement > 0 ? discretisationIncrement
+                                               : (superconvergent ? 3 : 2);
+        }
+
+        // The degree-(k + increment) solver the discretisation estimate
+        // assembles its enriched residual and, for DiscretisationAdjoint::Enriched,
+        // its adjoint on: the same case, grid, tau and boundary conditions, plain
+        // rather than superconvergent, built on first use and kept. It never runs
+        // -- no SUNDIALS objects, no initialize() -- and its initialiseMatrices
+        // skips aFn (massFromHook), so building it asks the case for nothing.
+        std::unique_ptr<SystemSolver> enrichedSolver;
+        bool massFromHook = true;
+        // Per cell, the lift into the enriched nodal basis: the degree-k basis,
+        // and the degree-(k+1) star basis, evaluated at the enriched nodes.
+        std::vector<Matrix> liftFromBasis, liftFromStar;
+        SystemSolver &enrichedSolverFor(unsigned int increment);
         // The end-of-run adjoint's, when the last build was not at the final
         // state. Kept apart from the above so the forward field blocks can still
         // be put back from it.

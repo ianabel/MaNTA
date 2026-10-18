@@ -562,6 +562,29 @@ EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kP
         add(Kind::Adjoint, Entry::ComputePhysicsDerivatives, Cadence::PerAdjointSolve, 1,
             physicsPerCell, physicsNodes);
 
+    // The discretisation estimate at the end of each steady solve: the physics
+    // and its derivatives at the nodes of the enriched basis, two degrees beyond
+    // the scheme's own physics interpolation. Listed whenever the solver is
+    // configured to estimate, since whether a given solve estimates is decided
+    // per slice; estimateDiscretisationError refuses any other solver, so the
+    // listing is exact.
+    if (estimateDiscretisation && adjointProblem != nullptr)
+    {
+        const Index ke = k + enrichmentIncrement();
+        const NodalBasis rich = NodalBasis::getBasis(ke);
+        Vector const &nodes = rich.getNodes();
+        std::vector<Position> richNodes;
+        richNodes.reserve(nCells * (ke + 1));
+        for (Index i = 0; i < nCells; ++i)
+            for (Index j = 0; j < ke + 1; ++j)
+                richNodes.push_back(grid[i].fromRef(nodes(j)));
+        add(Kind::DiscretisationEstimate, Entry::ComputePhysics, Cadence::PerObjectiveEstimate,
+            1, ke + 1, richNodes);
+        if (discretisationAdjoint == DiscretisationAdjoint::Enriched)
+            add(Kind::DiscretisationEstimate, Entry::ComputePhysicsDerivatives,
+                Cadence::PerObjectiveEstimate, 1, ke + 1, richNodes);
+    }
+
     // The pointwise hooks the L2 projection and the mass matrix integrate, at the
     // Gauss points of NodalBasis's integrator -- in the order boost's gauss<>
     // visits them, and computed as it computes them, so these are the positions
@@ -940,7 +963,10 @@ void SystemSolver::initialiseMatrices()
     // the exception: the degree-0 NodalBasis returns from its constructor before
     // building Vandermonde or BarycentricWeights (Basis.hpp:369-377), so it
     // cannot be evaluated off-node and there is nothing to reconstruct.
-    if (k >= 1)
+    //
+    // Not on the discretisation estimate's enriched solver (massFromHook off),
+    // which reports nothing and never reconstructs.
+    if (k >= 1 && massFromHook)
         postprocessor = std::make_unique<Postprocessor>(grid, k, nVars, nScalars, nAux);
     else if (superconvergent)
         throw std::invalid_argument(
@@ -1182,7 +1208,10 @@ void SystemSolver::initialiseMatrices()
 
         Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
         X.setZero();
-        for (Index var = 0; var < nVars; var++)
+        // Left zero on the discretisation estimate's enriched solver: it only
+        // ever assembles at alpha = 0, where X does not appear, and building it
+        // would call aFn at points no evaluation plan announces.
+        for (Index var = 0; var < nVars && massFromHook; var++)
         {
             Eigen::MatrixXd Xvar(k + 1, k + 1);
             y.getBasis().MassMatrix(I, Xvar, [this, var](double x)
@@ -3178,8 +3207,6 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     // O(h^(k+1)) consistency error with no orthogonality against the test space,
     // and that alone caps the rate at k+1. See Postprocessing.hpp.
     // physicsNodesAt makes that choice of nodes and fills the geometry.
-    const Index physicsDoF = superconvergent ? k + 2 : k + 1;
-
     PhysicsNodes nodes = physicsNodesAt(Y_h, tres);
     std::vector<Position> const &points = nodes.points;
     GlobalState &states = nodes.states;
@@ -3193,9 +3220,55 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     auto values = problem->ComputePhysics(states, points, tres);
 
-    std::vector<Values> Sigma_vals = std::move(values[0]);
-    std::vector<Values> Source_vals = std::move(values[1]);
-    std::vector<Values> Aux_vals = std::move(values[2]);
+    assembleTransportResidual(Y_h, dYdt_h, values, res);
+
+    if (nScalars > 0)
+    {
+        // Sampled once for all the scalars, not once each: evalOnNodes walks
+        // every cell and node, and the scalars all see the same state.
+        const GlobalState scalarStates = Y_h.evalOnNodes();
+        const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
+
+        for (Index j = 0; j < nScalars; j++)
+            res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
+                                             weights, phiBoundary, tres);
+    }
+
+    if (fieldModel)
+    {
+        // Sampled once, like the scalars: every field row sees the same state.
+        //
+        // On the k+1 basis nodes even under the superconvergent scheme, because
+        // `weights` is the interpolatory quadrature of *that* basis and a field
+        // row's integrals are taken against it. The star nodes are a device for
+        // the transport residual's projection, not a different set of unknowns.
+        const GlobalState fieldStates = Y_h.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+
+        Vector fieldRes = Vector::Zero(nField);
+        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
+                                  fieldStates, Y_h.getPoints(), weights, tres);
+        res.getField() = fieldRes;
+    }
+
+    return 0;
+}
+
+// The transport rows of the residual -- the trace rows and every cell's sigma, q,
+// u and aux rows -- from physics values already evaluated at the physics nodes.
+// Split out of residual() so the discretisation estimate can assemble the same
+// rows at a higher degree from values it evaluated itself; residual() is this
+// plus the physics call, the scalar rows and the field rows.
+void SystemSolver::assembleTransportResidual(DGSoln const &Y_h, DGSoln const &dYdt_h,
+                                             PhysicsOutput const &values, DGSoln &res)
+{
+    const Index physicsDoF = superconvergent ? k + 2 : k + 1;
+
+    std::vector<Values> const &Sigma_vals = values[0];
+    std::vector<Values> const &Source_vals = values[1];
+    std::vector<Values> const &Aux_vals = values[2];
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
     for (Index i = 0; i < nCells; i++)
@@ -3270,39 +3343,6 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         }
     }
 
-
-    if (nScalars > 0)
-    {
-        // Sampled once for all the scalars, not once each: evalOnNodes walks
-        // every cell and node, and the scalars all see the same state.
-        const GlobalState scalarStates = Y_h.evalOnNodes();
-        const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
-        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
-        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
-
-        for (Index j = 0; j < nScalars; j++)
-            res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
-                                             weights, phiBoundary, tres);
-    }
-
-    if (fieldModel)
-    {
-        // Sampled once, like the scalars: every field row sees the same state.
-        //
-        // On the k+1 basis nodes even under the superconvergent scheme, because
-        // `weights` is the interpolatory quadrature of *that* basis and a field
-        // row's integrals are taken against it. The star nodes are a device for
-        // the transport residual's projection, not a different set of unknowns.
-        const GlobalState fieldStates = Y_h.evalOnNodes();
-        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
-
-        Vector fieldRes = Vector::Zero(nField);
-        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
-                                  fieldStates, Y_h.getPoints(), weights, tres);
-        res.getField() = fieldRes;
-    }
-
-    return 0;
 }
 
 bool SystemSolver::PhysicsDerivatives::isAt(DGSoln const &Y, Time tEval) const
@@ -4238,6 +4278,14 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     }
 
     out.valid = true;
+
+    // Its algebraic part is the correction just solved for, the number
+    // `corrected` subtracts, so the two estimates add.
+    if (estimateDiscretisation)
+    {
+        DGSoln deltaH(nVars, grid, k, N_VGetArrayPointer(delta), nScalars, nAux, nField);
+        out.discretisation = estimateDiscretisationError(*adjointProblem, y, deltaH, t0);
+    }
 
     N_VDestroy(zeroDeriv);
     N_VDestroy(F);

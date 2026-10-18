@@ -687,6 +687,19 @@ void SystemSolver::reportSteadyStep(SteadyStepStats const &s) const
                               : "rejected");
 }
 
+// One line per objective, when the estimate carries a discretisation error --
+// which it does only when asked for, so an ordinary run prints nothing new.
+void SystemSolver::reportObjectiveEstimate(ObjectiveEstimate const &e) const
+{
+    if (!e.valid || !e.discretisation.valid)
+        return;
+    for (Index g = 0; g < e.value.size(); ++g)
+        std::println("  objective {}: G = {:.10g}, algebraic error {:.3e}, discretisation "
+                     "error {:.3e}, so G ~ {:.10g}",
+                     g, e.value(g), e.value(g) - e.corrected(g), e.discretisation.total(g),
+                     e.corrected(g) - e.discretisation.total(g));
+}
+
 void SystemSolver::reportSteadyStats(std::string_view outcome, SteadyStats const &s) const
 {
     if (!steadyDiagnostics)
@@ -975,6 +988,8 @@ void SystemSolver::solveSteadyState(bool resume)
         steadyStats = stats;
 
         reportSteadyStats(outcome, stats);
+        if (estimateObjectiveOnFinish)
+            reportObjectiveEstimate(objectiveEstimate);
     };
 
     // Entering the loop. Unconditional and on stdout, because the equivalent for
@@ -1364,6 +1379,8 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         stats.adjointSolves = nAdjointSolves - adjointSolves0;
         steadyStats = stats;
         reportSteadyStats(outcome, stats);
+        if (estimateObjectiveOnFinish)
+            reportObjectiveEstimate(objectiveEstimate);
     };
 
     if (objectiveTest)

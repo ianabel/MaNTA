@@ -354,7 +354,8 @@ PYBIND11_MODULE(_manta, m) {
       .value("FieldCoupling", EvaluationKind::FieldCoupling)
       .value("Adjoint", EvaluationKind::Adjoint)
       .value("InitialProjection", EvaluationKind::InitialProjection)
-      .value("MassMatrix", EvaluationKind::MassMatrix);
+      .value("MassMatrix", EvaluationKind::MassMatrix)
+      .value("DiscretisationEstimate", EvaluationKind::DiscretisationEstimate);
 
   py::enum_<EvaluationEntry>(m, "EvaluationEntry")
       .value("ComputePhysics", EvaluationEntry::ComputePhysics)
@@ -372,7 +373,8 @@ PYBIND11_MODULE(_manta, m) {
       .value("PerContinuationStep", EvaluationCadence::PerContinuationStep)
       .value("PerAdjointSolve", EvaluationCadence::PerAdjointSolve)
       .value("OncePerRun", EvaluationCadence::OncePerRun)
-      .value("OncePerSolver", EvaluationCadence::OncePerSolver);
+      .value("OncePerSolver", EvaluationCadence::OncePerSolver)
+      .value("PerObjectiveEstimate", EvaluationCadence::PerObjectiveEstimate);
 
   auto positions = [](std::vector<Position> const &x) {
     return py::array_t<double>(static_cast<py::ssize_t>(x.size()), x.data());
