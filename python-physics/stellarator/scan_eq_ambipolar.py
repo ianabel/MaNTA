@@ -421,19 +421,24 @@ df = sweep[1] - sweep[0]
 eq_init = eq.copy()
 x_init = obj.x(eq_init)
 
+# ProximalProjection's state is params[arg] for arg in obj._args, concatenated
+# (ProximalProjection.x), so Rb_lmn[idx] sits after every argument ahead of
+# Rb_lmn. That order includes c_l: the old len(p_l) + len(i_l) + 1 offset was
+# right only for an iota-profile equilibrium, and for a current-profile one
+# swept the coefficient len(c_l) entries before the one on the plot's axis.
+j = sum(eq.dimensions[arg] for arg in obj._args[: obj._args.index("Rb_lmn")]) + idx
+assert jnp.isclose(x_init[j], eq.Rb_lmn[idx]), (j, x_init[j], eq.Rb_lmn[idx])
+
 
 for i in range(0, len(sweep)):
     print(f"--------------------------\n Iteration {i} \n--------------------------\n")
-    lp = len(eq.p_l)
-    lc = len(eq.i_l)
     # t = jax.flatten_util.ravel_pytree(make_tangent(eq.params_dict, idx))[0]
     eq_ = eq.copy()
     eqs.append(eq_)
-    # ProximalProjection removes most of the fields so the index into the Rb_lmn field is this (I think?)
-    x_in = x_init.at[lp + lc + 1 + idx].set(sweep[i])
+    x_in = x_init.at[j].set(sweep[i])
     # Set the tangent to 1 at the same index
     t = jnp.zeros(obj.dim_x)
-    t1 = t.at[lp + lc + 1 + idx].set(1.0)
+    t1 = t.at[j].set(1.0)
 
     # Compute value of objective
     # Compute gradient
