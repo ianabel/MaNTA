@@ -558,6 +558,23 @@ is the design, including where the implementation departs from IDA and why;
 `docs/superpowers/specs/2026-10-12-kinsol-convergence-test-hook-design.md` is the
 upstream KINSOL change that would let this path return to KINSOL.
 
+**`SteadyStateTest = "Objective"` is the same loop with a different test**: the
+undamped solve stops when, for every objective, `|z^T F|` -- the algebraic error
+in G -- is below the algebraic share of `ObjectiveTolerance` (`ObjectiveBudget`,
+with `ObjectiveAbsoluteTolerance` as the floor). **It makes no adjoint solve.**
+Since `J^T z = dG/dy`, `z^T F = (dG/dy) . J^-1 F`, and `J^-1 F` is the Newton
+correction the iteration has just computed from the same build; an adjoint solve
+per iteration measured 36-55% slower for the same number to 1e-15
+(`the_estimate_is_the_adjoint_one` pins the agreement). The estimate is trusted
+from the second iteration once the corrections contract, and at the first only
+when that correction is within one error-weight unit. A tolerance the solve
+cannot resolve returns `SteadyOutcome::Stalled` rather than spinning. It controls
+**only the named objectives** -- anything else may be less converged than
+`NewtonStep` would leave it -- and it needs `solveAdjoint`. The objective keys
+are read by this test and by `AdaptationTarget = "Objective"`, and refused under
+neither rather than ignored. `ObjectiveSteadyTests.cpp`
+pins its threshold, its sweep budget and exact resumption of a sliced solve.
+
 **The residual at the initial state is not one of the removable ones**, despite
 duplicating KINSOL's first evaluation: it is also the already-converged test,
 the early return that makes a warm start cost one sweep rather than a Newton
@@ -1243,7 +1260,8 @@ forgotten.** Every function in `ParallelFill.hpp` that chooses a level takes it 
 `initialize()` refuses any plan whose `largestRecurringBatch()` exceeds it,
 *before* `deliverEvaluationPlan`, so a new route to a level that forgets the cap
 throws instead of handing the case a batch it was promised it would not get.
-Keep that check ahead of the delivery.
+Keep that check ahead of the delivery. The discretisation estimate's batch at the
+enriched nodes is larger than the residual's, and goes through the same check.
 
 ### Self-consistent magnetic fields (`FieldModel`)
 
@@ -1291,11 +1309,17 @@ anything that touches the DOF layout, the residual or the Jacobian solve.
 * A wrong *transpose* of either is a silently wrong gradient beside a perfectly
   good `G`, and only `FieldAdjointTests.cpp` sees that. **This is the adjoint
   asymmetry, and it is the same one `dSigma/dPhi` demonstrated**:
-  `initializeMatricesForAdjointSolve` stores `A1^T` and `A2^T` beside `M^T`, so
+  `assembleAdjointOperator` stores `A1^T` and `A2^T` beside `M^T`, so
   a coupling added to `updateMatricesForJacSolve` and not to it degrades a
   forward run's convergence and corrupts a gradient. They are *materialised*
   rather than transposed at each use precisely so a test can zero one and
-  require the gradient to go wrong.
+  require the gradient to go wrong. **The field blocks are the one thing the
+  adjoint and forward operators share**: the adjoint writes its `alpha = 0`
+  blocks over the forward ones and sets `fieldBlocksHoldAdjoint`, and
+  `solveJacEq` puts the forward ones back from `jacobianDerivatives` before its
+  next use. Drop that restore and an adjoint solve between two slices of a
+  steady solve changes the forward solve;
+  `an_adjoint_solve_leaves_the_forward_field_blocks_alone` is what notices.
 
 Two more properties nothing else pins. `resetForRun()` is called from the
 **unconditional** part of `initialize()` — not from `initialiseMatrices`, which
@@ -1456,7 +1480,11 @@ gives. Four pieces to know:
   `solveAdjoint = False` to skip the adjoint solve, and `G` builds an
   `AdjointProblem` on demand purely to evaluate `GFn`. That object is kept in a
   separate member from `adjoint` so its presence can never be mistaken for "the
-  gradients have been computed".
+  gradients have been computed". Under `Superconvergent` it is the `u*`-based
+  objective, the same number `getAdjointGradients()[0]` and
+  `objectiveEstimate()["value"]` report; `G` used to evaluate the plain one and
+  disagreed with them by up to 1.1% at `k = 1`, which
+  `test_G_agrees_with_the_G_from_getAdjointGradients` now pins in both schemes.
 
 **The scalar hooks are one name each, and the same in both languages.** There
 used to be four names and five signatures — `ScalarG`, `ScalarGExtended`,
@@ -1606,20 +1634,81 @@ process-global map. Two traps, neither of which is a link error:
 ### Adjoints
 
 `AdjointProblem` defines an objective `G = ∫ g dx` and its parameter
-derivatives; `SystemSolver::initializeMatricesForAdjointSolve` →
-`solveAdjointState` → `computeAdjointGradients` fill `G_p`.
+derivatives. `computeAdjointGradients` fills `G_p`: `adjointDerivativesAt` →
+`assembleAdjointOperator`, once for every objective → per objective
+`assembleObjectiveGradient` → `solveAdjointState` → `accumulateAdjointGradients`.
 `np` splits into `np_boundary` trailing boundary parameters and the rest
 internal; several defaults loop only to `getNpInternal()`.
 
-`initializeMatricesForAdjointSolve` assembles the same local blocks as
-`updateMatricesForJacSolve` and stores `M.transpose()`, so **the two must be kept
-in step block for block** — the adjoint operator *is* that transpose. This is
-where the two functions differ in consequence: a block missing from the forward
-Jacobian only slows Newton down, but a block missing from the adjoint matrix
-produces a silently wrong gradient with a perfectly good `G`. The `dSigma/dPhi`
-block was absent here for exactly that reason, and cost nothing visible until
+`assembleAdjointOperator` assembles `M^T` per cell from the same derivative
+blocks `assembleCellMatrix` assembles `M` from, so **the two must be kept in step
+block for block** — the adjoint operator *is* that transpose. This is where the
+two differ in consequence: a block missing from the forward Jacobian only slows
+Newton down, but a block missing from the adjoint matrix produces a silently
+wrong gradient with a perfectly good `G`. The `dSigma/dPhi` block was absent
+here for exactly that reason, and cost nothing visible until
 `python/Tests/test_adjoint_aux.py` was written. If you add a coupling to one
 function, add it to the other.
+
+**An adjoint solve makes no physics call.** Every `updateMatricesForJacSolve`
+moves the derivatives it took into `jacobianDerivatives`, with the state, time
+and `alpha` they were taken at, and the adjoint assembles from those at
+`alpha = 0` into its own factorisations (`adjointMXSolvers`), leaving the
+forward Jacobian's as it found them. What is reused is the *derivatives*, not
+the factorisation: the forward one is of `MX` at the build's `alpha`. So:
+
+* **On demand** -- `solveAdjointAt`, `Runner.solve_adjoint` -- it is solved from
+  the last build whatever state that was at, and says so
+  (`operator_at_state`). `adjoint_state`, `objective_gradient` and
+  `objective_sensitivity` (`w = dG/dGamma` per node, for the flux and the
+  sources) read it. Global scalars and `tauScaling = "Diffusive"` are refused:
+  the adjoint operator has never carried the scalar bordering.
+* **At the end of a run** the last build is reused only when it was taken at
+  exactly the final state -- `memcmp` on the state, the same time and `psi'` --
+  which in practice means after `estimateObjective`'s build; otherwise
+  `adjointDerivativesAt` evaluates once (the `Adjoint` plan site,
+  `PerAdjointSolve`). A case whose sources read `du/dt` is always evaluated
+  afresh. Note the final state is `y`, and the last build is usually an
+  iterate behind it, so "reuse the build" without the bitwise check would move
+  every gradient.
+* `AdjointOnDemandTests.cpp` counts physics calls and requires zero, and pins the
+  on-demand adjoint at the final state to the end-of-run one bit for bit. Every
+  existing `z`, `G_p` and objective estimate hashed identical across the
+  refactor.
+
+**`w` is checked node by node, against data that separates `diag(w)` from the
+mass matrix.** `the_sensitivity_matches_finite_differences_node_by_node`
+finite-differences G under a single-node perturbation of the flux and of the
+source, and carries a guard that the wrong operator misses by orders of magnitude
+-- the lesson of the `DerivativeSubVector` trap below.
+
+**The discretisation estimate** (`EstimateDiscretisationError`) is dual-weighted
+against an adjoint solved at degree `k + 2` (`k + 3` under `Superconvergent`), on
+`enrichedSolver`: a second `SystemSolver` on the same case and grid that **never
+runs** -- no SUNDIALS objects, no `initialize()` -- and whose
+`initialiseMatrices` skips `aFn` (`massFromHook`), so building it asks the case
+for nothing. It shares the residual's body, `assembleTransportResidual`, so a
+change to `residual()` reaches it; keep that shared. It costs exactly one
+`ComputePhysics` and one `ComputePhysicsDerivatives` at the enriched nodes per
+estimate, the `DiscretisationEstimate` plan site at `PerObjectiveEstimate`
+cadence. One degree richer was measured and is not enough: the plain scheme's
+`G` converges at `h^(k+2)` for even `k`, and `Superconvergent` at `k` reproduces
+the plain scheme at `k + 1`. Two limits, both documented in `docs/adjoints.rst`:
+an error that decays only algebraically in `k` is **underestimated with nothing
+to flag it** (Shestakov, effectivity 0.43-0.80), and **the per-cell `eta_K`
+cancel** -- `sum |eta_K| / |eta|` reaches 1e6 -- so they are not a localisation.
+
+**`AdaptationTarget = "Objective"`** adapts `DegreeAdaptation` and
+`MeshAdaptation` to `|eta| / (eps_disc |G|)` instead of `||u* - u_h||`. Because
+of the cancellation above, **the objective decides *whether* to grade and the
+modal decay still decides *where*** -- grading on the share of `eta_K` was built,
+measured, and lost (false positives at 41 of 1217 smooth ends off uniform
+meshes). It turns the estimate on and makes `"Objective"` the default steady
+test, so both shares of `ObjectiveBudget` are enforced. The degree ceiling is
+held so the enriched batch, `N(k+3)` or more, fits `MaxPhysicsBatch`
+(`discretisationEstimateFits`); `ParallelFill` itself does not know about it.
+`docs/superpowers/specs/2026-10-17-objective-error-control-design.md` is the
+design, with an "as built" section per phase recording each measured departure.
 
 Anything indexed per auxiliary variable is sized `nAux`, not `nVars`. Those
 coincide in every fixture except `test_adjoint_aux.py`, so a confusion between
@@ -2167,10 +2256,12 @@ formula, not the operator, if the data cannot tell them apart.
 These are deliberate and documented, not oversights — see `Tests/README.md` and
 `TODO` for the full versions:
 
-* `WriteAdjoints()` is commented out at `Solver.cpp:350`, so no run serialises
-  adjoint output. The gradients themselves are verified through
+* **No regression reference carries adjoint output**, so the regression
+  driver's adjoint comparison prints `SKIPPING`. `WriteAdjoints = true` writes
+  `G`, `G_p` and `z` into the netCDF output, but `AdjointTestProblem.ref.nc` was
+  generated without it. The gradients themselves are verified through
   `PyRunner::getAdjointGradients` in `python/Tests/test_adjoint.py` and
-  `test_adjoint_aux.py`.
+  `test_adjoint_aux.py`, and `z` through `test_adjoint_on_demand.py`.
 * ~~Restarting is fragile at tight tolerances, more so with `nAux > 0`.~~ Fixed.
   All three regression round trips now survive `1e-6 / 1e-8`; the ceiling that
   remains at `1e-8 / 1e-10` belongs to the cases (`MatTest`'s *uninterrupted* run
