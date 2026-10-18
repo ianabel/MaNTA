@@ -306,12 +306,13 @@ def build_itg_proxy(
     multiplied by V', which vanishes there anyway, and `normalized_heat_flux`
     holds the innermost value inwards.
 
-    `solve_length_at_compute=False` (DESC's default) solves the tube extent at
-    rho[0] here and holds its toroidal extent fixed, so tube lengths drift from
-    `target_flux_tube_length` with iota across the table and across an
-    optimisation. True re-solves per rho in every builder call: every tube is
-    the length the network was trained on, at the price of a root solve per rho
-    inside each evaluation.
+    Keep `solve_length_at_compute=False`, DESC's default and the recommended
+    setting: the tube extent is solved at rho[0] here and its toroidal extent
+    held fixed, so tube lengths drift from `target_flux_tube_length` with iota
+    across the table -- on precise_QA that raises Q by up to 2.7% at the edge
+    against re-solving per rho. True re-solves with a root solve per rho in
+    every builder call; its derivative checks out as well as the default's,
+    but it is slower and less exercised upstream.
 
     `use_jit=True` jits what DESC's `use_jit` covers (`compute_scaled`, the
     jacobians), which matters if the proxy also sits in an ObjectiveFunction;

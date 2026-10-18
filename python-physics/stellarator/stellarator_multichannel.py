@@ -905,8 +905,10 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         rounds = -(-self.npoints // self.batch_size)
         nchunks = 0 if self.batch_size == 0 else rounds
+        # dke_field_jac itself without the ITG term, so the traced function --
+        # and with it JAX's persistent-cache key -- is what it always was
         ddke_data = vmap_batched(
-            FieldJac(self.flux_fn),
+            dke_field_jac if self.itg is None else FieldJac(self.flux_fn),
             vmap_axes=vmap_axes_wfield,
             chunk_size=self.batch_size,
             nchunks=nchunks,

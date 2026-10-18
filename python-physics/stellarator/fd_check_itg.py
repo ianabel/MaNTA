@@ -17,7 +17,10 @@ contracted with the adjoint's ITG columns (`StellaratorAdjointProblem`'s
   geometry follow the equilibrium. `jvp_scaled` along one boundary R mode
   against a central difference of `compute_scaled`, which re-solves force
   balance at each point. The ITG share of the JVP is reported, so a pass on
-  a gradient with no ITG content in it is visible as such.
+  a gradient with no ITG content in it is visible as such. It then sweeps the
+  mode (`--sweep`, `--sweep-frac`) and saves dG/dR from the adjoint and from
+  finite differences against the mode value to `--plot`, the picture
+  scan_eq_ambipolar.py draws.
 
 Run only with TEST_STELLARATOR=true, from a scratch directory (MaNTA writes
 its output and restart files into the cwd):
@@ -80,6 +83,12 @@ def parse_args():
     p.add_argument("--ss-tol", type=float, default=1e-10, help="primal SteadyStateTolerance")
     p.add_argument("--evolve-density", action="store_true")
     p.add_argument("--itg-scale", type=float, default=1e-2, help="ITGScale")
+    p.add_argument("--sweep", type=int, default=7,
+                   help="proximal: points in the boundary-mode sweep plotted (0 to skip)")
+    p.add_argument("--sweep-frac", type=float, default=0.1,
+                   help="proximal: sweep the mode over +/- this fraction of its value")
+    p.add_argument("--plot", default="fd_check_itg_proximal.png",
+                   help="proximal: where to save the sweep plot (relative to the cwd at launch)")
     p.add_argument(
         "--rescale",
         default="none",
@@ -235,7 +244,61 @@ def check_proximal(args, fun, grid, eq):
             "  note: the ITG part is below what this tolerance can resolve, so "
             "this pass does not by itself confirm the ITG columns"
         )
+    if args.sweep > 1:
+        sweep_proximal(args, prox, t, x0, j, M, N)
     return ok.startswith("ok")
+
+
+def sweep_proximal(args, prox, t, x0, j, M, N):
+    """Sweep R_{0,M,N} and plot dG/dR from the adjoint against finite differences.
+
+    The same picture scan_eq_ambipolar.py draws. At each point the objective
+    comes first and the JVP second, since the JVP restarts from the restart
+    file the objective's solve wrote. The finite difference is np.gradient
+    over the sweep, as there: second order inside it, first order at its
+    ends, so it is a picture of agreement rather than a tolerance; the tight
+    comparison is the single central difference above.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker
+
+    v0 = float(x0[j])
+    sweep = np.linspace(v0 * (1 - args.sweep_frac), v0 * (1 + args.sweep_frac), args.sweep)
+    G, adj, adj_itg = [], [], []
+    print(f"\n--- sweep of R_{{0,{M},{N}}} over {sweep[0]:.6e} .. {sweep[-1]:.6e} ---")
+    for i, v in enumerate(sweep):
+        xi = x0.at[j].set(v)
+        t0 = time.time()
+        G.append(float(np.ravel(prox.compute_scaled(xi))[0]))
+        adj.append(float(np.ravel(prox.jvp_scaled(t, xi))[0]))
+        adj_itg.append(float(np.ravel(objective_module.LAST_JVP_PARTS["itg"])[0]))
+        print(f"  {i}: R = {v: .6e}  G = {G[-1]:.10e}  dG/dR adjoint {adj[-1]: .6e} "
+              f"(ITG {adj_itg[-1]: .6e})  ({time.time() - t0:.1f} s)")
+    fd = np.gradient(np.array(G), sweep)
+    for v, a, f in zip(sweep, adj, fd):
+        print(f"  R = {v: .6e}: adjoint {a: .6e}  FD {f: .6e}  rel {abs(a - f) / max(abs(f), 1e-300):.1e}")
+
+    plt.rcParams.update({"font.family": "serif", "font.size": 11})
+    fig, ax = plt.subplots(1, 2, figsize=(9.0, 3.8))
+    label = rf"$R_{{0,{M},{N}}}$"
+    ax[0].plot(sweep, G, "o-", color="C3")
+    ax[0].set_ylabel("G")
+    ax[1].plot(sweep, fd, "o", color="C3", label="finite differences")
+    ax[1].plot(sweep, adj, "x", color="C0", markersize=8, label="adjoint")
+    ax[1].plot(sweep, adj_itg, "--", color="C0", alpha=0.6, label="adjoint, ITG part")
+    ax[1].set_ylabel(rf"$dG/d{label[1:-1]}$")
+    ax[1].legend(fontsize=9)
+    for a in ax:
+        a.set_xlabel(label)
+        a.axvline(v0, color="k", linestyle=":", linewidth=1)
+        a.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(4))
+    fig.suptitle(f"ITGScale = {args.itg_scale:g}, {args.eq}", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(args.plot, dpi=200)
+    print(f"  saved {args.plot}")
 
 
 def main():
@@ -277,6 +340,7 @@ def main():
     manta_objective = make_objective(config, yancc_res=YANCC_RES)
     fun = objective_fun_factory(manta_objective, builder)
 
+    args.plot = os.path.abspath(args.plot)  # before the chdir below
     workdir = tempfile.mkdtemp(prefix="manta-fd-itg-")
     print(f"run output in {workdir}")
     os.chdir(workdir)
