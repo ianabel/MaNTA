@@ -4,6 +4,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include "CapturedOutput.hpp"
+#include "../../PhysicsCases/AutodiffAdjointProblem.hpp"
 #include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
 #include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
 #include "../../SystemSolver.hpp"
@@ -315,5 +316,64 @@ BOOST_AUTO_TEST_CASE(a_non_positive_vprime_is_a_recoverable_residual_failure)
         sys.destroySundials();
     }
 }
+
+// The coupled adjoint against finite differences, at a steady state. D0 enters
+// the flux; T enters only the pressure the field rows read, so dG/dT reaches
+// the objective through A2^T, B^T and A1^T and nothing else -- a missing or
+// mistransposed block there is a wrong dG/dT beside a perfectly good G.
+BOOST_AUTO_TEST_CASE(the_coupled_gradient_matches_finite_differences)
+{
+    for (bool iterative : {true, false})
+    {
+        BOOST_TEST_CONTEXT("FieldSolve = " << (iterative ? "iterative" : "exact"))
+        {
+            // G, and with `gradient` the adjoint's dG/dp, at a steady state with
+            // parameter `which` moved by `delta`.
+            auto solve = [&](Index which, double delta, Vector *gradient)
+            {
+                auto run = makeRun({.iterative = iterative}, "theta_pinch_gradient");
+                run.problem->setPval(which, Real(run.problem->getPval(which).val + delta));
+                AutodiffAdjointProblem objective(run.problem.get());
+                objective.addG([](Position, RealVector &u, RealVector &, RealVector &, RealVector &) -> Real
+                               { return u(0) * u(0); });
+                objective.setNp(2);
+
+                SystemSolver &sys = *run.sys;
+                sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+                sys.setSteadyStateTolerance(1e-11);
+                sys.setTolerances({1e-11}, 1e-9);
+                sys.setAdjointProblem(&objective);
+                sys.setSolveAdjoint(gradient != nullptr);
+                {
+                    CapturedOutput quiet;
+                    sys.initialize();
+                    sys.integrate(0.0);
+                }
+                if (gradient)
+                    *gradient = sys.G_p.row(0).transpose();
+                const double G = objective.GFn(0, sys.yJac);
+                {
+                    CapturedOutput quiet;
+                    sys.destroySundials();
+                }
+                return G;
+            };
+
+            Vector gradient;
+            solve(0, 0.0, &gradient);
+            BOOST_REQUIRE_EQUAL(gradient.size(), 2);
+            for (Index which : {ThetaPinchDiffusion::pD0, ThetaPinchDiffusion::pTemperature})
+            {
+                const double h = 1e-5;
+                const double fd = (solve(which, +h, nullptr) - solve(which, -h, nullptr)) / (2.0 * h);
+                BOOST_TEST_MESSAGE("parameter " << which << ": adjoint " << gradient(which) << " against " << fd);
+                BOOST_TEST(std::abs(fd) > 1e-3, "parameter " << which << " barely moves G");
+                BOOST_TEST(gradient(which) == fd, boost::test_tools::tolerance(1e-6));
+            }
+        }
+    }
+    removeOutput("theta_pinch_gradient");
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

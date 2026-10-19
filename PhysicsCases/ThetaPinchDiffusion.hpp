@@ -42,6 +42,9 @@ public:
     // Slots, in the field model's order.
     static constexpr Index Vprime = 0, dVprime_dx = 1, gradx2 = 2, Bfield = 3;
 
+    // The adjoint parameters, as AutodiffTransportSystem numbers them.
+    static constexpr Index pD0 = 0, pTemperature = 1;
+
 private:
     Value LowerBoundary(Index, Time) const override;
     Value UpperBoundary(Index, Time) const override;
@@ -61,7 +64,11 @@ private:
     /// The four slots, from the field model, or the vacuum metric if allowed.
     RealVector metric(RealVector const &geom, Real x) const;
 
-    double T, D0, Bref, gamma;
+    // Adjoint parameters, in this order: D0 enters the flux, T only the
+    // pressure the field rows read, so dG/dT reaches the transport solely
+    // through the field.
+    Real D0, T;
+    double Bref, gamma;
     double sourceStrength, sourceWidth;
     double edgeDensity, centralDensity;
     double wallRadius, vacuumField;

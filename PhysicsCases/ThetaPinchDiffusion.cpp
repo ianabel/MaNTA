@@ -44,6 +44,9 @@ ThetaPinchDiffusion::ThetaPinchDiffusion(toml::value const &config, Grid const &
     if (grid.lowerBoundary() != 0.0 || grid.upperBoundary() != 1.0)
         throw std::invalid_argument(
             "ThetaPinchDiffusion: x is the normalised flux Phi / Phi_wall, so the grid must be [0, 1]");
+
+    addP(D0);
+    addP(T);
 }
 
 RealVector ThetaPinchDiffusion::metric(RealVector const &geom, Real x) const
@@ -124,5 +127,5 @@ autodiff::dual2nd ThetaPinchDiffusion::InitialFunction(Index, autodiff::dual2nd 
 // IDACalcIC (or the steady solve) corrects it together with the field.
 Value ThetaPinchDiffusion::InitialAuxValue(Index, Position x, Time) const
 {
-    return T * (edgeDensity + (centralDensity - edgeDensity) * (1.0 - x * x));
+    return T.val * (edgeDensity + (centralDensity - edgeDensity) * (1.0 - x * x));
 }
