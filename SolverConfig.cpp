@@ -307,6 +307,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(OutputPoints, int);
     READ(OutputFilename, std::string);
     READ(solveAdjoint, bool);
+    READ(WriteAdjoints, bool);
     READ(WriteOutput, bool);
     READ(WriteDatFile, bool);
     READ(WriteDebugDatFiles, bool);
@@ -320,12 +321,16 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(PseudoTransientSERRate, double);
     READ(PseudoTransientSERFloor, double);
     READ(EstimateObjectiveOnFinish, bool);
+    READ(EstimateDiscretisationError, bool);
     READ(MaxContinuationSteps, unsigned);
     READ(NewtonMaxIterations, unsigned);
     READ(NewtonJacobianReuse, unsigned);
     READ(NewtonStepTolerance, double);
     READ(NewtonScaling, std::string);
     READ(SteadyStateTest, std::string);
+    READ(ObjectiveTolerance, std::vector<double>);
+    READ(ObjectiveAbsoluteTolerance, std::vector<double>);
+    READ(ObjectiveBudget, std::vector<double>);
     READ(SteadyStateStepTolerance, double);
     READ(SteadyStateMeasureCorrection, bool);
     READ(SteadyStateDiagnostics, bool);
@@ -340,6 +345,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(MaxPolynomialDegree, unsigned);
     READ(MaxDegreeIncrement, unsigned);
     READ(DegreeAdaptationBase, double);
+    READ(AdaptationTarget, std::string);
     READ(MeshAdaptation, bool);
     READ(MeshAdaptationThreshold, double);
     READ(MeshAdaptationNeighbourMargin, double);
@@ -689,6 +695,71 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
                 "adaptation has nothing it is allowed to do.");
     }
 
+    // What the adaptation drivers measure a level by. Nothing else reads it, so
+    // without them it is refused rather than ignored.
+    if (auto s = spelling("AdaptationTarget"); s && !c.DegreeAdaptation)
+        throw std::invalid_argument(std::format(
+            "{} is given, but neither DegreeAdaptation nor MeshAdaptation is on: it says "
+            "what they adapt to, and nothing else reads it.",
+            *s));
+    if (c.AdaptationTarget != "Solution" && c.AdaptationTarget != "Objective")
+        throw std::invalid_argument(
+            "AdaptationTarget must be \"Solution\" or \"Objective\"; got \"" +
+            c.AdaptationTarget + "\".");
+
+    // Adapting to the objectives drives the degree from their discretisation
+    // estimate and holds the mesh to where that error is, so it needs what the
+    // estimate needs, turns it on, and has no use for the solution target's
+    // tolerance. The steady test it pairs with is the one that holds
+    // the other half of the same budget, so that is the default; another test
+    // may still be named, and then the algebraic error is whatever it leaves.
+    if (c.AdaptationTarget == "Objective")
+    {
+        if (!c.solveAdjoint)
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" needs solveAdjoint: it adapts to the "
+                "objectives the case's adjoint problem defines, and without solveAdjoint "
+                "there is none.");
+        if (!c.EstimateObjectiveOnFinish)
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" needs EstimateObjectiveOnFinish: each "
+                "level is measured by the objective estimate made at the end of its solve.");
+        if (spelling("EstimateDiscretisationError") && !c.EstimateDiscretisationError)
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" is driven by the discretisation estimate, "
+                "but the configuration sets EstimateDiscretisationError = false. Remove it to "
+                "have the estimate enabled automatically.");
+        c.EstimateDiscretisationError = true;
+        if (auto s = spelling("DegreeTolerance"))
+            throw std::invalid_argument(std::format(
+                "{} is given, but AdaptationTarget = \"Objective\": it is the solution "
+                "target's tolerance and would change nothing. ObjectiveTolerance is the "
+                "target here.",
+                *s));
+        if (!spelling("SteadyStateTest"))
+            c.SteadyStateTest = "Objective";
+        if (c.ObjectiveBudget.size() != 2)
+            throw std::invalid_argument(std::format(
+                "ObjectiveBudget is the array [discretisation, algebraic]; got {} values.",
+                c.ObjectiveBudget.size()));
+        if (!(c.ObjectiveBudget[0] > 0.0))
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" spends the discretisation share of "
+                "ObjectiveBudget, and it is zero.");
+    }
+
+    // The objective tolerances are read by the Objective steady test and the
+    // Objective adaptation target, so under neither they would be accepted and
+    // ignored.
+    if (c.SteadyStateTest != "Objective" && c.AdaptationTarget != "Objective")
+        for (const char *key : {"ObjectiveTolerance", "ObjectiveAbsoluteTolerance", "ObjectiveBudget"})
+            if (auto s = spelling(key))
+                throw std::invalid_argument(std::format(
+                    "{} is given, but SteadyStateTest is \"{}\" and AdaptationTarget is not "
+                    "\"Objective\": the objective tolerances are read by nothing else, and "
+                    "would change nothing.",
+                    *s, c.SteadyStateTest));
+
     return c;
 }
 
@@ -954,6 +1025,31 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setInitialTimestep(config.initialTimestep);
     system.setInputFile(config.OutputFilename);
     system.setSolveAdjoint(config.solveAdjoint);
+    // The adjoint states it would write are solved at the end of a run only when
+    // solveAdjoint is set, so without it there is nothing to write.
+    if (config.WriteAdjoints && !config.solveAdjoint)
+        throw std::invalid_argument(
+            "WriteAdjoints needs solveAdjoint: the adjoint states it writes are the ones the "
+            "end-of-run adjoint solve leaves.");
+    system.setWriteAdjoints(config.WriteAdjoints);
+    // The discretisation estimate rides on the objective estimate, which is made
+    // at the end of each steady solve for the adjoint problem solveAdjoint
+    // attaches; without either there is nothing to estimate, and a time march
+    // makes no estimate at all.
+    if (config.EstimateDiscretisationError)
+    {
+        if (!config.solveAdjoint || !config.EstimateObjectiveOnFinish)
+            throw std::invalid_argument(
+                "EstimateDiscretisationError needs solveAdjoint and EstimateObjectiveOnFinish: "
+                "it is made alongside the objective estimate, for the objectives the case's "
+                "adjoint problem defines.");
+        if (config.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "EstimateDiscretisationError applies to SteadyStateSolver = \"PseudoTransient\" "
+                "or \"Newton\": it is made at the end of a steady solve, which a time march "
+                "does not make.");
+    }
+    system.setEstimateDiscretisationError(config.EstimateDiscretisationError);
     system.setNOutput(config.OutputPoints);
     system.setMinStepSize(config.MinStepSize);
     system.setZeroFlux(config.zeroFlux);
@@ -982,9 +1078,27 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setSteadyTest(SystemSolver::SteadyTest::Residual);
     else if (config.SteadyStateTest == "NewtonStep")
         system.setSteadyTest(SystemSolver::SteadyTest::NewtonStep);
+    else if (config.SteadyStateTest == "Objective")
+    {
+        // The objectives are the adjoint problem's, and only solveAdjoint
+        // attaches one.
+        if (!config.solveAdjoint)
+            throw std::invalid_argument(
+                "SteadyStateTest = \"Objective\" needs solveAdjoint: it stops on the objectives "
+                "the case's adjoint problem defines, and without solveAdjoint there is none.");
+        if (config.SteadyStateSolver == "TimeMarch")
+            throw std::invalid_argument(
+                "SteadyStateTest = \"Objective\" applies to SteadyStateSolver = "
+                "\"PseudoTransient\" or \"Newton\"; a time march stops on dy/dt instead.");
+        if (config.ObjectiveBudget.size() != 2)
+            throw std::invalid_argument(std::format(
+                "ObjectiveBudget is the array [discretisation, algebraic]; got {} values.",
+                config.ObjectiveBudget.size()));
+        system.setSteadyTest(SystemSolver::SteadyTest::Objective);
+    }
     else
         throw std::invalid_argument(
-            "SteadyStateTest must be \"Residual\" or \"NewtonStep\"; got \"" +
+            "SteadyStateTest must be \"Residual\", \"NewtonStep\" or \"Objective\"; got \"" +
             config.SteadyStateTest + "\".");
     system.setMeasureSteadyCorrection(config.SteadyStateMeasureCorrection);
 
@@ -1037,6 +1151,9 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setNewtonJacobianReuse(config.NewtonJacobianReuse);
         system.setNewtonStepTolerance(config.NewtonStepTolerance);
         system.setSteadyStateStepTolerance(config.SteadyStateStepTolerance);
+        system.setObjectiveTolerance(config.ObjectiveTolerance, config.ObjectiveAbsoluteTolerance);
+        if (config.ObjectiveBudget.size() == 2)
+            system.setObjectiveBudget(config.ObjectiveBudget[0], config.ObjectiveBudget[1]);
         system.setSteadyStateDiagnostics(config.SteadyStateDiagnostics);
         system.setSteadyStateStepDiagnostics(config.SteadyStateStepDiagnostics);
 

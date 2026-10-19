@@ -131,6 +131,11 @@ struct GradingDecision
     // what they were before these were added.
     EndDecision lowerEnd;
     EndDecision upperEnd;
+
+    // AdaptationTarget = "Objective" only: the worst objective's discretisation
+    // estimate against its share of ObjectiveTolerance (ObjectiveAccuracy::ratio).
+    // Neither end is rough while it is at most 1; see objectiveGradingDecision.
+    double objectiveRatio = 0.0;
 };
 
 // The margin a graded end's neighbour test asks for, ratio > 1 + margin. Set
@@ -174,6 +179,34 @@ GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
                                 double neighbourMargin = defaultNeighbourMargin);
 GradingDecision gradingDecision(std::vector<CellSmoothness> const &cells,
                                 unsigned int k, double threshold);
+
+// Should this mesh be graded, and at which end, for AdaptationTarget =
+// "Objective": `decay`, gradingDecision's reading of the sample, when the run has
+// not met its tolerance -- `ratio`, the worst objective's discretisation estimate
+// against its share of ObjectiveTolerance, above 1 -- and no grading at all when
+// it has, wherever the error is and however singular an end reads.
+//
+// The objective says whether; the modal decay still says where. Where the
+// objectives' error is -- the per-cell estimate eta_K -- was measured as the
+// alternative and does not decide it (docs/adaptivity.rst):
+//
+//  * The per-cell estimates cancel. They are dual-weighted residuals tested
+//    against the whole enriched adjoint, not against its part the discretisation
+//    cannot represent, so a cell's contribution is not its error: sum_K |eta_K|
+//    is 3700x |eta| on u = x - x^(4/3) at 10 cells and 10^6 x on the
+//    manufactured sin(pi x) problem, the end cell and its neighbour on the first
+//    nearly equal and opposite.
+//  * Their distribution separates singular ends from smooth ones on a uniform
+//    mesh, where the decay does too from 4 cells (at 3, with one interior cell,
+//    the decay reads both ends of sin(pi x) rough at odd k), and nowhere else:
+//    an end region's share of
+//    sum_K |eta_K| reached 0.99 at 41 smooth ends of 1217 on graded, random and
+//    deeply graded meshes, while singular ends the decay reads rough held shares
+//    from 0.04 to 1.
+//  * Held to a majority share as well as the decay, from 490 non-uniform starts
+//    the objective target met its tolerance in 347 runs against 353 on the decay
+//    alone.
+GradingDecision objectiveGradingDecision(GradingDecision const &decay, double ratio);
 
 // The mesh a decision asks for, at the *same cell count* as the one it was made
 // on -- which is the point, per (1) above.
@@ -238,6 +271,12 @@ struct AdaptiveMeshResult
 //    count grows.
 //
 // Then runAdaptiveDegree to `DegreeTolerance` on whichever mesh won.
+//
+// Under AdaptationTarget = "Objective" the decision is objectiveGradingDecision:
+// the modal decay's reading, for a sample that has not yet met its objective
+// tolerance, and none for one that has; the degree loop adapts to
+// ObjectiveTolerance. The regrades themselves, the retries and the fallbacks are
+// the same.
 //
 // **A grading that fails to solve is a rejected step, not an error.** Section 9
 // measured 15 of 52 hand-built gradings failing outright, non-monotonically in

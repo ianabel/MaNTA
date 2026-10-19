@@ -181,7 +181,10 @@ class FFIRunner(MaNTA.Runner):
 
     steadyStats() and objectiveEstimate() need no FFI op: they read host-side
     C++ state and touch no device memory, so the inherited MaNTA.Runner methods
-    work here unchanged.
+    work here unchanged. So do solve_adjoint(), adjoint_state(),
+    objective_gradient() and objective_sensitivity(): the adjoint is solved on
+    the host from the last Jacobian build, and the answers come back as numpy
+    arrays.
     """
 
     def start_steady(self, estimate=True):

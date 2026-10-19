@@ -1,3 +1,12 @@
+"""Quadrature nodes and weights for the Pastukhov loss integrals, after
+Landreman's construction, pickled to land.pkl beside this file.
+
+    python landreman.py              # also plots the orthogonal polynomials
+    python landreman.py --no-plot    # from a script or a non-interactive shell
+"""
+
+import argparse
+
 import numpy as np
 from numpy.polynomial import Polynomial
 import matplotlib.pyplot as plt
@@ -7,6 +16,16 @@ import equinox as eqx
 from jaxtyping import Float, ArrayLike
 import pathlib
 import pickle
+
+parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+parser.add_argument(
+    "--no-plot",
+    action="store_true",
+    help="skip the figure: plt.show() can block, or wait on a display, "
+    "when there is no one to close the window",
+)
+args = parser.parse_args()
+plot = not args.no_plot
 
 N = 20
 
@@ -32,7 +51,8 @@ pm1 = Polynomial([0])
 p0 = Polynomial([am1])
 Ps = [pm1, p0]
 
-fig, ax = plt.subplots()
+if plot:
+    fig, ax = plt.subplots()
 x = np.linspace(0, 4, 100)
 
 A[0] = 1.0
@@ -62,7 +82,8 @@ for i in range(1, N):
     BU[i - 1] = np.sqrt(b)
     BL[i - 1] = np.sqrt(b)
 
-    ax.plot(x, Pnorm[i](x) * np.exp(-(x**2)))
+    if plot:
+        ax.plot(x, Pnorm[i](x) * np.exp(-(x**2)))
 
 mat = sp.diags([BL, A, BU], [-1, 0, 1])
 es, evecs = scipy.linalg.eigh(mat.toarray())
@@ -105,4 +126,5 @@ print(f"wrote {LAND_PKL}")
 
 # for i in range(0, 5):
 #     print(Ps[i].coef)
-plt.show()
+if plot:
+    plt.show()

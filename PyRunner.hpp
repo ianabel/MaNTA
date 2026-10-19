@@ -117,6 +117,34 @@ public:
   // Run adjoint solver and return tuple (G, G_p)
   py::tuple getAdjointGradients(void);
 
+  // ---- The adjoint on demand, at the current state: the one getSolution()
+  // reads, which is the final state after a run and the last slice's between
+  // slices of a steady solve.
+  //
+  // solve_adjoint solves J^T z = dG/dy for objective g, or for every objective
+  // when g is None, from the last Jacobian build and **without calling the
+  // physics**: only the objective's own dg is evaluated. The other three read
+  // what it left (adjoint_state, objective_sensitivity) or need no solve at all
+  // (objective_gradient). Needs a run, or a slice, first; the objective comes
+  // from the case's createAdjointProblem whether or not solveAdjoint is set.
+  void solve_adjoint(std::optional<Index> g);
+
+  // z for objective g as nodal arrays: "sigma", "q", "u" (nPoints, nVars),
+  // "aux" (nPoints, nAux), "lambda" (nCells + 1, nVars) on the faces, "field"
+  // (nField,), with the node positions "x" and face positions "x_faces"; and
+  // "operator_at_state", whether the Jacobian transposed was built at this
+  // state rather than at an earlier iterate.
+  py::dict adjoint_state(Index g) const;
+
+  // dG/dy for objective g at the current state, in adjoint_state's layout. Its
+  // "lambda" is zero: no objective reads the trace.
+  py::dict objective_gradient(Index g);
+
+  // w = dG/dGamma for objective g: "flux" and "sources" (nPoints, nVars), one
+  // row per physics node "x" -- the k+2 star nodes under Superconvergent, the
+  // k+1 basis nodes otherwise -- and "operator_at_state" as above.
+  py::dict objective_sensitivity(Index g) const;
+
   Vector getSolution(Index var,
                      std::optional<std::vector<Position>> const &points);
 
@@ -150,6 +178,16 @@ public:
   std::vector<Position> getCellBoundaries() const;
 
 private:
+  // The AdjointProblem that defines G: the one solveAdjoint built, or one built
+  // on demand, as G() does.
+  AdjointProblem &objectiveProblem();
+
+  // A cellwise [ sigma | q | u | aux ] vector set, a var-major trace vector,
+  // the field block and the global scalars' block, as the dict adjoint_state
+  // and objective_gradient return.
+  py::dict nodalLayout(std::vector<Vector> const &cells, Vector const &lambda,
+                       Vector const &field, Vector const &scalars) const;
+
   // Empty unless constructed from a name. Non-empty is what makes configure()
   // build `pProblem` itself, so it is also the flag distinguishing the two
   // constructors -- there is no separate bool that could disagree with it.

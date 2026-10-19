@@ -7,7 +7,7 @@ import enum
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'getPhysicsNodes', 'getPhysicsWeights', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -19,6 +19,8 @@ class AdjointProblem:
     def dAux(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: dict[typing.Sequence[float]], arg2: dict[typing.Sequence[float]], arg3: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
         ...
     def dAux_dp(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: typing.SupportsInt | typing.SupportsIndex, arg2: typing.SupportsFloat | typing.SupportsIndex, arg3: State, arg4: typing.SupportsFloat | typing.SupportsIndex) -> None:
+        ...
+    def dScalarG_dp(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: dict[typing.Sequence[float]], arg2: dict[typing.Sequence[float]], arg3: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], arg4: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, "[m, 1]"], arg5: typing.Annotated[numpy.typing.ArrayLike, numpy.float64, "[m, n]"], arg6: typing.SupportsFloat | typing.SupportsIndex) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, n]"]:
         ...
     def dSigma(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: dict[typing.Sequence[float]], arg2: dict[typing.Sequence[float]], arg3: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex]) -> None:
         ...
@@ -133,14 +135,17 @@ class EvaluationCadence:
       OncePerRun
     
       OncePerSolver
+    
+      PerObjectiveEstimate
     """
     OncePerRun: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.OncePerRun: 4>
     OncePerSolver: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.OncePerSolver: 5>
     PerAdjointSolve: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerAdjointSolve: 3>
     PerContinuationStep: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerContinuationStep: 2>
     PerJacobianBuild: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerJacobianBuild: 1>
+    PerObjectiveEstimate: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerObjectiveEstimate: 6>
     PerResidual: typing.ClassVar[EvaluationCadence]  # value = <EvaluationCadence.PerResidual: 0>
-    __members__: typing.ClassVar[dict[str, EvaluationCadence]]  # value = {'PerResidual': <EvaluationCadence.PerResidual: 0>, 'PerJacobianBuild': <EvaluationCadence.PerJacobianBuild: 1>, 'PerContinuationStep': <EvaluationCadence.PerContinuationStep: 2>, 'PerAdjointSolve': <EvaluationCadence.PerAdjointSolve: 3>, 'OncePerRun': <EvaluationCadence.OncePerRun: 4>, 'OncePerSolver': <EvaluationCadence.OncePerSolver: 5>}
+    __members__: typing.ClassVar[dict[str, EvaluationCadence]]  # value = {'PerResidual': <EvaluationCadence.PerResidual: 0>, 'PerJacobianBuild': <EvaluationCadence.PerJacobianBuild: 1>, 'PerContinuationStep': <EvaluationCadence.PerContinuationStep: 2>, 'PerAdjointSolve': <EvaluationCadence.PerAdjointSolve: 3>, 'OncePerRun': <EvaluationCadence.OncePerRun: 4>, 'OncePerSolver': <EvaluationCadence.OncePerSolver: 5>, 'PerObjectiveEstimate': <EvaluationCadence.PerObjectiveEstimate: 6>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
@@ -246,8 +251,11 @@ class EvaluationKind:
       InitialProjection
     
       MassMatrix
+    
+      DiscretisationEstimate
     """
     Adjoint: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.Adjoint: 9>
+    DiscretisationEstimate: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.DiscretisationEstimate: 12>
     FieldCoupling: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.FieldCoupling: 8>
     InitialCondition: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialCondition: 2>
     InitialProjection: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.InitialProjection: 10>
@@ -259,7 +267,7 @@ class EvaluationKind:
     ScalarJacobian: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.ScalarJacobian: 6>
     TauFaces: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.TauFaces: 3>
     TauNodes: typing.ClassVar[EvaluationKind]  # value = <EvaluationKind.TauNodes: 4>
-    __members__: typing.ClassVar[dict[str, EvaluationKind]]  # value = {'Residual': <EvaluationKind.Residual: 0>, 'Jacobian': <EvaluationKind.Jacobian: 1>, 'InitialCondition': <EvaluationKind.InitialCondition: 2>, 'TauFaces': <EvaluationKind.TauFaces: 3>, 'TauNodes': <EvaluationKind.TauNodes: 4>, 'ScalarConstraint': <EvaluationKind.ScalarConstraint: 5>, 'ScalarJacobian': <EvaluationKind.ScalarJacobian: 6>, 'ScalarCoupling': <EvaluationKind.ScalarCoupling: 7>, 'FieldCoupling': <EvaluationKind.FieldCoupling: 8>, 'Adjoint': <EvaluationKind.Adjoint: 9>, 'InitialProjection': <EvaluationKind.InitialProjection: 10>, 'MassMatrix': <EvaluationKind.MassMatrix: 11>}
+    __members__: typing.ClassVar[dict[str, EvaluationKind]]  # value = {'Residual': <EvaluationKind.Residual: 0>, 'Jacobian': <EvaluationKind.Jacobian: 1>, 'InitialCondition': <EvaluationKind.InitialCondition: 2>, 'TauFaces': <EvaluationKind.TauFaces: 3>, 'TauNodes': <EvaluationKind.TauNodes: 4>, 'ScalarConstraint': <EvaluationKind.ScalarConstraint: 5>, 'ScalarJacobian': <EvaluationKind.ScalarJacobian: 6>, 'ScalarCoupling': <EvaluationKind.ScalarCoupling: 7>, 'FieldCoupling': <EvaluationKind.FieldCoupling: 8>, 'Adjoint': <EvaluationKind.Adjoint: 9>, 'InitialProjection': <EvaluationKind.InitialProjection: 10>, 'MassMatrix': <EvaluationKind.MassMatrix: 11>, 'DiscretisationEstimate': <EvaluationKind.DiscretisationEstimate: 12>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
@@ -421,6 +429,10 @@ class Runner:
         ...
     def abandon_steady(self) -> None:
         ...
+    def adjoint_state(self, g: typing.SupportsInt | typing.SupportsIndex) -> dict:
+        """
+        The adjoint state z of objective g, as nodal arrays per variable, the traces and the field DOFs. Needs solve_adjoint() at this state.
+        """
     def configure(self, arg0: dict) -> None:
         ...
     def continue_steady(self, estimate: bool = True) -> SteadyOutcome:
@@ -441,6 +453,14 @@ class Runner:
         ...
     def objectiveEstimate(self) -> dict:
         ...
+    def objective_gradient(self, g: typing.SupportsInt | typing.SupportsIndex) -> dict:
+        """
+        dG/dy for objective g at the current state, in adjoint_state()'s layout: the right-hand side of the adjoint solve.
+        """
+    def objective_sensitivity(self, g: typing.SupportsInt | typing.SupportsIndex) -> dict:
+        """
+        dG/dGamma for objective g: how G moves with the flux and the sources the case returns, per physics node and variable. Needs solve_adjoint() at this state.
+        """
     @typing.overload
     def run(self, arg0: typing.SupportsFloat | typing.SupportsIndex) -> None:
         ...
@@ -449,6 +469,10 @@ class Runner:
         ...
     def run_ss(self) -> None:
         ...
+    def solve_adjoint(self, g: typing.SupportsInt | typing.SupportsIndex | None = None) -> None:
+        """
+        Solve the adjoint J^T z = dG/dy at the current state for objective g, or for every objective when g is None, from the last Jacobian build and without calling the physics. Read the answer with adjoint_state() and objective_sensitivity().
+        """
     def start_steady(self, estimate: bool = True) -> SteadyOutcome:
         ...
     def steadyStats(self) -> dict:
@@ -533,6 +557,7 @@ class SteadyOutcome(enum.IntEnum):
     Converged: ||F|| fell below SteadyStateTolerance.
     OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. Not a failure: the state reached is the last accepted one, and continue_steady() resumes from it and the pseudo-time step.
     SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.
+    Stalled: SteadyStateTest = Objective only. The Newton correction reached round-off with an objective's estimated error still above its tolerance; the state is as converged as the solve can make it.
     
     An IntEnum, so a traced outcome compares with the members under jit: jnp.equal(outcome, SteadyOutcome.Converged).
     """
@@ -540,6 +565,7 @@ class SteadyOutcome(enum.IntEnum):
     NotRun: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.NotRun: 0>
     OutOfSteps: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.OutOfSteps: 2>
     SolverFailed: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.SolverFailed: 3>
+    Stalled: typing.ClassVar[SteadyOutcome]  # value = <SteadyOutcome.Stalled: 4>
     @classmethod
     def __new__(cls, value):
         ...
@@ -696,6 +722,26 @@ def getNodes(arg0: collections.abc.Sequence[typing.SupportsFloat | typing.Suppor
 def getNodes(arg0: typing.SupportsFloat | typing.SupportsIndex, arg1: typing.SupportsFloat | typing.SupportsIndex, arg2: typing.SupportsInt | typing.SupportsIndex, arg3: typing.SupportsInt | typing.SupportsIndex) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
     """
     Get the points of a grid
+    """
+@typing.overload
+def getPhysicsNodes(cellBoundaries: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], k: typing.SupportsInt | typing.SupportsIndex, superconvergent: bool = False) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    The points the physics is evaluated at, and a spatial adjoint parameter defined: the k+1 basis nodes per cell, or the k+2 star nodes with the superconvergent scheme
+    """
+@typing.overload
+def getPhysicsNodes(x_l: typing.SupportsFloat | typing.SupportsIndex, x_u: typing.SupportsFloat | typing.SupportsIndex, nCells: typing.SupportsInt | typing.SupportsIndex, k: typing.SupportsInt | typing.SupportsIndex, superconvergent: bool = False) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    The points the physics is evaluated at, and a spatial adjoint parameter defined: the k+1 basis nodes per cell, or the k+2 star nodes with the superconvergent scheme
+    """
+@typing.overload
+def getPhysicsWeights(cellBoundaries: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], k: typing.SupportsInt | typing.SupportsIndex, superconvergent: bool = False) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    One quadrature weight per point getPhysicsNodes returns: weights . g is the objective MaNTA reports for g sampled there
+    """
+@typing.overload
+def getPhysicsWeights(x_l: typing.SupportsFloat | typing.SupportsIndex, x_u: typing.SupportsFloat | typing.SupportsIndex, nCells: typing.SupportsInt | typing.SupportsIndex, k: typing.SupportsInt | typing.SupportsIndex, superconvergent: bool = False) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    One quadrature weight per point getPhysicsNodes returns: weights . g is the objective MaNTA reports for g sampled there
     """
 def load_physics_plugin(path: str) -> None:
     """

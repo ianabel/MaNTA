@@ -58,6 +58,7 @@ public:
 
     void Map(double *Y)
     {
+        data_ = Y;
         u_.clear();
         u_.reserve(nVars);
         q_.clear();
@@ -424,6 +425,11 @@ public:
 
     Grid const &getGrid() const { return grid; };
 
+    // The flat vector this view maps, getDoF() long, or null before the first
+    // Map(). For asking whether two states are the same one bit for bit, which
+    // the per-field accessors can answer only field by field.
+    double const *data() const { return data_; };
+
 private:
     const Index nVars;
     const Grid &grid;
@@ -438,6 +444,7 @@ private:
     VectorWrapper mu_;
     VectorWrapper psi_;
     std::vector<DGApprox> aux_;
+    double *data_ = nullptr;
     const BasisType Basis;
 
     friend class IntegrationPoints;

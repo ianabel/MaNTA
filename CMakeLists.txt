@@ -64,6 +64,7 @@ set(MANTA_CORE_SOURCES
   Config.cpp
   ConfigSchema.cpp
   DGStatic.cpp
+  DiscretisationEstimate.cpp
   DegreeAdaptation.cpp
   ErrorChecker.cpp
   FieldModel.cpp

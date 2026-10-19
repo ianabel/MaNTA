@@ -70,7 +70,7 @@ docs/_build/
 __pycache__/
 .pytest_cache/
 
-# Cached polynomial fits, pickled by python-physics/mirror-plasma/landremann.py
+# Cached polynomial fits, pickled by python-physics/mirror-plasma/landreman.py
 # for its constants.py to read back: build output, not input.
 *.pkl
 

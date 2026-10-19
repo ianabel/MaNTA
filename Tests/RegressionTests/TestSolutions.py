@@ -106,15 +106,14 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
                 sys.exit( 1 )
     
     # Check if adjoints were computed, if so compare those too.
-    # NOTE: this guard tests the freshly-generated file. WriteAdjoints() is
-    # currently commented out at Solver.cpp:350 (commit 57d2652, "adjoint
-    # writing doesn't work for spatial adjoints"), so no run produces "ng" and
-    # this whole block silently skipped itself. Warn loudly when the reference
-    # has adjoint data that the run did not reproduce.
+    # NOTE: this guard tests the freshly-generated file, which carries "ng" only
+    # when its configuration sets WriteAdjoints = true. Warn loudly when the
+    # reference has adjoint data that the run did not reproduce, since this
+    # block once skipped itself silently.
     if ("ng" not in nc_root.variables) and ("ng" in nc_root_ref.variables):
         print("  !! SKIPPING adjoint check for", filename, "- reference has adjoint")
-        print("     output but this run produced none. WriteAdjoints() is commented")
-        print("     out at Solver.cpp:350. Re-enable it to restore this check.")
+        print("     output but this run produced none. Set WriteAdjoints = true in")
+        print("     its configuration to restore this check.")
 
     if ("ng" in nc_root.variables):
         print("  ... also checking adjoint variables")

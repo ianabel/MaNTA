@@ -40,6 +40,7 @@ program.
 | `thermodiffusive-pinch/` | Benchmark: density and temperature coupled through a pinch, with a closed-form steady state | — |
 | `two-temperature-critical-gradient/` | Benchmark: Jardin's stiff problem in two channels, with optional exchange | — |
 | `reference-algorithms/` | The published ASTRA scheme and TGYRO's iteration, run on the benchmarks above against MaNTA | — |
+| `objective-tolerance/` | `SteadyStateTest = "Objective"` on the benchmarks above: stopping on the stored energy, against `NewtonStep` and the fixed point; and `AdaptationTarget = "Objective"`, the degree and mesh adapted to it, against closed forms | — |
 
 The entries marked **Benchmark** above are a different kind of thing. They exist
 to *measure* rather than to demonstrate: each poses a problem with a

@@ -11,7 +11,7 @@ with.
 
 Importing this package pulls in JAX, equinox, optimistix and matplotlib; see
 the README for what to install. ``constants`` also needs ``land.pkl``, which
-``landremann.py`` generates.
+``landreman.py`` generates.
 """
 
 from . import configs  # noqa: F401
