@@ -250,9 +250,98 @@ step, and it is blocked on that phase rather than on this one.
 3. **`EvaluationPlan.hpp:45`** says `InitialCondition` runs on the basis nodes.
    It runs on the physics nodes. The comment gets corrected.
 
-Two known gaps stay open and are named, not fixed: an objective reading geometry
-loses `dG/dψ` (and `GFn` sees no geometry rows at all), and `∂R/∂p` has no hook.
-The adjoint test below uses an objective and a parameter that touch neither.
+One known gap stays open and is named, not fixed: `∂R/∂p` has no hook, because
+`FieldModel` has no notion of an adjoint parameter. In normalised units this
+model's rows carry no physical parameter (`Φ_a` and the wall area are both `π`),
+so the gap does not bite here. It will once a wall radius, a vacuum field or a
+coil current becomes something to optimise. The other gap, an objective that
+reads geometry, is closed by the next section.
+
+## An objective that reads geometry: `dG/dgeometry`
+
+For this model an objective like the on-axis field or the enclosed area reads
+geometry, and today that is wrong twice over:
+
+* **The value.** Every route to `G` builds its states without geometry rows:
+  `AdjointProblem::GFn(g, y, pp)` through `pp.evalOnStarNodes`,
+  `PyAdjointProblem::GFn(g, y)` through `y.evalOnNodes`, and
+  `AutodiffAdjointProblem::GFn` through `y.eval`. So a `g` reading `State::geom`
+  reads out of bounds, silently outside `DEBUG`.
+* **The gradient.** `dg` *is* handed geometry-filled states
+  (`assembleObjectiveGradient` goes through `physicsNodesAt`). But its output
+  `GlobalState` is built with no geometry rows, and `G_field` is set to zero at
+  all three sites that build it (`initializeMatricesForAdjointSolve`, the
+  on-demand adjoint, `accumulateAdjointGradients`'s rebuild). So the adjoint's
+  field right-hand side is missing exactly the explicit `∂G/∂ψ` term, and the
+  result is a wrong gradient beside a plausible `G`.
+
+`ψ` reaches nothing outside the field rows except through the geometry slots,
+so `∂G/∂ψ` explicit is entirely
+
+```
+∂G/∂ψ_m = Σ_j w_j Σ_s (∂g/∂g_s)_j · ∂g_s/∂ψ_m (x_j)
+```
+
+over the nodes the objective is integrated on. Those are the star nodes with the
+star weights `b1` under `Superconvergent`, and the basis nodes with their
+interpolatory weights otherwise.
+
+### The interface
+
+* **`dg`'s output gains geometry rows**, `nGeom` per node, arriving zeroed.
+  `out.Geometry(j)` is the *pointwise* `∂g/∂g_s` at node `j`, like the
+  `u`/`q`/`σ`/`φ` rows and unlike `Scalars()`, which is already integrated. The
+  solver owns the weights and `dGeometry_dpsi`, so the contraction is the
+  solver's: the case reports a derivative of `g`, never of `G`. An objective that
+  reads no geometry writes nothing, and `G_field` stays zero. That is the right
+  answer, so no existing adjoint problem needs changing.
+* **The weights are `diag(w)`, not a mass matrix.** This is the
+  `DerivativeSubVector` lesson: `G = Σ w_j g_j`, so the exact derivative weights
+  each node by `w_j`. The test data must separate the two, so `∂g/∂g_s` has to
+  vary across a cell (see Testing).
+* **`G_field` is assembled in one function** called from all three sites, so the
+  three cannot drift. It takes `dGeometry_dpsi` at the same nodes and time the
+  states were built at.
+
+### The value of `G` on a coupled run
+
+The objective's value has to be evaluated on geometry-filled states, and the
+states have to be the solver's. `AdjointProblem` has no field model and should
+not get one. So:
+
+* `AdjointProblem` gains `GFn(gIndex, GlobalState const &states, points,
+  weights)`. Its default is `Σ_j w_j gFn(states)_j`, summed per cell in the order
+  the star form already uses.
+* The solver's five call sites (`SystemSolver.cpp` objective estimate,
+  `SteadyState.cpp`'s `estimateObjectiveError`, `NetCDFIO.cpp`'s `WriteAdjoints`,
+  and `PyRunner`'s `G()` and `getAdjointGradients()`) go through one solver
+  method, `objectiveValue(g, state, t)`. It builds `physicsNodesAt`, which already
+  fills geometry, and calls that overload **when a field model is attached**.
+  Uncoupled runs keep their current call, so they stay byte-identical, and the
+  `cmp` check over the regression configs confirms it.
+* On a coupled run this *defines* `G` as the nodal quadrature that `dg`
+  differentiates, whatever `GFn(g, y)` a case overrides. That is the
+  consistency the finite-difference check needs. It means
+  `AutodiffAdjointProblem`'s own-quadrature `GFn` is bypassed on a coupled run.
+  On an uncoupled one, that override already integrates with a different rule
+  from the one `dg` differentiates. That inconsistency predates this work and is
+  recorded in `TODO` rather than fixed here.
+
+### The other consumer: the objective estimate
+
+`estimateObjectiveError` (the `"Objective"` steady test) and `estimateObjective`
+form `dG/dy · δy` from the cells, plus `G_μ · δμ` for the scalars. A coupled run
+needs `G_field · δψ` beside them, or the stopping test ignores the share of the
+objective's error carried by the field. It is the same omission `G_μ · δμ` was
+for the scalars, and it is tested the same way.
+
+### Python
+
+`dg`'s dict gains a `"Geometry"` entry, `(nPoints, nGeom)` like the others. The
+caster already writes that key and accepts it on load. `JAXAdjointProblem.dg`
+differentiates with respect to the state's geometry as well. Like the rest of
+Python, this belongs to the second phase, since a coupled run cannot be
+configured from Python before then.
 
 ## Testing
 
@@ -268,7 +357,10 @@ test.
 | Standalone equilibrium: prescribed `p(x)`, Newton on the field rows alone, against the closed form `V' = π/√(C − p)` with `C` from a scalar root-find; local orders in `M` approaching 4 | a wrong residual |
 | Coupled `J dy = g` with `FieldSolve = exact` (the `FieldJacobianTests` method) | a wrong coupled Jacobian |
 | MMS on the coupled system: manufactured `n(x,t)`, with `p = T n` independent of `V'`, so `V'_exact` is closed form; local orders in `h` at fixed fine `M`, and in `M` at fixed fine `h` | a converged, plausible, wrong coupled residual |
-| Adjoint gradient against finite differences, coupling armed, parameter `D₀` | a wrong `A₁ᵀ` / `A₂ᵀ` / `Bᵀ` |
+| Adjoint gradient against finite differences, coupling armed, parameter `D₀`, objective on `n` | a wrong `A₁ᵀ` / `A₂ᵀ` / `Bᵀ` |
+| The same with an objective reading geometry, `g = B(x) w(x)` with `w` varying within a cell; plus a guard that zeroing `G_field` moves the gradient by orders of magnitude more than the tolerance, and that the mass-matrix weighting misses | a missing or mis-weighted `∂G/∂ψ` |
+| `G` on a coupled run equals `Σ w_j g_j` on geometry-filled states, against `B(x)` from the standalone equilibrium | the value of a geometry-reading objective |
+| `"Objective"` steady test on a coupled run: the estimate against the adjoint's `zᵀF`, to round-off, with and without the field term | a missing `G_field · δψ` |
 | `exact` and `iterative` agree; reuse is bit for bit (`a_coupled_solver_reused_matches_a_fresh_one`) | the iterative path and `resetForRun` |
 | `V' ≤ 0` throws and IDA recovers | the recoverable-failure path |
 | Low-β limit against `B ≈ 1 − p/2` | a sanity check on units |
@@ -312,3 +404,4 @@ A Python-*implemented* field model stays out of scope, as in #24.
 * `dRdot` / `states_dot` in `FieldResidual` (`TODO`). This model's rows have no
   time derivative.
 * Sparse/structured `dRdpsi` and `A₁` storage in the interface.
+* `∂R/∂p`, a field model's own adjoint parameters (see above).
