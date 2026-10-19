@@ -18,6 +18,8 @@
 #include "MMSHarness.hpp"
 #include "ManufacturedFields.hpp"
 #include "../../SystemSolver.hpp"
+#include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
+#include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
 #include "../../Types.hpp"
 
 #include <nvector/nvector_serial.h>
@@ -369,6 +371,26 @@ CoupledSolver multiDofFixture(Index nCells, Index k, double strength = 1.0)
 /// converges to |lambda_max|. Built from the same four calls
 /// solveCoupledJacIterative makes, in the same order, rather than from a second
 /// implementation that could agree with a wrong original.
+/// The registered pair: ThetaPinchDiffusion reading ThetaPinchEquilibrium.
+/// The pressure is high enough (T = 0.3, central density 1) that the field is
+/// far from vacuum, so the coupling blocks are not evaluated at a degenerate
+/// point; `intervals` sets the field block's size, M + 4.
+CoupledSolver thetaPinchFixture(Index nCells, Index k, Index intervals, bool superconvergent = false)
+{
+    using namespace toml::literals::toml_literals;
+    static const toml::value config = u8R"(
+        [ThetaPinchDiffusion]
+        Temperature = 0.3
+        D0 = 0.5
+        Gamma = 2.0
+    )"_toml;
+    const Grid grid(0.0, 1.0, nCells);
+    return makeCoupledSolverAtState(
+        nCells, k, std::make_unique<ThetaPinchDiffusion>(config, grid),
+        std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{.intervals = intervals}, grid),
+        superconvergent);
+}
+
 double spectralRadius(CoupledSolver const &solver, int iterations = 60)
 {
     const Index nField = solver->getFieldDOF();
@@ -1403,5 +1425,56 @@ BOOST_AUTO_TEST_CASE(a_coupled_run_on_the_iterative_path_reaches_the_manufacture
     BOOST_CHECK_SMALL(eu, 1e-4);
     BOOST_CHECK_SMALL(epsi, 1e-5);
 }
+
+// The first registered field model, on the same checks the manufactured ones
+// get. Its A2 reaches the transport through the pressure's aux column only, and
+// its A1 through all four geometry slots, so this is the fixture that runs the
+// aux half of A2 and a multi-slot A1 together.
+BOOST_AUTO_TEST_CASE(the_theta_pinch_exact_solve_inverts_its_finite_differenced_jacobian)
+{
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervals=*/6, superconvergent);
+
+            // Not vacuous: both coupling blocks carry something.
+            BOOST_REQUIRE_GT(maxAbsA1(solver), 1e-3);
+            DGSoln a2Map(solver->nVars, *solver.grid, 3, N_VGetArrayPointer(solver->a2[0]),
+                         solver->nScalars, solver->nAux, solver->getFieldDOF());
+            BOOST_REQUIRE_GT(maxAbs(a2Map.Aux(0), 5), 1e-3);
+
+            for (int trial = 0; trial < 2; ++trial)
+            {
+                const SolveReport r = checkExactSolve(solver, trial);
+                BOOST_TEST_MESSAGE("theta pinch, k = 3, nCells = 5, M = 6, trial "
+                                   << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                                   << ", ||J dy* - g||/||g|| = " << r.residual << " ("
+                                   << r.nDirichlet << " Dirichlet components excluded)");
+                BOOST_TEST(r.nDirichlet == 1);
+                BOOST_TEST(r.solutionError < 1e-6);
+                BOOST_TEST(r.residual < 1e-7);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_theta_pinch_iterative_solve_agrees_with_the_exact_one)
+{
+    auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervals=*/12);
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    const double diff = relativeDifference(exact, iterative);
+    BOOST_TEST_MESSAGE("theta pinch, M = 12, iterative vs exact: relative difference = " << diff);
+    BOOST_CHECK_SMALL(diff, 1e-6);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()
