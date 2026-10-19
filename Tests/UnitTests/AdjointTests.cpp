@@ -587,4 +587,112 @@ BOOST_AUTO_TEST_CASE(the_autodiff_parameter_derivative_is_of_the_reported_object
 }
 
 
+// An autodiff case whose auxiliary equation reads an adjoint parameter:
+//
+//     u_t - u_xx = 1 - a,   a = p u,   u = 0 at both ends.
+//
+// AdjointProblem::ComputePhysicsDerivatives asks dAux_dp of every auxiliary
+// variable, and AutodiffAdjointProblem used to leave it at the base default,
+// which throws -- so no autodiff case with an aux variable could compute a
+// gradient, whether or not the aux equation read a parameter.
+namespace {
+
+class ParametrisedAux : public AutodiffTransportSystem {
+public:
+  explicit ParametrisedAux(Grid const &grid)
+      : AutodiffTransportSystem(toml::value(toml::table{}), grid,
+                                {.variables = {{"u", "", ""}}, .aux = {{"a", "p u", ""}}}) {
+    addP(rate);
+  }
+  Real rate = 2.0;
+
+private:
+  Value LowerBoundary(Index, Time) const override { return 0.0; }
+  Value UpperBoundary(Index, Time) const override { return 0.0; }
+  Real Flux(Index, RealVector, RealVector q, Real, Time) override { return q(0); }
+  Real Source(Index, RealVector, RealVector, RealVector, RealVector phi, Real, Time) override {
+    return 1.0 - phi(0);
+  }
+  Real GFunc(Index, RealVector u, RealVector, RealVector, RealVector phi, Position, Time) override {
+    return phi(0) - rate * u(0);
+  }
+  Real2nd InitialFunction(Index, Real2nd x, Real2nd) const override { return 0.1 * sin(M_PI * x); }
+  Value InitialAuxValue(Index, Position x, Time) const override {
+    return rate.val * 0.1 * std::sin(M_PI * x);
+  }
+};
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(an_autodiff_aux_equation_reports_its_parameter_derivative) {
+  Grid grid(0.0, 1.0, 4);
+  ParametrisedAux problem(grid);
+  AutodiffAdjointProblem adjoint(&problem);
+  adjoint.setNp(1);
+
+  State s(1, 0, 1);
+  s.u(0) = 0.3;
+  s.phi(0) = 0.5;
+  Value grad = 0.0;
+  BOOST_REQUIRE_NO_THROW(adjoint.dAux_dp(0, 0, grad, s, 0.4));
+  // d/dp (a - p u) = -u, exactly.
+  BOOST_TEST(grad == -0.3, boost::test_tools::tolerance(1e-15));
+  BOOST_TEST(problem.rate.val == 2.0, "dAux_dp left the parameter at " << problem.rate.val);
+}
+
+BOOST_AUTO_TEST_CASE(an_autodiff_case_with_an_aux_variable_gets_a_gradient) {
+  constexpr Index nCells = 8, order = 3;
+
+  auto solveWith = [&](double delta, double *Gp) {
+    Grid grid(0.0, 1.0, nCells);
+    ParametrisedAux problem(grid);
+    problem.rate = Real(problem.rate.val + delta);
+    AutodiffAdjointProblem adjoint(&problem);
+    adjoint.addG([](Position, RealVector &u, RealVector &, RealVector &, RealVector &) -> Real {
+      return u(0) * u(0);
+    });
+    adjoint.setNp(1);
+
+    SystemSolver system(grid, order, &problem);
+    system.setTau(1.0);
+    system.resetCoeffs();
+    system.setInputFile("autodiff_aux_gradient");
+    system.setOutputCadence(0.25);
+    system.setNOutput(2);
+    system.setInitialTime(0.0);
+    system.setMinStepSize(1e-12);
+    system.setTolerances({1e-10}, 1e-8);
+    system.setSteadyStateTolerance(1e-11);
+    system.setSteadyMode(SystemSolver::SteadyMode::Newton);
+    system.setSolveAdjoint(Gp != nullptr);
+    system.setAdjointProblem(&adjoint);
+    system.setWriteOutput(false);
+    system.setWriteDatFile(false);
+    {
+      CapturedOutput quiet;
+      system.initialize();
+      system.integrate(0.0);
+    }
+    if (Gp)
+      *Gp = system.G_p(0, 0);
+    const double G = adjoint.GFn(0, system.yJac);
+    {
+      CapturedOutput quiet;
+      system.destroySundials();
+    }
+    return G;
+  };
+
+  double Gp = 0.0;
+  BOOST_REQUIRE_NO_THROW(solveWith(0.0, &Gp));
+  const double h = 1e-5;
+  const double fd = (solveWith(+h, nullptr) - solveWith(-h, nullptr)) / (2.0 * h);
+  BOOST_TEST_MESSAGE("dG/dp: adjoint " << Gp << " against " << fd);
+  // Not vacuous: the rate really moves G.
+  BOOST_TEST(std::abs(fd) > 1e-4);
+  BOOST_TEST(Gp == fd, boost::test_tools::tolerance(1e-6));
+  std::filesystem::remove("autodiff_aux_gradient.nc");
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()

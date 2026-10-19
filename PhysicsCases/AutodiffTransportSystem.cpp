@@ -298,6 +298,31 @@ void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, co
 	clearGradients();
 }
 
+// The same again for the auxiliary equations, on the geometry-aware GFunc.
+// AdjointProblem::ComputePhysicsDerivatives asks for dAux_dp for every aux
+// variable whatever it reads, so without this an autodiff case with any
+// auxiliary variable could not compute a gradient at all.
+void AutodiffTransportSystem::dAuxG_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector sigma(s.sigma());
+	RealVector phi(s.phi());
+	RealVector geom(s.geom());
+
+	Real p = getPval(pIndex);
+
+	grad = autodiff::derivative(
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+		{
+			setPval(pIndex, p);
+			return GFunc(i, uD, qD, sD, phiD, geomD, X, T);
+		},
+		wrt(p), at(p, u, q, sigma, phi, geom, x, t));
+
+	clearGradients();
+}
+
 Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());

@@ -43,6 +43,7 @@ public:
 	void dSources_dScalars(Index, VectorRef, const State &, Position, Time) override;
 	void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x, Time t);
 	void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
+	void dAuxG_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
 
 	// Geometry derivatives -- see TransportSystem.hpp for the contract. Derived
 	// by autodiff like every other derivative here: SigmaFn/Sources/AuxG all
