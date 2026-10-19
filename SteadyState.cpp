@@ -414,11 +414,6 @@ void SystemSolver::checkObjectiveTest() const
             "SteadyStateTest = \"Objective\" stops on the objectives the adjoint problem "
             "defines, and this run has none: set solveAdjoint, on a case that provides "
             "createAdjointProblem.");
-    if (nScalars > 0)
-        throw std::invalid_argument(
-            "SteadyStateTest = \"Objective\" cannot be used with global scalars: the adjoint "
-            "operator does not carry their bordering, so its estimate would be for a "
-            "different Jacobian.");
     if (tauScaling != TauScaling::Constant)
         throw std::invalid_argument(
             "SteadyStateTest = \"Objective\" cannot be used under tauScaling = "
@@ -466,6 +461,7 @@ void SystemSolver::estimateObjectiveError(N_Vector correction)
     DGSoln state(nVars, grid, k, N_VGetArrayPointer(nlsU), nScalars, nAux, nField);
     double const *d = N_VGetArrayPointer(correction);
     const Index cellDOF = static_cast<Index>(localDOF);
+    DGSoln correctionMap(nVars, grid, k, N_VGetArrayPointer(correction), nScalars, nAux, nField);
 
     nlsObjectivePrevTest = nlsObjectiveTest;
     nlsObjectiveError.resize(ng);
@@ -473,11 +469,16 @@ void SystemSolver::estimateObjectiveError(N_Vector correction)
     double worst = 0.0;
     for (Index g = 0; g < ng; ++g)
     {
-        // dG/dy has no trace or field block, so only the cells contribute.
-        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, state, t0);
+        // dG/dy has no trace or field block, so the cells contribute, and with
+        // global scalars the scalars' part of the correction through dG/dmu.
+        Vector Gmu;
+        const std::vector<Vector> Gy =
+            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu);
         double change = 0.0;
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             change += Gy[i].dot(Eigen::Map<const Vector>(d + i * cellDOF, cellDOF));
+        if (nScalars > 0)
+            change += Gmu.dot(correctionMap.Scalars());
 
         if (superconvergent)
             postprocessor->computeUStar(state);

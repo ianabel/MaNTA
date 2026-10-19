@@ -2423,16 +2423,17 @@ void SystemSolver::checkEffectiveMassMatrix(DGSoln const &Y, DGSoln const &Ydot,
             "iterations and nothing else, so nothing further will report it.");
 }
 
-// The scalar coupling blocks. See the declaration for why they are written
-// through the caller's storage rather than straight into v, w and N_global.
-void SystemSolver::assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
-                                          PhysicsNodes const &nodes, Time tEval,
-                                          double alphaValue, std::vector<DGSoln> &v_map,
-                                          std::vector<DGSoln> &w_map, Matrix &N_out)
+// The scalar coupling, as the case reports it. See the declaration.
+SystemSolver::ScalarCouplingDerivatives
+SystemSolver::evaluateScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                     PhysicsNodes const &nodes, Time tEval)
 {
+    ScalarCouplingDerivatives out;
+
     // The N_HDG_DOF x N_Scalar matrix v, which contains the effect of the scalars
     // on the main variables (through the sources. nothing else is allowed to
-    // depend on scalars)
+    // depend on scalars), one block of rows per cell.
+    out.v.reserve(nCells);
     for (Index i = 0; i < nCells; ++i)
     {
         Matrix v_tmp(nVars * U_DOF, nScalars);
@@ -2440,33 +2441,44 @@ void SystemSolver::assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
             dSources_dScalars_StarMat(v_tmp, nodes.states, nodes.points, i, tEval);
         else
             dSources_dScalars_Mat(v_tmp, Y, i, tEval);
-        for (Index j = 0; j < nScalars; ++j)
-            for (Index v = 0; v < nVars; ++v)
-                v_map[j].u(v).getCoeff(i).second = v_tmp.block(v * U_DOF, j, U_DOF, 1);
+        out.v.push_back(std::move(v_tmp));
     }
 
-    // The N_Scalar x N_HDG_DOF matrix w, which contains the Jacobian of the
-    // scalars with respect to the other variables; also the scalar-scalar
-    // coupling matrix N.
-    for (Index j = 0; j < nScalars; ++j)
-        w_map[j].zeroCoeffs();
-
-    GlobalStateMatrix ScalarG_vals(nScalars);
-    GlobalStateMatrix ScalarG_dt_vals(nScalars);
+    // dG_s/d(state) and dG_s/d(state_dot), from which w -- the Jacobian of the
+    // scalars with respect to the other variables -- and the scalar-scalar
+    // coupling matrix N are built.
+    out.dG = GlobalStateMatrix(nScalars);
+    out.dGdot = GlobalStateMatrix(nScalars);
     for (Index s = 0; s < nScalars; s++)
     {
-      ScalarG_vals.add(nCells, k, nVars, nScalars, nAux);
-      ScalarG_dt_vals.add(nCells, k, nVars, nScalars, nAux);
+      out.dG.add(nCells, k, nVars, nScalars, nAux);
+      out.dGdot.add(nCells, k, nVars, nScalars, nAux);
     }
 
-    problem->ScalarGPrime(ScalarG_vals, ScalarG_dt_vals, Y.evalOnNodes(), Ydot.evalOnNodes(),
+    problem->ScalarGPrime(out.dG, out.dGdot, Y.evalOnNodes(), Ydot.evalOnNodes(),
                           Y.getPoints(),
                           integrator.integrationWeights(Y.getBasis(), grid),
                           integrator.phiBoundary(Y.getBasis(), grid), tEval);
+    return out;
+}
+
+// The blocks at alphaValue. See the declaration for why they are written through
+// the caller's storage rather than straight into v, w and N_global.
+void SystemSolver::applyScalarCoupling(ScalarCouplingDerivatives const &d, double alphaValue,
+                                       std::vector<DGSoln> &v_map, std::vector<DGSoln> &w_map,
+                                       Matrix &N_out)
+{
+    for (Index i = 0; i < nCells; ++i)
+        for (Index j = 0; j < nScalars; ++j)
+            for (Index v = 0; v < nVars; ++v)
+                v_map[j].u(v).getCoeff(i).second = d.v[i].block(v * U_DOF, j, U_DOF, 1);
+
+    for (Index j = 0; j < nScalars; ++j)
+        w_map[j].zeroCoeffs();
 
     for ( Index j = 0; j < nScalars; ++j ) {
-        const auto& s = ScalarG_vals[j];
-        const auto& s_dt = ScalarG_dt_vals[j];
+        const auto& s = d.dG[j];
+        const auto& s_dt = d.dGdot[j];
         for (Index i = 0; i < nCells; ++i)
         {
             for ( Index l = 0; l < k + 1; ++l ) {
@@ -2547,6 +2559,7 @@ void SystemSolver::updateMatricesForJacSolve()
         },
         cellGrain);
 
+    ScalarCouplingDerivatives scalarCoupling;
     if (nScalars > 0)
     {
       std::vector<DGSoln> v_map, w_map;
@@ -2556,7 +2569,8 @@ void SystemSolver::updateMatricesForJacSolve()
           w_map.emplace_back(nVars, grid, k, N_VGetArrayPointer(w[i]), nScalars, nAux, nField);
       }
 
-      assembleScalarCoupling(yJac, dydtJac, nodes, jt, alpha, v_map, w_map, N_global);
+      scalarCoupling = evaluateScalarCoupling(yJac, dydtJac, nodes, jt);
+      applyScalarCoupling(scalarCoupling, alpha, v_map, w_map, N_global);
     }
 
     // Kept, so that an adjoint solve can assemble the same blocks again --
@@ -2569,6 +2583,9 @@ void SystemSolver::updateMatricesForJacSolve()
     rec.dSigma = std::move(dSigma_vals);
     rec.dSource = std::move(dSource_vals);
     rec.dAux = std::move(dAux_vals);
+    rec.scalar = std::move(scalarCoupling);
+    if (nScalars > 0)
+        rec.stateDot.assign(dydtJac.data(), dydtJac.data() + dydtJac.getDoF());
 
     if (fieldModel)
     {
@@ -3361,9 +3378,11 @@ SystemSolver::PhysicsDerivatives &
 SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEval)
 {
     // With a field model the coupling was also differentiated at the build's
-    // psi', which the state alone does not pin.
+    // psi', and with global scalars ScalarGPrime at its state_dot, neither of
+    // which the state alone pins.
     const bool sameYdot =
-        !fieldModel || (jacobianDerivatives.stateDot.size() == Ydot.getDoF() &&
+        (!fieldModel && nScalars == 0) ||
+        (jacobianDerivatives.stateDot.size() == Ydot.getDoF() &&
                         std::memcmp(jacobianDerivatives.stateDot.data(), Ydot.data(),
                                     jacobianDerivatives.stateDot.size() * sizeof(double)) == 0);
     if (!problem->anySourceReadsTimeDerivatives() && sameYdot &&
@@ -3398,6 +3417,11 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
         rec.stateDot.assign(Ydot.data(), Ydot.data() + Ydot.getDoF());
         rec.field = evaluateFieldCoupling(Y, Ydot, nodes, tEval);
     }
+    if (nScalars > 0)
+    {
+        rec.stateDot.assign(Ydot.data(), Ydot.data() + Ydot.getDoF());
+        rec.scalar = evaluateScalarCoupling(Y, Ydot, nodes, tEval);
+    }
 
     rec.state.assign(Y.data(), Y.data() + Y.getDoF());
     rec.t = tEval;
@@ -3409,7 +3433,7 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
 // See the declaration.
 std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &objective,
                                                             Index gIndex, DGSoln const &state,
-                                                            Time tEval)
+                                                            Time tEval, Vector *dGdmu)
 {
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
@@ -3419,6 +3443,13 @@ std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &obje
     GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux);
     PhysicsNodes nodes = physicsNodesAt(state, tEval);
     objective.dg(gIndex, dGdvars, nodes.states, nodes.points);
+    if (dGdmu != nullptr)
+    {
+        if (nScalars > 0)
+            *dGdmu = dGdvars.Scalars();
+        else
+            dGdmu->resize(0);
+    }
 
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
@@ -3753,12 +3784,43 @@ void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
     }
     else
         adjoint_field.resize(0);
+
+    // ---- the scalar border, at alpha = 0 for the same reason, from the same
+    // evaluation, into storage of the adjoint's own: unlike the field blocks the
+    // forward solve's v, w and N_global are left alone, so nothing has to put
+    // them back.
+    if (nScalars > 0)
+    {
+        if (static_cast<Index>(src.scalar.v.size()) != static_cast<Index>(nCells))
+            throw std::logic_error(
+                "The derivatives the adjoint operator is assembled from carry no scalar "
+                "coupling, so its border would be empty: whatever recorded them has to "
+                "evaluate evaluateScalarCoupling beside the transport derivatives.");
+        const Index nDoF = y.getDoF();
+        adjoint_scalarV.assign(nScalars, Vector::Zero(nDoF));
+        adjoint_scalarW.assign(nScalars, Vector::Zero(nDoF));
+        adjoint_scalarN = Matrix::Zero(nScalars, nScalars);
+
+        std::vector<DGSoln> v_map, w_map;
+        for (Index s = 0; s < nScalars; ++s)
+        {
+            v_map.emplace_back(nVars, grid, k, adjoint_scalarV[s].data(), nScalars, nAux, nField);
+            w_map.emplace_back(nVars, grid, k, adjoint_scalarW[s].data(), nScalars, nAux, nField);
+        }
+        applyScalarCoupling(src.scalar, 0.0, v_map, w_map, adjoint_scalarN);
+    }
+    else
+    {
+        adjoint_scalarV.clear();
+        adjoint_scalarW.clear();
+        adjoint_scalarN.resize(0, 0);
+    }
 }
 
 void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 {
     assembleAdjointOperator(adjointDerivativesAt(y, dydt, jt));
-    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt);
+    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu);
     if (fieldModel)
         G_field = Vector::Zero(nField);
     else
@@ -3781,7 +3843,8 @@ void SystemSolver::storeAdjointSolution(Index gIndex, DGSoln const &state, bool 
     if (static_cast<Index>(adjointSolutions.size()) <= gIndex)
         adjointSolutions.resize(gIndex + 1);
     adjointSolutions[gIndex] =
-        AdjointSolution{adjoint_squ, adjoint_lambdas, adjoint_field, G_y, G_field, operatorAtState};
+        AdjointSolution{adjoint_squ, adjoint_lambdas, adjoint_field, G_y,
+                        G_field,     adjoint_mu,      G_mu,          operatorAtState};
 }
 
 SystemSolver::AdjointSolution const *SystemSolver::adjointSolution(Index g,
@@ -3800,10 +3863,6 @@ SystemSolver::AdjointSolution const *SystemSolver::adjointSolution(Index g,
 void SystemSolver::solveAdjointAt(AdjointProblem &objective, std::vector<Index> const &objectives,
                                   DGSoln const &state)
 {
-    if (nScalars > 0)
-        throw std::invalid_argument(
-            "The adjoint cannot be solved with global scalars: its operator does not carry the "
-            "scalar bordering, so J^T z = dG/dy would be solved for a different J.");
     if (tauScaling != TauScaling::Constant)
         throw std::invalid_argument(
             "The adjoint cannot be solved under tauScaling = \"Diffusive\": tau depends on "
@@ -3835,7 +3894,7 @@ void SystemSolver::solveAdjointAt(AdjointProblem &objective, std::vector<Index> 
     assembleAdjointOperator(src);
     for (Index g : objectives)
     {
-        G_y = assembleObjectiveGradient(objective, g, state, src.t);
+        G_y = assembleObjectiveGradient(objective, g, state, src.t, &G_mu);
         if (fieldModel)
             G_field = Vector::Zero(nField);
         else
@@ -4008,6 +4067,15 @@ void SystemSolver::transposeFieldCoupling()
 void SystemSolver::solveAdjointState()
 {
     ++nAdjointSolves;
+
+    // setFieldModel refuses a field model alongside global scalars, so the two
+    // borders never meet.
+    if (nScalars > 0)
+    {
+        solveBorderedAdjoint();
+        return;
+    }
+
     if (!fieldModel)
     {
         solveTransportAdjoint(G_y, adjoint_squ, adjoint_lambdas);
@@ -4022,6 +4090,58 @@ void SystemSolver::solveAdjointState()
     case FieldSolveMode::Iterative:
         solveCoupledAdjointIterative();
         return;
+    }
+}
+
+// See the declaration for the algebra.
+void SystemSolver::solveBorderedAdjoint()
+{
+    // The cell blocks of a full-length vector, as solveTransportAdjoint takes
+    // its right-hand side: [sigma | q | u | aux] per cell, localDOF long.
+    auto cellBlocks = [&](Vector const &full)
+    {
+        std::vector<Vector> out(nCells);
+        for (Index i = 0; i < nCells; ++i)
+            out[i] = full.segment(i * localDOF, localDOF);
+        return out;
+    };
+
+    // V^T applied to an adjoint state. V is a source coupling, so it lives in
+    // the cells' u rows and the trace part of the state never meets it.
+    auto applyVT = [&](Index s, std::vector<Vector> const &squ)
+    {
+        double out = 0.0;
+        for (Index i = 0; i < nCells; ++i)
+            out += adjoint_scalarV[s].segment(i * localDOF, localDOF).dot(squ[i]);
+        return out;
+    };
+
+    std::vector<Vector> squ0;
+    Vector lam0;
+    solveTransportAdjoint(G_y, squ0, lam0);
+
+    std::vector<std::vector<Vector>> squW(nScalars);
+    std::vector<Vector> lamW(nScalars);
+    for (Index j = 0; j < nScalars; ++j)
+        solveTransportAdjoint(cellBlocks(adjoint_scalarW[j]), squW[j], lamW[j]);
+
+    Matrix S = adjoint_scalarN.transpose();
+    Vector rhs = G_mu;
+    for (Index s = 0; s < nScalars; ++s)
+    {
+        rhs(s) += applyVT(s, squ0);
+        for (Index j = 0; j < nScalars; ++j)
+            S(s, j) += applyVT(s, squW[j]);
+    }
+    adjoint_mu = S.partialPivLu().solve(rhs);
+
+    adjoint_squ = std::move(squ0);
+    adjoint_lambdas = std::move(lam0);
+    for (Index j = 0; j < nScalars; ++j)
+    {
+        for (Index i = 0; i < nCells; ++i)
+            adjoint_squ[i] -= adjoint_mu(j) * squW[j][i];
+        adjoint_lambdas -= adjoint_mu(j) * lamW[j];
     }
 }
 
@@ -4237,7 +4357,11 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     solveJacEq(F, delta);
 
     double const *deltaData = N_VGetArrayPointer(delta);
-    double deltaNorm = 0.0;
+    // The scalars' part of the correction, which an objective reading them sees
+    // through G_mu just as it sees the cells' part through G_y.
+    DGSoln deltaMap(nVars, grid, k, N_VGetArrayPointer(delta), nScalars, nAux, nField);
+    const Vector deltaMu = nScalars > 0 ? Vector(deltaMap.Scalars()) : Vector();
+    double deltaNorm = deltaMu.squaredNorm();
     for (Index i = 0; i < static_cast<Index>(nCells); ++i)
         for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
         {
@@ -4259,9 +4383,11 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
 
         // dG/dy for this objective, from its dg alone: the Jacobian built above
         // is the only one this needs, and it is not transposed.
-        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt);
+        Vector Gmu;
+        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt, &Gmu);
 
-        double dot = 0.0, dGdyNorm = 0.0;
+        double dot = nScalars > 0 ? Gmu.dot(deltaMu) : 0.0;
+        double dGdyNorm = nScalars > 0 ? Gmu.squaredNorm() : 0.0;
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
             {
@@ -4340,7 +4466,7 @@ void SystemSolver::computeAdjointGradients()
     initialised = true;
     for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
     {
-        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt);
+        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu);
         if (fieldModel)
             G_field = Vector::Zero(nField);
         else
@@ -4514,6 +4640,38 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
             }
             else
                 G_p(gIndex, pIndex) -= adjoint_squ[i].transpose() * static_cast<Vector>(F_p);
+        }
+    }
+
+    // The scalar rows' share, -z_mu^T dG_s/dp. Those rows are ScalarG itself,
+    // evaluated as the residual evaluates it, so dG_s/dp takes the same
+    // arguments.
+    if (nScalars > 0)
+    {
+        const GlobalState scalarStates = y.evalOnNodes();
+        const GlobalState scalarStates_dt = dydt.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(y.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(y.getBasis(), grid);
+        const Index np = adjointProblem->getNp();
+        const Index cols = spatial ? nPoints : 1;
+
+        for (Index s = 0; s < nScalars; ++s)
+        {
+            const Matrix dGsdp = adjointProblem->dScalarG_dp(
+                s, scalarStates, scalarStates_dt, y.getPoints(), weights, phiBoundary, jt);
+            if (dGsdp.rows() != np || dGsdp.cols() != cols)
+                throw std::runtime_error(
+                    "Adjoint hook \"dScalarG_dp\" returned a (" + std::to_string(dGsdp.rows()) +
+                    ", " + std::to_string(dGsdp.cols()) + ") array for scalar " +
+                    std::to_string(s) + "; it must be (np, " +
+                    (spatial ? "nPoints" : "1") + ") = (" + std::to_string(np) + ", " +
+                    std::to_string(cols) + ")" +
+                    (spatial ? ", one column per physics node" : ", or a length-np vector") + ".");
+
+            if (spatial)
+                G_p.block(gIndex * nPoints, 0, nPoints, np) -= adjoint_mu(s) * dGsdp.transpose();
+            else
+                G_p.row(gIndex) -= adjoint_mu(s) * dGsdp.transpose();
         }
     }
 }

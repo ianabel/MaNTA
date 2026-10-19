@@ -1661,8 +1661,9 @@ the factorisation: the forward one is of `MX` at the build's `alpha`. So:
   the last build whatever state that was at, and says so
   (`operator_at_state`). `adjoint_state`, `objective_gradient` and
   `objective_sensitivity` (`w = dG/dGamma` per node, for the flux and the
-  sources) read it. Global scalars and `tauScaling = "Diffusive"` are refused:
-  the adjoint operator has never carried the scalar bordering.
+  sources) read it, `adjoint_state` and `objective_gradient` with the scalars'
+  block beside the cells'. `tauScaling = "Diffusive"` is refused: the operator
+  carries no `d tau / dy`.
 * **At the end of a run** the last build is reused only when it was taken at
   exactly the final state -- `memcmp` on the state, the same time and `psi'` --
   which in practice means after `estimateObjective`'s build; otherwise
@@ -1765,6 +1766,41 @@ the C++ base defaults false and `AdjointProblemTests.cpp` asserts as much).
 
 The spatial gradient is exact per node as well as in total, on both node sets,
 pinned in `test_adjoint.py`. Getting there turned up the more general trap below.
+
+**Global scalars border the adjoint as they border the forward solve.**
+`solveTransportJac` solves `[[A, -V], [W^T, N]]`, `v` being the projected
+`dSources_dScalars`, `w` the scalar rows' `dG_s/dy` and `N` their `dG_s/dmu`;
+`solveBorderedAdjoint` solves its transpose. The coupling is cached like the
+field's: `evaluateScalarCoupling` is the physics half (`dSources_dScalars`,
+`ScalarGPrime`), each build keeps its result in `jacobianDerivatives.scalar`
+beside the transport derivatives (and `stateDot`, since `ScalarGPrime` reads
+it), and `assembleAdjointOperator` applies it at `alpha = 0` into storage of the
+adjoint's own -- `v`, `w` and `N_global` keep the forward solve's alpha -- so an
+adjoint on demand still makes no physics call. A record that lacks it is refused
+by name rather than indexed. The gradient gains `-z_mu^T dG_s/dp`, from `AdjointProblem::dScalarG_dp`, which has
+no default: an adjoint problem must say a constraint does not read the
+parameters by returning zeros. The objective's `dG/dmu` is `dg`'s `Scalars`
+entry, already integrated. Without the border the adjoint treats the scalars as
+constants, and the gradient misses the share that comes through them — 2-6% on
+a one-scalar diffusion problem, `mu - int u dx = 0` feeding the source, with `G`
+itself exact.
+
+`test_adjoint_combinations.py` checks every combination of aux, scalars, spatial
+parameters and the superconvergent scheme against finite differences, and its
+fixture is shaped by one trap: **a transposition in the border is invisible
+unless the problem is asymmetric enough to see it.** With one scalar every block
+is 1x1 and a transposed `N` or Schur complement is exact. With two, it was
+*still* exact while the source read both with constant weights (so `V` had rank
+one) and the second constraint weighted `u` by `x`: `u` is symmetric about
+`x = 1/2`, so `int x u = int u / 2`, the same ratio as the source's, and
+`V^T A^-T W` came out symmetric. Hence `mu + x nu` in the source and `x^2` in the
+constraint. Each of the six ways to break the border — no border, `N` for `N^T`,
+swapped Schur indices, no `G_mu`, no `dScalarG_dp`, no `G_mu . delta_mu` in
+`estimateObjective` — fails it, and the on-demand test fails on a build that
+keeps no scalar coupling or an operator that assembles none. The `"Objective"`
+steady test takes the same `G_mu . delta_mu`; the discretisation estimate, whose
+enriched solver records derivatives of its own without the scalars, still
+refuses them.
 
 **The adjoint's `dG/dZ` is `diag(w)`, not the mass matrix, and the difference is
 invisible in every aggregate.** `GFn` reports `G = Σ_m w_m g(Z_m)` — the

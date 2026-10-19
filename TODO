@@ -449,9 +449,9 @@ reason it was not made:
     detectable from the solver: geometry is filled on the states the objective is
     evaluated on (it has to be, or a *physics* hook reads a zero-length vector),
     so a g that reads it gets a correct value and an incomplete derivative. The
-    same standing limit AdjointVectors.cpp records for the absent dgFn_dscalars,
-    and the fix is the same shape: a dg/dgeometry hook with a zero default, plus
-    a Python trampoline for it. Wants an objective that genuinely depends on
+    fix has the shape dG/dmu took for the global scalars, which dg's Scalars
+    entry carries: a dG/dgeometry entry in dg, zero by default, read into
+    G_field. Wants an objective that genuinely depends on
     geometry, checked against a closed form, written first.
 
     d(field residual)/dp. FieldModel has no notion of an adjoint parameter, so

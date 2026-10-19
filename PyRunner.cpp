@@ -605,8 +605,8 @@ AdjointProblem &PyRunner::objectiveProblem() {
 }
 
 py::dict PyRunner::nodalLayout(std::vector<Vector> const &cells,
-                               Vector const &lambda,
-                               Vector const &field) const {
+                               Vector const &lambda, Vector const &field,
+                               Vector const &scalars) const {
   using namespace pybind11::literals;
   const Index nCells = system->nCells, k = system->k;
   const Index nVars = system->nVars, nAux = system->nAux;
@@ -631,7 +631,7 @@ py::dict PyRunner::nodalLayout(std::vector<Vector> const &cells,
                   "q"_a = block(nVars * (k + 1), nVars),
                   "u"_a = block(2 * nVars * (k + 1), nVars),
                   "aux"_a = block(3 * nVars * (k + 1), nAux), "lambda"_a = lam,
-                  "field"_a = field);
+                  "field"_a = field, "scalars"_a = scalars);
 }
 
 void PyRunner::solve_adjoint(std::optional<Index> g) {
@@ -655,7 +655,7 @@ py::dict PyRunner::adjoint_state(Index g) const {
         "No adjoint state for objective " + std::to_string(g) +
         " at the current state: call solve_adjoint() first, and again after "
         "the state moves.");
-  py::dict out = nodalLayout(z->squ, z->lambda, z->field);
+  py::dict out = nodalLayout(z->squ, z->lambda, z->field, z->mu);
   out["operator_at_state"] = z->operatorAtState;
   return out;
 }
@@ -666,10 +666,11 @@ py::dict PyRunner::objective_gradient(Index g) {
     throw std::out_of_range("Objective " + std::to_string(g) +
                             " requested, but the adjoint problem defines " +
                             std::to_string(ap.getNg()) + ".");
+  Vector Gmu;
   const std::vector<Vector> Gy =
-      system->assembleObjectiveGradient(ap, g, system->yJac, system->jt);
+      system->assembleObjectiveGradient(ap, g, system->yJac, system->jt, &Gmu);
   return nodalLayout(Gy, Vector::Zero(system->nVars * (system->nCells + 1)),
-                     Vector::Zero(system->getFieldDOF()));
+                     Vector::Zero(system->getFieldDOF()), Gmu);
 }
 
 py::dict PyRunner::objective_sensitivity(Index g) const {

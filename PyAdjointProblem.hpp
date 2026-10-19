@@ -238,6 +238,15 @@ public:
                      _override(i, states, abscissae).cast<Matrix>(),
                      "dAux in PyAdjointProblem");
   }
+
+  // A length-np vector arrives as (np, 1), which is the non-spatial shape; the
+  // solver checks the shape against spatialParameters.
+  Matrix dScalarG_dp(Index s, GlobalState const &y, GlobalState const &ydot,
+                     std::vector<Position> const &abscissae, Values const &weights,
+                     Matrix const &phiBoundary, Time t) override {
+    PYBIND11_OVERRIDE(Matrix, AdjointProblem, dScalarG_dp, s, y, ydot, abscissae,
+                      weights, phiBoundary, t);
+  }
   void dSigmaFn_dp(Index i, Index pIndex, Value &out, const State &s,
                    Position x) override {
     throw std::runtime_error("Individual derivative functions deprecated; use "

@@ -182,10 +182,11 @@ private:
   // on demand, as G() does.
   AdjointProblem &objectiveProblem();
 
-  // A cellwise [ sigma | q | u | aux ] vector set, a var-major trace vector and
-  // the field block, as the dict adjoint_state and objective_gradient return.
+  // A cellwise [ sigma | q | u | aux ] vector set, a var-major trace vector,
+  // the field block and the global scalars' block, as the dict adjoint_state
+  // and objective_gradient return.
   py::dict nodalLayout(std::vector<Vector> const &cells, Vector const &lambda,
-                       Vector const &field) const;
+                       Vector const &field, Vector const &scalars) const;
 
   // Empty unless constructed from a name. Non-empty is what makes configure()
   // build `pProblem` itself, so it is also the flag distinguishing the two

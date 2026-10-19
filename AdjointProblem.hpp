@@ -98,6 +98,11 @@ public:
   virtual void dgFn_dphi(Index gIndex, VectorRef, const State &s,
                          Position x) = 0;
 
+  // dg/d(state) at every node, for G_y. The one entry that is not pointwise is
+  // out.Scalars(): it is dG/dmu, the derivative of the objective itself with
+  // respect to each global scalar, already integrated -- for g = mu u that is
+  // int u dx, taken with the quadrature G is. It arrives zeroed, which is right
+  // for an objective that does not read the scalars.
   virtual void dg(Index gIndex, GlobalState &out, GlobalState const &states,
                   std::vector<Position> const &abscissae) {
     for (size_t j = 0; j < states.size(); ++j) {
@@ -155,6 +160,30 @@ public:
     // trampoline does.
     throw std::logic_error("nAux > 0 but no G derivative provided");
   };
+
+  // dG_s/dp for the global scalar constraint s: the parameter derivative of
+  // TransportSystem::ScalarG, taking exactly its arguments -- the state on the
+  // k+1 basis nodes, one quadrature weight per node, and phiBoundary.
+  //
+  // (np, 1) when each parameter is one number. With spatialParameters it is
+  // (np, nPoints), column m holding dG_s/d(p at physics node m), the nodes
+  // getPhysicsNodes returns: the same discrete derivative as the rest of G_p,
+  // so whatever weights G_s integrates the parameter with belong in it. A
+  // boundary parameter is one number either way and reports in column 0.
+  //
+  // Required whenever the transport system has global scalars. A constraint
+  // that does not depend on the parameters says so by returning zeros; the
+  // default throws rather than assume it, because a missing term here is a
+  // plausible wrong gradient beside a correct G.
+  virtual Matrix dScalarG_dp(Index s, GlobalState const &y, GlobalState const &ydot,
+                             std::vector<Position> const &abscissae,
+                             Values const &weights, Matrix const &phiBoundary,
+                             Time t) {
+    throw std::logic_error(
+        "The transport system has global scalars, so its adjoint problem must "
+        "provide dScalarG_dp: the derivative of each scalar constraint with "
+        "respect to the parameters (zeros if they do not enter it).");
+  }
 
   virtual std::string getName(Index pIndex) const {
     return "p" + std::to_string(pIndex);

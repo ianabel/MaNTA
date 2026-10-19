@@ -570,6 +570,7 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSources", &AdjointProblem::dSources)
       .def("dAux", &AdjointProblem::dAux)
       .def("dAux_dp", &AdjointProblem::dAux_dp)
+      .def("dScalarG_dp", &AdjointProblem::dScalarG_dp)
       .def("computeUpperBoundarySensitivity",
            &AdjointProblem::computeUpperBoundarySensitivity)
       .def("computeLowerBoundarySensitivity",
