@@ -2281,7 +2281,7 @@ formula, not the operator, if the data cannot tell them apart.
   `python-physics/`, nothing writes output there. `.h5` and `.pkl` are not in the
   pattern list either — the DESC equilibria under `python-physics/stellarator/`
   are expensive, and `python-physics/mirror-plasma/land.pkl` is generated once by
-  `landremann.py` rather than by a run.
+  `landreman.py` rather than by a run.
 * **Unanchored `.gitignore` patterns match at every depth.** The root scratch
   entries (`Plots/`, `runs-for-bhavin/`, `scalar-tests/`, `toy-model/`) are
   written with a leading slash for that reason: unanchored, `toy-model/` also
