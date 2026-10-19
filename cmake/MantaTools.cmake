@@ -142,12 +142,12 @@ endif()
 # /usr/bin/python3 -- so when the distribution moves that symlink to a new
 # release, .venv/bin/python3 follows it while the installed packages stay behind
 # in lib/python3.<old>/site-packages, and every import in the environment fails
-# with "No module named pytest". Naming python3.13 records python3.13, and the
+# with "No module named pytest". Naming python3.14 records python3.14, and the
 # environment survives the upgrade. This is not hypothetical; it happened here.
 #
 # gcovr is not in requirements.txt but `coverage` needs it, so one `venv` leaves
 # every target here runnable.
-set(MANTA_VENV_PYTHON python3.13 CACHE STRING
+set(MANTA_VENV_PYTHON python3.14 CACHE STRING
     "Versioned interpreter used to create MANTA_VENV")
 set(MANTA_VENV_EXTRA gcovr CACHE STRING
     "Extra packages installed into MANTA_VENV alongside requirements.txt")

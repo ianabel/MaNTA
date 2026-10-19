@@ -31,10 +31,10 @@
 // refined cell is one across which dg/dZ varies less. A convergence rate of an
 // inconsistency, not a discretisation order: refining hid it, nothing removed it.
 //
-// The superconvergent branch of initializeMatricesForAdjointSolve already did
-// this correctly (`cwiseProduct(b1)` against the star weights), and
+// The superconvergent branch of assembleObjectiveGradient already did this
+// correctly (`cwiseProduct(b1)` against the star weights), and
 // AdjointProblem::GFn's comment already promised it -- "the same quadrature is
-// what initializeMatricesForAdjointSolve differentiates to build G_y, so the
+// what assembleObjectiveGradient differentiates to build G_y, so the
 // reported objective and the reported gradient are exactly a function and its
 // derivative". This is the plain branch keeping that promise.
 void SystemSolver::DerivativeSubVector(Index, Vector &Vec, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &Y, Index intervalIndex)
@@ -62,7 +62,7 @@ void SystemSolver::DerivativeSubVector(Index, Vector &Vec, Eigen::Ref<Matrix> co
 void SystemSolver::dGdaux_Vec(Index, Vector &Vec, Eigen::Ref<Matrix> const dX_dZ, DGSoln const &Y, Index intervalIndex)
 {
     // One (k+1)-block per auxiliary variable, which is what
-    // initializeMatricesForAdjointSolve sizes its vectors for.
+    // assembleObjectiveGradient sizes its vectors for.
     assert(Vec.size() == nAux * (k + 1));
 
     Interval const &I(grid[intervalIndex]);

@@ -19,7 +19,7 @@ public:
   // G = int I_h[g] dx, with g evaluated at the k+2 star nodes (u -> u*) and its
   // P_{k+1} interpolant integrated exactly: that is b1 . g, where b1 holds the
   // star basis's integration weights. The same quadrature is what
-  // SystemSolver::initializeMatricesForAdjointSolve differentiates to build G_y,
+  // SystemSolver::assembleObjectiveGradient differentiates to build G_y,
   // so the reported objective and the reported gradient are exactly a function and
   // its derivative -- which is what makes the finite-difference check in
   // python/Tests/test_adjoint.py meaningful rather than merely close.

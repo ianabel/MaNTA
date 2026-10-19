@@ -451,6 +451,19 @@ Adjoints and superconvergence
      - Build the adjoint problem from the physics case and solve for
        :math:`\mathrm{d}G/\mathrm{d}p` after the forward integration. See
        :doc:`adjoints`.
+   * - ``WriteAdjoints``
+     - ``false``
+     - Write :math:`G`, :math:`\mathrm{d}G/\mathrm{d}p` and each objective's
+       adjoint state into the netCDF output at the end of the run. Requires
+       ``solveAdjoint``; written only with ``WriteOutput``. See :doc:`adjoints`.
+   * - ``EstimateDiscretisationError``
+     - ``false``
+     - With the objective estimate at the end of each steady solve, also estimate
+       each objective's discretisation error and its per-cell contributions, on
+       a discretisation two degrees richer over the same mesh. One physics and one
+       derivative evaluation at the enriched nodes per estimate. Requires
+       ``solveAdjoint`` and ``EstimateObjectiveOnFinish``, and is refused under a
+       time march. See :ref:`discretisation-estimate`.
    * - ``Superconvergent``
      - ``false``
      - Switch the residual and Jacobian to the superconvergent interpolatory
@@ -471,9 +484,10 @@ Adjoints and superconvergence
        See :ref:`degree-adaptation`.
    * - ``DegreeTolerance``
      - ``1e-6``
-     - Target for ``DegreeAdaptation``: the estimated :math:`L^2` error relative
-       to the solution's own :math:`L^2` norm, worst variable, floored by
-       ``Absolute_tolerance``.
+     - Target for ``DegreeAdaptation`` under the solution target: the estimated
+       :math:`L^2` error relative to the solution's own :math:`L^2` norm, worst
+       variable, floored by ``Absolute_tolerance``. Refused under
+       ``AdaptationTarget = "Objective"``, whose target is ``ObjectiveTolerance``.
    * - ``MaxPolynomialDegree``
      - ``10``
      - Ceiling on the degree ``DegreeAdaptation`` may reach. Reaching it warns
@@ -488,7 +502,19 @@ Adjoints and superconvergence
      - ``10``
      - How much error one extra degree is assumed to buy, in
        :math:`\Delta k = \lceil \log_b(E/\epsilon) \rceil`. Between 10 and 100;
-       larger is more aggressive and so asks for fewer degrees.
+       larger is more aggressive and so asks for fewer degrees. 10 is the
+       cheapest measured for either target; see :ref:`adaptivity-objective`.
+   * - ``AdaptationTarget``
+     - ``"Solution"``
+     - What ``DegreeAdaptation`` and ``MeshAdaptation`` adapt to. ``"Solution"``:
+       the degree to ``DegreeTolerance`` on :math:`u^* - u_h`. ``"Objective"``:
+       the degree until every objective's estimated discretisation error is
+       within the discretisation share of ``ObjectiveTolerance``, and the mesh
+       graded, where the modal decay says, only if the sample does not meet that
+       already. ``"Objective"``
+       needs ``solveAdjoint``, turns ``EstimateDiscretisationError`` on, and makes
+       ``"Objective"`` the default ``SteadyStateTest``. Refused without one of the
+       two drivers. See :ref:`adaptivity-objective`.
    * - ``RebuildPhysicsOnRegrid``
      - ``false``
      - Let an adaptation driver destroy the physics case and build a new instance
@@ -510,6 +536,56 @@ Adjoints and superconvergence
        controllers never choose or fill a level past it, and a configured level
        past it is refused before its first evaluation. 0 sets no cap. See
        :ref:`adaptivity-batch-cap`.
+
+.. _objective-tolerance-config:
+
+Stopping on an objective
+------------------------
+
+Read under ``SteadyStateTest = "Objective"`` and ``AdaptationTarget =
+"Objective"``, both of which need ``solveAdjoint``: the objectives are the ones
+the case's adjoint problem defines. The steady test spends the algebraic share
+and the adaptation target the discretisation share. Under neither the three keys
+are refused, since they would change nothing. See :ref:`objective-steady-test`
+for the test and :ref:`adaptivity-objective` for the adaptation.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 12 62
+
+   * - Key
+     - Default
+     - Meaning
+   * - ``ObjectiveTolerance``
+     - ``1e-3``
+     - The accuracy asked of each objective :math:`G`, relative to :math:`|G|`:
+       a number for every objective, or an array with one per objective. An
+       array's length must be the adjoint problem's number of objectives, which
+       is checked when the solve starts.
+   * - ``ObjectiveAbsoluteTolerance``
+     - ``0.0``
+     - The floor under it, in the objective's own units, for an objective near
+       zero: the tolerance is :math:`\max(\epsilon\,|G|, \epsilon_\mathrm{abs})`.
+       A number or an array, as above. With no floor, an objective that is zero
+       at the answer asks for an accuracy no solve resolves, and the solve ends
+       ``Stalled``.
+   * - ``ObjectiveBudget``
+     - ``[0.5, 0.5]``
+     - How the tolerance is divided between the discretisation error and the
+       algebraic error, as ``[discretisation, algebraic]``: non-negative,
+       summing to 1. The steady test spends the algebraic share; the
+       discretisation share bounds the error of the discrete fixed point against
+       the continuum, which ``EstimateDiscretisationError`` estimates and
+       ``AdaptationTarget = "Objective"`` adapts to. Each needs its own share to
+       be positive.
+
+.. warning::
+
+   **Only the named objectives are controlled.** The solve stops when they are
+   converged, and anything else the run reports — the profiles themselves, a
+   flux, a second quantity read off the answer — may be less converged than
+   ``SteadyStateTest = "NewtonStep"`` would leave it. Name every output that
+   matters as an objective.
 
 Coupling to a magnetic-field model
 ----------------------------------

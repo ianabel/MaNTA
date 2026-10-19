@@ -641,9 +641,16 @@ The kinds, for :math:`N` cells at degree :math:`k`:
      - as ``Residual``
      - per Jacobian build
    * - ``Adjoint``
-     - ``ComputePhysicsDerivatives``, one call per objective
+     - ``ComputePhysicsDerivatives``
      - as ``Residual``
-     - per adjoint solve, including the objective estimate a steady solve makes
+     - at most once, for the adjoint at the end of a run, when the last Jacobian
+       build was not at the final state
+   * - ``DiscretisationEstimate``
+     - ``ComputePhysics`` and ``ComputePhysicsDerivatives``
+     - :math:`N(k+3)`, or :math:`N(k+4)` superconvergent: the nodes of the basis
+       two degrees beyond the physics interpolation
+     - only with ``EstimateDiscretisationError``: once per objective estimate,
+       at the end of each steady solve or slice
    * - ``InitialProjection``
      - pointwise ``InitialValue``, ``InitialDerivative``, ``InitialAuxValue``
      - :math:`30N` Gauss points
@@ -655,8 +662,9 @@ The kinds, for :math:`N` cells at degree :math:`k`:
 
 Five cells at :math:`k = 4` therefore hand ``ComputePhysics`` batches of 25
 points, and ``ComputePhysicsDerivatives`` batches of 25 — plus 10 with a Diffusive
-tau. With ``Superconvergent`` the residual, Jacobian and adjoint batches become 30
-while the initial condition stays at 25. ``plan.batchSizes(entry)`` lists the
+tau, and 35 for the discretisation estimate. With ``Superconvergent`` every
+batch at the cells' physics nodes becomes 30, the initial condition's included,
+since it samples where the residual does, and the estimate's 40. ``plan.batchSizes(entry)`` lists the
 distinct shapes of an entry; ``plan.points(kind)`` the abscissae of a kind.
 
 **A cadence is not a count.** How many residuals or Jacobian builds a run takes is

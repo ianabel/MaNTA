@@ -298,9 +298,43 @@ class SystemSolver
         // distance to the solution per component, in units of the run's own
         // tolerances. docs/superpowers/specs/2026-10-11-steady-state-termination-
         // design.md has the measurements behind both claims.
-        enum class SteadyTest { Residual, NewtonStep };
+        //
+        //  * Objective: NewtonStep's continuation, with the undamped solve
+        //    stopped on the objectives instead of on the whole solution: when
+        //    |z^T F|, the dual-weighted estimate of how far each G is from its
+        //    value at the fixed point, is within the algebraic share of
+        //    ObjectiveTolerance for every objective. With J^T z = dG/dy that is
+        //    (dG/dy) J^-1 F, the change in G the iteration's own Newton
+        //    correction makes, so the test costs the objective's dg and a dot
+        //    product, and asks the case for nothing. It controls only the named
+        //    objectives: anything else the run reports may be less converged
+        //    than NewtonStep would leave it.
+        //    docs/superpowers/specs/2026-10-17-objective-error-control-design.md.
+        enum class SteadyTest { Residual, NewtonStep, Objective };
         void setSteadyTest(SteadyTest test) { steadyTest = test; };
         SteadyTest getSteadyTest() const { return steadyTest; };
+
+        // The accuracy asked of each objective under SteadyTest::Objective:
+        //
+        //     eps_g = max( relative_g |G_g|, absolute_g )
+        //
+        // with G_g at the iterate being tested. Each list is one value for every
+        // objective or one per objective; which is checked against the
+        // objective's ng when a solve starts, since only then is it attached.
+        void setObjectiveTolerance(std::vector<double> relative, std::vector<double> absolute);
+
+        // How eps_g is divided between the two parts of the error in G: the
+        // discretisation's (G at the discrete fixed point against the continuum)
+        // and the algebraic one (the solve stopping before that fixed point). The
+        // steady test spends the algebraic share; the discretisation share is
+        // for the estimate of the other part. Non-negative, summing to one.
+        void setObjectiveBudget(double discretisation, double algebraic);
+        std::vector<double> const &getObjectiveTolerance() const { return objectiveRelTol; };
+        std::vector<double> const &getObjectiveAbsoluteTolerance() const { return objectiveAbsTol; };
+        std::pair<double, double> getObjectiveBudget() const
+        {
+            return {objectiveBudgetDiscretisation, objectiveBudgetAlgebraic};
+        };
 
         // epsNewt for the NewtonStep test. 0.33 is IDA's corrector constant
         // (ida.c, epcon); IDACalcIC uses a hundredth of it.
@@ -351,10 +385,9 @@ class SystemSolver
         // A solve stops when ||F|| is small, not when G is: an optimisation sweep
         // comparing G at two parameter points needs to know how much of the
         // difference is the answer moving and how much is each solve stopping
-        // short. Both quantities that answer it are already assembled -- dG/dy is
-        // G_y, which initializeMatricesForAdjointSolve builds per objective, and
-        // the Newton step to the solution is J^-1 F from the matrix the solve has
-        // already factorised -- so
+        // short. Both quantities that answer it are cheap -- dG/dy needs only the
+        // objective's own dg (assembleObjectiveGradient), and the Newton step to
+        // the solution is J^-1 F from one residual and one Jacobian build -- so
         //
         //     corrected   = value - (dG/dy) . J^-1 F
         //     uncertainty = ||dG/dy|| ||J^-1 F||
@@ -376,12 +409,53 @@ class SystemSolver
         // abandoned outright, SolverFailed, which throws. So a caller that
         // catches can still tell a solve that ran out of budget -- a partial
         // answer, and often a usable one -- from one that failed.
+        //
+        // SteadyTest::Objective adds a fifth, Stalled, which returns: the Newton
+        // correction reached round-off in the run's error weights with an
+        // objective's estimate still above its tolerance. The state is as
+        // converged as the iteration can make it, and the tolerance is below
+        // what it can resolve -- an objective at zero with no absolute floor is
+        // the ordinary way to ask for that.
         enum class SteadyOutcome
         {
             NotRun,
             Converged,
             OutOfSteps,
             SolverFailed,
+            Stalled,
+        };
+
+        // The discretisation error of each objective at a state: an estimate of
+        // G_h - G, the objective the discretisation converges to at this level
+        // (the fixed point of its discrete equations) minus the continuum one.
+        // See estimateDiscretisationError for how, and docs/adjoints.rst for
+        // the derivation and the measured effectivity.
+        //
+        // `total` is the sum of three parts, kept for diagnosis:
+        //
+        //     total = residual + quadrature - algebraic
+        //
+        //  * residual:   z+ . F_e(U~), the enriched residual of the state tested
+        //                against an improved adjoint -- G(U~) - G(u) to first
+        //                order, with G the exact integral of g;
+        //  * quadrature: G_h(u_h) - G_e(U~), what the objective's own quadrature
+        //                leaves out, from its rule at the enriched nodes;
+        //  * algebraic:  (dG/dy) . delta = z_h^T F_h(u_h) for the Newton
+        //                correction delta, the algebraic error the residual part
+        //                also carries -- removed because it is what
+        //                ObjectiveEstimate::corrected already subtracts.
+        //
+        // So `total` estimates corrected - G(u), and G(u) ~ corrected - total.
+        //
+        // `perCell` is (ng x nCells): eta_K, the same three parts restricted to
+        // cell K, each face's trace rows shared equally between the cells on
+        // either side of it. Each row sums to `total` up to round-off.
+        struct DiscretisationEstimate
+        {
+            Vector total;
+            Matrix perCell;
+            Vector residual, quadrature, algebraic;
+            bool valid = false;
         };
 
         struct ObjectiveEstimate
@@ -390,6 +464,10 @@ class SystemSolver
             Vector corrected;    // G extrapolated to the fixed point
             Vector uncertainty;  // bound on |corrected - value|, and on the error left
             bool valid = false;  // false when there is no AdjointProblem to ask
+
+            // With EstimateDiscretisationError on, the discretisation error of
+            // `corrected`; invalid otherwise.
+            DiscretisationEstimate discretisation;
         };
 
         struct SteadyStepStats
@@ -417,6 +495,13 @@ class SystemSolver
             double relaxation = 1.0;     // NewtonStep: the fraction of a damped step's correction applied
             double correctionNorm = std::numeric_limits<double>::quiet_NaN();
             double correctionTest = std::numeric_limits<double>::quiet_NaN();
+
+            // Objective only: max over the objectives of |z^T F| / (algebraic
+            // share of eps_g) at the step's last undamped iteration -- the number
+            // compared with 1. And the adjoint solves the step made, which is
+            // none under every test; see SteadyStats::adjointSolves.
+            double objectiveTest = std::numeric_limits<double>::quiet_NaN();
+            long adjointSolves = 0;
         };
 
         // What one steady solve cost. The two halves are gathered differently
@@ -455,6 +540,21 @@ class SystemSolver
             double correctionNorm = std::numeric_limits<double>::quiet_NaN();
             double correctionTest = std::numeric_limits<double>::quiet_NaN();
 
+            // Adjoint solves made inside the solve, one objective each
+            // (solveAdjointState calls). Zero: the Objective test reads the
+            // change in G off the Newton correction rather than solving for z,
+            // and this is counted so that it stays zero.
+            long adjointSolves = 0;
+
+            // SteadyTest::Objective's verdict at the last undamped iteration: per
+            // objective, the estimate |z^T F| of how far G there is from its value
+            // at the fixed point, and the algebraic share of eps_g it was held to;
+            // and the larger ratio of the two, which is at most 1 on convergence.
+            // Empty and NaN otherwise.
+            Vector objectiveError;
+            Vector objectiveTolerance;
+            double objectiveTest = std::numeric_limits<double>::quiet_NaN();
+
             // Fold one finished continuation step into the totals. The KINSOL
             // fields are the only ones that must come through here: the three
             // MaNTA counters are differenced over the whole solve as well, so
@@ -470,6 +570,7 @@ class SystemSolver
         void readKinStats(SteadyStepStats &s) const;
         void reportSteadyStep(SteadyStepStats const &s) const;
         void reportSteadyStats(std::string_view outcome, SteadyStats const &s) const;
+        void reportObjectiveEstimate(ObjectiveEstimate const &e) const;
 
         // What the last steady solve cost, whether or not it was printed and
         // whether or not it converged -- a failed solve fills this in before
@@ -487,6 +588,129 @@ class SystemSolver
         // What estimateObjective() last reported, filled at the end of a steady
         // solve. Invalid when the run had no AdjointProblem.
         ObjectiveEstimate lastObjectiveEstimate() const { return objectiveEstimate; };
+
+        // ---- The discretisation estimate.
+        //
+        // The improved adjoint z+ the residual part is tested against:
+        //
+        //  * Enriched: the adjoint solved again on the enriched solver, from the
+        //    physics derivatives at the enriched nodes. What the estimate uses.
+        //  * Postprocessed: the discrete adjoint z_h, its u block replaced by the
+        //    reconstruction Postprocessor applies to a solution, with z_sigma in
+        //    the role q plays there: the adjoint's sigma column makes z_sigma the
+        //    weak derivative of z_u. It saves the derivative evaluation and the
+        //    enriched solve, and measured erratic -- on the plain scheme's
+        //    manufactured problems, within 10% of the true error in 67% of the
+        //    cases against the enriched adjoint's 95% -- so it is kept only as
+        //    the comparison DiscretisationEstimateTests measures; see
+        //    docs/adjoints.rst.
+        enum class DiscretisationAdjoint
+        {
+            Enriched,
+            Postprocessed,
+        };
+
+        // The discretisation error of every objective at `state`, given the
+        // Newton correction delta = J^-1 F there (alpha = 0, zero dydt), which
+        // the algebraic part is read off.
+        //
+        // The state is lifted into the enriched space, degree k +
+        // enrichmentIncrement() -- u_h, or u* under the superconvergent scheme,
+        // whose objective is a functional of u* -- and the residual's transport
+        // rows are assembled there from the physics at the enriched nodes; the
+        // enriched adjoint comes from the derivatives there. One ComputePhysics
+        // and one ComputePhysicsDerivatives at nCells * (k + increment + 1)
+        // points: the DiscretisationEstimate sites of the evaluation plan, which
+        // lists them only on a solver configured to estimate
+        // (setEstimateDiscretisationError), so this refuses any other.
+        //
+        // Also refused with global scalars, a field model, a non-constant tau,
+        // and at k = 0.
+        DiscretisationEstimate estimateDiscretisationError(AdjointProblem &objective,
+                                                           DGSoln const &state,
+                                                           DGSoln const &delta, Time tEval);
+
+        // Whether estimateObjective() also estimates the discretisation error,
+        // the EstimateDiscretisationError key.
+        void setEstimateDiscretisationError(bool on) { estimateDiscretisation = on; };
+        bool getEstimateDiscretisationError() const { return estimateDiscretisation; };
+
+        // ---- The adjoint on demand.
+        //
+        // One objective's adjoint state z, with J^T z = dG/dy, in the solution
+        // vector's own layout: per cell [ sigma | q | u | aux ], then lambda
+        // variable-major over the nCells + 1 faces, then the field DOFs. G_y and
+        // G_field are the right-hand side it was solved against, in the same
+        // layout; dG/dy has no trace block, so there is no lambda entry to keep.
+        struct AdjointSolution
+        {
+            std::vector<Vector> squ;
+            Vector lambda;
+            Vector field;
+            std::vector<Vector> G_y;
+            Vector G_field;
+            // Whether the operator was built at the state the right-hand side was
+            // taken at. False when it is the last Jacobian build's and that
+            // build was at an earlier iterate -- see solveAdjointAt.
+            bool operatorAtState = false;
+        };
+
+        // Solve J^T z = dG/dy for each objective in `objectives`, at `state`,
+        // and keep the answers for adjointSolution().
+        //
+        // **This makes no physics call.** The operator is dF/dy at alpha = 0,
+        // assembled from the physics derivatives the last Jacobian build took --
+        // the same blocks updateMatricesForJacSolve assembled, transposed -- so
+        // the case is not asked for anything. The only hooks called are the
+        // objective's own: AdjointProblem::dg, once per objective, for the
+        // right-hand side (and, with a field model, the model's geometry and
+        // its B factorisation). Requires a build to reuse, so it refuses a
+        // solver that has never built a Jacobian.
+        //
+        // The operator is exact when that build was at `state`: a run whose
+        // adjoint was solved at its end (solveAdjoint), and a steady solve that
+        // estimated its objective on the way out, both leave one there. Between
+        // Newton iterations, or after a run that did neither, it is the last
+        // build's -- the Jacobian at an earlier iterate, against dG/dy at this
+        // one -- and AdjointSolution::operatorAtState says so.
+        //
+        // Refused with global scalars, whose bordering the adjoint operator does
+        // not carry, and under a non-constant tau, whose d tau/dy it does not.
+        void solveAdjointAt(AdjointProblem &objective, std::vector<Index> const &objectives,
+                            DGSoln const &state);
+
+        // What the last adjoint solve left for objective g -- solveAdjointAt's,
+        // or the end-of-run one computeAdjointGradients makes -- provided it was
+        // solved at `state`. nullptr otherwise, including after the state has
+        // moved on.
+        AdjointSolution const *adjointSolution(Index g, DGSoln const &state) const;
+
+        // dG/dy for objective gIndex at `state`, per cell in the [ sigma | q | u
+        // | aux ] layout: G_y, the adjoint's right-hand side. Calls only the
+        // objective's dg, at the physics nodes physicsNodesAt gives -- u* on the
+        // star nodes under the superconvergent scheme, so that this is the exact
+        // derivative of the objective GFn reports.
+        std::vector<Vector> assembleObjectiveGradient(AdjointProblem &objective, Index gIndex,
+                                                      DGSoln const &state, Time tEval);
+
+        // w = dG/dGamma: how the objective moves with the physics outputs Gamma
+        // at each physics node -- the flux sigma_hat the case returns, and its
+        // sources -- per variable. The residual reads both linearly, through the
+        // test-space projection P (the cell mass matrix on the k+1 basis nodes,
+        // A9 on the k+2 star nodes under the superconvergent scheme):
+        //
+        //     sigma row:  + P Gamma_flux     =>  w_flux    = -P^T z_sigma
+        //     u row:      - P Gamma_source   =>  w_sources = +P^T z_u
+        //
+        // from w = -z^T dF/dGamma. Rows are variables, columns physics nodes, in
+        // the order `points` lists them. No physics call.
+        struct ObjectiveSensitivity
+        {
+            std::vector<Position> points;
+            Matrix flux;
+            Matrix sources;
+        };
+        ObjectiveSensitivity objectiveSensitivity(AdjointSolution const &z) const;
 
         // Why the last steady solve stopped. Set before either failure path
         // throws, so it survives being caught.
@@ -973,6 +1197,16 @@ class SystemSolver
         void setJacEvalY( N_Vector, N_Vector );
         int residual(sunrealtype, N_Vector, N_Vector, N_Vector);
 
+        // The transport rows of the residual -- trace rows and every cell's
+        // sigma, q, u and aux rows -- from physics values already evaluated at
+        // this solver's physics nodes. residual() is this plus the physics call
+        // and the scalar and field rows; the discretisation estimate assembles
+        // the same rows on its enriched solver from values it evaluated itself.
+        // Expects the trace rows of `res` zeroed and the boundary data current
+        // (updateBoundaryConditions).
+        void assembleTransportResidual(DGSoln const &Y_h, DGSoln const &dYdt_h,
+                                       PhysicsOutput const &values, DGSoln &res);
+
         // Couple this solver to a magnetic-field model, whose unknowns join the
         // solution vector after the global scalars and whose geometry reaches
         // the physics through State::geom.
@@ -1074,8 +1308,19 @@ class SystemSolver
         // Adjoints
         void setSolveAdjoint(bool a) { solveAdjoint = a; }
 
+        // Write each objective's adjoint state beside the solution, and G and
+        // G_p, into the netCDF output at the end of the run. Needs solveAdjoint
+        // and WriteOutput; applySolverConfig refuses it without the first.
+        void setWriteAdjoints(bool w) { writeAdjoints = w; }
+        bool getWriteAdjoints() const { return writeAdjoints; }
+
         void initializeMatricesForAdjointSolve(Index gIndex = 0);
 
+        // The adjoint operator, and dG/dy for objective gIndex, at the state the
+        // solver is in (y, jt). The derivatives are the last Jacobian build's
+        // when it was taken at that state, and evaluated afresh -- once, not
+        // per objective -- when it was not; see adjointDerivativesAt.
+        //
         // Solve J^T z = dG/dy at the state the matrices above were built from.
         // Dispatches on whether a field model is attached, exactly as solveJacEq
         // does forwards: without one this *is* solveTransportAdjoint.
@@ -1199,8 +1444,8 @@ class SystemSolver
         // Hoisted out of solveAdjointState because the coupled paths apply A^-T
         // repeatedly -- nField + 1 times for the exact Schur complement, once
         // per sweep for the iterative one -- and neither of these depends on the
-        // right-hand side. Filled by initializeMatricesForAdjointSolve, which is
-        // also the only place MXSolvers holds M^T.
+        // right-hand side. Filled by assembleAdjointOperator, from the M^T
+        // factorisations it keeps in adjointMXSolvers.
         std::vector<Matrix> adjoint_SQU_0;
 
 
@@ -1351,6 +1596,53 @@ class SystemSolver
         bool measureSteadyCorrection = false;
         void solveSteadyStateNewtonStep(bool resume);
 
+        // SteadyTest::Objective. The tolerances and the budget as configured;
+        // see setObjectiveTolerance and setObjectiveBudget.
+        std::vector<double> objectiveRelTol{1.0e-3};
+        std::vector<double> objectiveAbsTol{0.0};
+        double objectiveBudgetDiscretisation = 0.5;
+        double objectiveBudgetAlgebraic = 0.5;
+
+        // Whether the iteration under way is one the objective test judges: an
+        // undamped solve under SteadyTest::Objective. Damped continuation is
+        // judged by nothing -- each step is one iteration taken as it stands --
+        // and estimates nothing, since far from the fixed point a first-order
+        // estimate of the distance to it means little.
+        bool objectiveTestActive() const
+        {
+            return steadyTest == SteadyTest::Objective && !nlsSingleIteration;
+        }
+
+        // The refusals, made when a solve starts: no objective attached, global
+        // scalars or a non-constant tau (which the adjoint operator does not
+        // carry), and tolerance lists that are neither one value nor one per
+        // objective.
+        void checkObjectiveTest() const;
+
+        // The algebraic share of eps_g for objective g, given its value G there.
+        double objectiveAlgebraicTolerance(Index g, double G) const;
+
+        // The estimate at the iterate nlsU, from the Newton correction the
+        // iteration has just solved for there: |(dG/dy) . correction| = |z^T F|
+        // per objective, against each objective's tolerance. Calls the
+        // objective's dg and GFn, and nothing of the case's. Fills the three
+        // below.
+        void estimateObjectiveError(N_Vector correction);
+        double nlsObjectiveTest = std::numeric_limits<double>::quiet_NaN();
+        double nlsObjectivePrevTest = std::numeric_limits<double>::quiet_NaN();
+        Vector nlsObjectiveError;
+        Vector nlsObjectiveTolerance;
+        // Set when the iteration stopped moving with the test unmet; the solve
+        // then ends Stalled.
+        bool nlsObjectiveStalled = false;
+
+        // nlsConvTest's verdict under the objective test. `trusted` says whether
+        // the iteration is far enough into Newton's regime for a first-order
+        // estimate to mean what it says, `stoppedMoving` whether the correction
+        // is at round-off in the error weights.
+        int objectiveVerdict(bool trusted, bool stoppedMoving);
+        bool objectiveStalled(double correctionTest, double tol) const;
+
         // One SUNNonlinSol solve from Y at the current ptcStep, which is
         // infinite for an undamped one. On success Y holds the converged
         // iterate, which -- as in IDA -- is never evaluated. Fills the NewtonStep
@@ -1429,6 +1721,7 @@ class SystemSolver
         long nResidualEvals = 0;
         long nJacBuilds = 0;
         long nJacSolves = 0;
+        long nAdjointSolves = 0;   // solveAdjointState calls, one objective each
         bool steadyDiagnostics = false;
         bool steadyStepDiagnostics = false;
         SteadyStats steadyStats;
@@ -1498,6 +1791,118 @@ class SystemSolver
         // it -- A sigma = -( sigma_hat, phi )_K -- so that row holds exactly.
         void assignSigmaFromFlux(DGSoln &Y, Time tEval);
 
+        // ---- What the adjoint operator is assembled from.
+        //
+        // The field coupling's three blocks as FieldResidualPrime and the
+        // geometry chain report them, before alpha is applied. A1 does not
+        // depend on alpha; A2 and B do, which is why the forward Jacobian and
+        // the adjoint (at alpha = 0) apply one evaluation differently.
+        struct FieldCouplingDerivatives
+        {
+            GlobalStateMatrix dR{0}, dRdot{0};
+            Matrix dRdpsi, dRddpsidt;
+            std::vector<Matrix> A1;
+        };
+
+        // The physics derivatives at one state and time: everything
+        // updateMatricesForJacSolve reads from the case, kept so that the
+        // adjoint operator -- the same blocks at alpha = 0, transposed -- can be
+        // assembled again without asking the case for anything. `state` is the
+        // flat solution vector they were taken at, kept to say bit for bit
+        // whether a later state is the same one.
+        struct PhysicsDerivatives
+        {
+            bool valid = false;
+            std::vector<double> state;
+            std::vector<double> stateDot;   // with a field model only: its rows read psi'
+            Time t = 0.0;
+            double alpha = 0.0;   // what the forward build applied; see applyFieldCoupling
+            GlobalStateMatrix dSigma{0}, dSource{0}, dAux{0};
+            FieldCouplingDerivatives field;
+
+            bool isAt(DGSoln const &Y, Time tEval) const;
+        };
+
+        // Every updateMatricesForJacSolve's, moved here once its blocks are
+        // factorised. What solveAdjointAt reuses.
+        PhysicsDerivatives jacobianDerivatives;
+
+        bool estimateDiscretisation = false;
+
+        // The two choices the discretisation estimate makes, as members rather
+        // than arguments so that evaluationPlanFor reads the same ones the
+        // estimate does: the enriched degree's increment over k (0 for the
+        // default, see enrichmentIncrement) and which improved adjoint it tests
+        // against. Measured in DiscretisationEstimateTests.cpp, where the other
+        // values are set; nothing else changes them.
+        unsigned int discretisationIncrement = 0;
+        DiscretisationAdjoint discretisationAdjoint = DiscretisationAdjoint::Enriched;
+        unsigned int enrichmentIncrement() const
+        {
+            return discretisationIncrement > 0 ? discretisationIncrement
+                                               : (superconvergent ? 3 : 2);
+        }
+
+        // The degree-(k + increment) solver the discretisation estimate
+        // assembles its enriched residual and, for DiscretisationAdjoint::Enriched,
+        // its adjoint on: the same case, grid, tau and boundary conditions, plain
+        // rather than superconvergent, built on first use and kept. It never runs
+        // -- no SUNDIALS objects, no initialize() -- and its initialiseMatrices
+        // skips aFn (massFromHook), so building it asks the case for nothing.
+        std::unique_ptr<SystemSolver> enrichedSolver;
+        bool massFromHook = true;
+        // Per cell, the lift into the enriched nodal basis: the degree-k basis,
+        // and the degree-(k+1) star basis, evaluated at the enriched nodes.
+        std::vector<Matrix> liftFromBasis, liftFromStar;
+        SystemSolver &enrichedSolverFor(unsigned int increment);
+        // The end-of-run adjoint's, when the last build was not at the final
+        // state. Kept apart from the above so the forward field blocks can still
+        // be put back from it.
+        PhysicsDerivatives adjointDerivatives;
+
+        // The derivatives at (Y, tEval) for the end-of-run adjoint: the last
+        // build's when it was taken there, bit for bit, and otherwise one
+        // ComputePhysicsDerivatives at that state -- the Adjoint site of the
+        // evaluation plan. Ydot is the field rows' psi', as the forward
+        // coupling is handed it. A case whose sources read du/dt is always
+        // evaluated afresh, since a build carries its own udot and the adjoint
+        // is defined at none.
+        PhysicsDerivatives &adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEval);
+
+        // Assemble M^T per cell from src at alpha = 0, factorise it into
+        // adjointMXSolvers, the transposed trace operator, and with a field model
+        // A1^T and A2^T. The transposed copy of assembleCellMatrix: the two must
+        // be kept in step block for block. No physics call.
+        void assembleAdjointOperator(PhysicsDerivatives &src);
+
+        // Keep what solveAdjointState just left, for adjointSolution().
+        void storeAdjointSolution(Index gIndex, DGSoln const &state, bool operatorAtState);
+
+        // The physics and field-model half of the field coupling, and the half
+        // that writes it into A1_cellwise, a2 and the model's B at a given alpha.
+        // assembleFieldCoupling is the two in sequence.
+        FieldCouplingDerivatives evaluateFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                                       PhysicsNodes const &nodes, Time tEval);
+        void applyFieldCoupling(FieldCouplingDerivatives const &d, double alphaValue);
+
+        // True once an adjoint operator has written its alpha = 0 field blocks
+        // over the forward Jacobian's. solveJacEq puts the forward ones back from
+        // jacobianDerivatives before using them, so an adjoint solve between two
+        // forward ones -- between slices of a steady solve, say -- does not
+        // change the forward solve.
+        bool fieldBlocksHoldAdjoint = false;
+
+        // M^T per cell, factorised. Kept apart from MXSolvers so that an adjoint
+        // solve leaves the forward Jacobian's factorisation as it found it.
+        std::vector<EigenCellwiseSolver> adjointMXSolvers;
+
+        // What adjointSolution() returns: one entry per objective, and the state
+        // they were solved at.
+        std::vector<std::optional<AdjointSolution>> adjointSolutions;
+        std::vector<double> adjointSolutionState;
+
+        bool writeAdjoints = false;
+
         // The variables' time derivatives sampled on the nodes the physics is
         // evaluated at, or an *empty* matrix when no variable's source reads
         // them -- which is what GlobalState::setVariableDot takes to mean "do
@@ -1526,8 +1931,8 @@ class SystemSolver
         // forward solve, and 0 where dF/dy alone is wanted, which is what makes
         // it shareable with anything that needs dF/dy alone. It is the *only*
         // place this block layout is written down for the forward direction;
-        // initializeMatricesForAdjointSolve holds the transposed copy and has to
-        // be kept in step with it block for block.
+        // assembleAdjointOperator holds the transposed copy and has to be kept
+        // in step with it block for block.
         // dSourceDot_vals is dS/d(udot), and enters weighted by alphaValue
         // beside the mass term. An empty one -- which is what
         // evaluatePhysicsDerivatives leaves when no variable declares
@@ -1595,11 +2000,11 @@ class SystemSolver
         // the objective has no trace dependence (AdjointProblem::dg reports four
         // blocks, none of them lambda), and neither has A2 -- a field residual
         // is handed a GlobalState, which has no trace slot at all.
-        // initializeMatricesForAdjointSolve *checks* the second of those rather
-        // than assuming it.
+        // transposeFieldCoupling *checks* the second of those rather than
+        // assuming it.
         //
         // Needs adjoint_SQU_0 and adjoint_K, so only meaningful after
-        // initializeMatricesForAdjointSolve.
+        // assembleAdjointOperator.
         void solveTransportAdjoint(std::vector<Vector> const &rhs,
                                    std::vector<Vector> &squOut, Vector &lambdaOut);
 

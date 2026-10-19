@@ -62,6 +62,7 @@ struct SolverConfig
     int                      OutputPoints;
     std::string              OutputFilename;
     bool                     solveAdjoint;
+    bool                     WriteAdjoints;
     bool                     WriteOutput;
     bool                     WriteDatFile;
     bool                     WriteDebugDatFiles;
@@ -75,12 +76,20 @@ struct SolverConfig
     double                   PseudoTransientSERRate;
     double                   PseudoTransientSERFloor;
     bool                     EstimateObjectiveOnFinish;
+    bool                     EstimateDiscretisationError;
     unsigned int             MaxContinuationSteps;
     unsigned int             NewtonMaxIterations;
     unsigned int             NewtonJacobianReuse;
     double                   NewtonStepTolerance;
     std::string              NewtonScaling;
     std::string              SteadyStateTest;
+    // SteadyStateTest = "Objective". Each tolerance list is one value for every
+    // objective or one per objective, which the solver checks against the
+    // objective's ng when it starts a solve; the budget is the [discretisation,
+    // algebraic] pair.
+    std::vector<double>      ObjectiveTolerance;
+    std::vector<double>      ObjectiveAbsoluteTolerance;
+    std::vector<double>      ObjectiveBudget;
     double                   SteadyStateStepTolerance;
     bool                     SteadyStateMeasureCorrection;
     bool                     SteadyStateDiagnostics;
@@ -99,6 +108,9 @@ struct SolverConfig
     unsigned int             MaxPolynomialDegree;
     unsigned int             MaxDegreeIncrement;
     double                   DegreeAdaptationBase;
+    // "Solution" or "Objective": what the adaptation drivers measure a level
+    // by. See runAdaptiveDegree and runAdaptiveMesh.
+    std::string              AdaptationTarget;
     bool                     MeshAdaptation;
     double                   MeshAdaptationThreshold;
     double                   MeshAdaptationNeighbourMargin;

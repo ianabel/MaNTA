@@ -914,10 +914,9 @@ These are deliberate and tracked, not oversights:
   a real question rather than a missing line — an under-resolved `phi` would not
   raise the degree. Nor is a **multi-variable** case exercised, so the "worst
   variable wins" reduction and the per-variable `Absolute_tolerance` floor are
-  covered by inspection only. And nothing drives it with an **adjoint problem
-  attached**, so `setAdjointProblem` being re-applied to each level's solver is
-  untested — which matters, because forgetting it is silent: the run completes
-  and the gradients are simply never computed.
+  covered by inspection only. Under the solution target nothing reads the adjoint
+  problem, so `setAdjointProblem` being re-applied to each level's solver is
+  tested only through the objective target, below, whose every level needs it.
 
   Two numbers worth keeping. On `AdjointPoster` at 6 cells the loop runs
   `k` = 2, 5, 8, 10 and takes the estimate 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10 --
@@ -974,24 +973,55 @@ These are deliberate and tracked, not oversights:
   modes above 1e-3 -- because a fixture whose two populations had drifted
   together would keep passing while testing nothing.
 
-* **Adjoint *output* is still not verified.** `WriteAdjoints()` is commented
-  out at `Solver.cpp:350` (commit `57d2652`, "adjoint writing doesn't work for
-  spatial adjoints"), so no run emits the `ng` variable or the `G<i>_p` /
-  `G<i>_boundary` groups. Both suites guarded their adjoint comparison on the
-  *freshly generated* file containing `ng`, so the check silently skipped itself
-  and could never fail -- even though `AdjointTestProblem.ref.nc` still carries
-  `G0_p`, `G0_boundary`, `G1_p` and `G1_boundary`. Both suites now print a loud
-  SKIPPING warning instead.
+* **Adjoint output is written only on request, and no reference file carries
+  it.** `WriteAdjoints = true` writes `ng`, `G<i>`, the `G<i>_p` /
+  `G<i>_boundary` groups and each objective's adjoint state beside the solution;
+  `python/Tests/test_adjoint_on_demand.py` reads one back against the closed form
+  and against `getAdjointGradients`. No regression configuration sets it, and
+  `AdjointTestProblem.ref.nc` carries no adjoint groups, so both suites' adjoint
+  comparisons print a SKIPPING warning rather than silently passing.
 
-  The adjoint *gradients* are no longer unverified, though.
+  The adjoint *gradients* are verified without the file.
   `python/Tests/test_adjoint.py` reaches `G_p` through
-  `PyRunner::getAdjointGradients`, which does not depend on `WriteAdjoints`, and
-  checks it two independent ways for a problem with a closed-form solution:
-  against central finite differences of the objective (re-running the solver at
-  perturbed parameters) and against the analytic `dG/dp`. Both agree, so
-  `initializeMatricesForAdjointSolve`, `solveAdjointState` and
-  `computeAdjointGradients` are now covered end to end. What remains untested is
-  serialising them to netCDF.
+  `PyRunner::getAdjointGradients` and checks it two independent ways for a
+  problem with a closed-form solution: against central finite differences of the
+  objective (re-running the solver at perturbed parameters) and against the
+  analytic `dG/dp`. `Tests/UnitTests/AdjointOnDemandTests.cpp` checks the adjoint
+  state itself node by node: the sensitivity `w = -z^T dF/dGamma` against finite
+  differences of `G` under a one-node perturbation of the flux and of the source,
+  with a guard that the data separates the mass-matrix projection from `diag(w)`,
+  and a count of the case's entry points that has to stay at zero across an
+  adjoint solve.
+
+  `Tests/UnitTests/DiscretisationEstimateTests.cpp` checks the discretisation
+  estimate against closed forms: effectivity within [0.9, 1.2] over three
+  manufactured problems, four objectives, `k = 1..4` and both schemes on eight
+  cells, within 2e-3 of 1 for linear diffusion with a linear objective, the
+  per-cell indicators summing to the total, the aux rows on sixteen cells, and
+  exactly one `ComputePhysics` and one `ComputePhysicsDerivatives` per estimate.
+  What it does not cover: a solution whose error decays only algebraically in
+  `k` (Shestakov's axis), where the estimate underestimates by a `k`-dependent
+  factor that is documented rather than tested. Its two disabled cases,
+  `measure_effectivity` and `measure_cost`, regenerate the tables in
+  `docs/adjoints.rst`; run them by name.
+
+  `Tests/UnitTests/ObjectiveAdaptationTests.cpp` drives `AdaptationTarget =
+  "Objective"` against closed forms: the degree loop from `k = 1` meeting 1e-3,
+  1e-5 and 1e-7 on a manufactured nonlinear problem for `int u` and `int u^2`;
+  the target deciding where the solution indicator would decide the other way,
+  in both directions; the degree ceiling held to the estimate's batch under
+  `MaxPhysicsBatch`; `p -> h -> p` grading `x - x^(4/3)` at 1e-5 and meeting it,
+  and not grading it at 1e-3, which the uniform sample meets; the same from a mesh
+  given as boundaries, its end cell split at 1e-5 and not at 1e-3; a smooth
+  problem left uniform; and a named `"Solution"` target identical bit for bit to
+  the default. `EvaluationPlanTests.cpp` checks every batched call of an objective
+  degree loop and an objective `p -> h -> p` run against the plan in force when
+  it was made. What no test reaches: `ng > 1` end to end (the per-objective
+  tolerances are checked on fabricated estimates only), the objective target
+  from a `GradedGridBoundary` mesh, and `PhysicsParallelism` fills under it. Whether it meets its tolerance across problems, meshes and degrees is
+  measured, not tested -- 560 runs in
+  `python-examples/objective-tolerance/adaptation.py`, one of which converged
+  outside its tolerance (`docs/adaptivity.rst`).
 
   `python/Tests/test_adjoint_aux.py` does the same at `nAux = 2`, `nVars = 1`.
   That intersection -- adjoints *and* auxiliary variables -- was uncovered, and

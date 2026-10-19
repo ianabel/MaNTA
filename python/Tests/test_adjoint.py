@@ -1,18 +1,12 @@
 """End-to-end tests for the adjoint sensitivity path.
 
-This is the least-verified machinery in the project. `WriteAdjoints()` is
-commented out at Solver.cpp:350 (commit 57d2652, "adjoint writing doesn't work
-for spatial adjoints"), so no run emits the gradients and both the regression
-and reference-solution suites skip their adjoint comparison entirely. Until now
-nothing checked that `solveAdjointState` and `computeAdjointGradients` produce a
-correct number -- only that they ran.
-
-`PyRunner::getAdjointGradients` is a way in that does *not* depend on
-WriteAdjoints: it reads `SystemSolver::G_p` directly. That makes the whole chain
-testable from Python --
+No reference file in the regression or reference-solution suites carries
+adjoint output -- it is written only under WriteAdjoints = true -- so neither
+compares gradients. `PyRunner::getAdjointGradients` reads `SystemSolver::G_p`
+directly, which makes the whole chain testable from Python --
 
     PyAdjointProblem (gFn / dg / dgFndp / dSigma / dSources)
-      -> initializeMatricesForAdjointSolve
+      -> assembleAdjointOperator, assembleObjectiveGradient
       -> solveAdjointState
       -> computeAdjointGradients
       -> G_p
@@ -451,12 +445,25 @@ def test_G_returns_the_objective_without_an_adjoint_solve(tmp_path):
     assert adjoint.call_counts["gFn"] > 0
 
 
-def test_G_agrees_with_the_G_from_getAdjointGradients(tmp_path):
-    """Both read the same GFn at the same yJac, so they must agree exactly."""
+@pytest.mark.parametrize(
+    "scheme",
+    [
+        pytest.param({}, id="plain"),
+        # k = 1 cannot hold the quadratic steady state and u* can, so the u_h-
+        # and u*-based objectives differ by far more than round-off here.
+        pytest.param({"Superconvergent": True, "PolynomialDegree": 1}, id="superconvergent"),
+    ],
+)
+def test_G_agrees_with_the_G_from_getAdjointGradients(tmp_path, scheme):
+    """Both read the same objective at the same yJac, so they must agree exactly.
+
+    Under Superconvergent that objective is the u*-based one, which is also the
+    one objectiveEstimate() reports and bounds.
+    """
     p = np.array([KAPPA0, SOURCE0])
     ts = ParametricDiffusion(p)
     runner = MaNTA.Runner(ts)
-    runner.configure(adjoint_config(tmp_path / "gboth"))
+    runner.configure(adjoint_config(tmp_path / "gboth", **scheme))
     runner.run(T_FINAL)
 
     G_full, _ = runner.getAdjointGradients()

@@ -434,14 +434,15 @@ root, without being told.
 
 .. note::
 
-   The ``venv`` target uses a **versioned** interpreter (``python3.13`` by
-   default) deliberately. A virtualenv records the interpreter it was created
+   The ``venv`` and ``docs`` targets create their environments with a
+   **versioned** interpreter (``python3.14`` by default), ``MANTA_VENV_PYTHON``,
+   deliberately. A virtualenv records the interpreter it was created
    with, and ``python3 -m venv`` records the unversioned ``/usr/bin/python3``.
    When the distribution later moves that symlink to a new release, the
    environment's ``bin/python3`` follows it while the installed packages stay
    behind in ``lib/python3.<old>/site-packages``, and every import in the
-   environment fails with ``No module named pytest``. Naming ``python3.13``
-   records ``python3.13``, and the environment survives the upgrade.
+   environment fails with ``No module named pytest``. Naming ``python3.14``
+   records ``python3.14``, and the environment survives the upgrade.
 
 .. note::
 

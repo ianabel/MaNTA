@@ -8,6 +8,7 @@
 #include <Eigen/Dense>
 #include <toml.hpp>
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <ostream>
 #include <print>
@@ -263,25 +264,50 @@ void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
                                          PhysicsNodes const &nodes, Time tEval,
                                          double alphaValue)
 {
-    GlobalStateMatrix dR(nField), dRdot(nField);
+    applyFieldCoupling(evaluateFieldCoupling(Y, Ydot, nodes, tEval), alphaValue);
+}
+
+SystemSolver::FieldCouplingDerivatives
+SystemSolver::evaluateFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                    PhysicsNodes const &nodes, Time tEval)
+{
+    FieldCouplingDerivatives d;
+    d.dR = GlobalStateMatrix(nField);
+    d.dRdot = GlobalStateMatrix(nField);
     for (Index f = 0; f < nField; ++f)
     {
-        dR.add(nCells, k, nVars, nScalars, nAux);
-        dRdot.add(nCells, k, nVars, nScalars, nAux);
+        d.dR.add(nCells, k, nVars, nScalars, nAux);
+        d.dRdot.add(nCells, k, nVars, nScalars, nAux);
     }
-    Matrix dRdpsi = Matrix::Zero(nField, nField);
-    Matrix dRddpsidt = Matrix::Zero(nField, nField);
+    d.dRdpsi = Matrix::Zero(nField, nField);
+    d.dRddpsidt = Matrix::Zero(nField, nField);
 
     // On the k+1 basis nodes even under the superconvergent scheme, and with no
     // geometry on the states -- both because that is how residual() evaluates
     // FieldResidual, and a derivative that is not the derivative of the residual
     // that is actually evaluated is simply a different matrix.
-    fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
+    fieldModel->FieldResidualPrime(d.dR, d.dRdot, d.dRdpsi, d.dRddpsidt,
                                    Vector(Y.getField()), Vector(Ydot.getField()),
                                    Y.evalOnNodes(), Y.getPoints(),
                                    integrator.integrationWeights(Y.getBasis(), grid),
                                    tEval);
 
+    // ---- A1, cell by cell: the chain through the case's geometry hooks. Does
+    // not depend on alpha, so it is evaluated here, once, for whichever alpha
+    // applyFieldCoupling is then given.
+    d.A1.assign(nCells, Matrix((3 * nVars + nAux) * (k + 1), nField));
+    for (Index i = 0; i < nCells; ++i)
+    {
+        if (superconvergent)
+            dPhysics_dField_StarMat(d.A1[i], Y, nodes.states, nodes.points, i, tEval);
+        else
+            dPhysics_dField_Mat(d.A1[i], Y, nodes.states, nodes.points, i, tEval);
+    }
+    return d;
+}
+
+void SystemSolver::applyFieldCoupling(FieldCouplingDerivatives const &d, double alphaValue)
+{
     // ---- A2: one full-length row vector per field row.
     //
     // Laid out as a DGSoln view over a2[f], the way the scalar bordering lays
@@ -310,8 +336,8 @@ void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
         DGSoln row(nVars, grid, k, N_VGetArrayPointer(a2[f]), nScalars, nAux, nField);
         row.zeroCoeffs();
 
-        GlobalState const &s = dR[f];
-        GlobalState const &s_dt = dRdot[f];
+        GlobalState const &s = d.dR[f];
+        GlobalState const &s_dt = d.dRdot[f];
 
         for (Index i = 0; i < nCells; ++i)
             for (Index l = 0; l < k + 1; ++l)
@@ -334,17 +360,15 @@ void SystemSolver::assembleFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
             }
     }
 
-    // ---- B: the model's own block, which it factorises for itself.
+    // ---- B: the model's own block, which it factorises for itself. Handed
+    // copies: the hook takes its arguments by mutable reference, and the
+    // evaluation is applied again whenever the forward blocks are put back.
+    Matrix dRdpsi = d.dRdpsi, dRddpsidt = d.dRddpsidt;
     fieldModel->updateFieldJacobian(dRdpsi, dRddpsidt, alphaValue);
 
-    // ---- A1, cell by cell.
+    // ---- A1, as evaluated.
     for (Index i = 0; i < nCells; ++i)
-    {
-        if (superconvergent)
-            dPhysics_dField_StarMat(A1_cellwise[i], Y, nodes.states, nodes.points, i, tEval);
-        else
-            dPhysics_dField_Mat(A1_cellwise[i], Y, nodes.states, nodes.points, i, tEval);
-    }
+        A1_cellwise[i] = d.A1[i];
 }
 
 // See the declaration: A1's column m as a full-length vector.
@@ -529,12 +553,37 @@ EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kP
         add(Kind::ScalarConstraint, Entry::InitialScalarDerivative, Cadence::OncePerRun,
             differentialScalars, basisPerCell, basisNodes);
 
-    // The adjoint operator, one call per objective. Present whenever an adjoint
-    // problem is attached, because a steady solve estimates the objective on its
-    // way out as well as solving for the gradient when solveAdjoint is set.
+    // The end-of-run adjoint operator, at most once: every objective shares it,
+    // and it is the last Jacobian build's -- no call at all -- when that build
+    // was at the final state, as a steady solve that estimated its objective
+    // leaves it. The objective estimate itself and an adjoint solved on demand
+    // reuse a build and evaluate nothing.
     if (adjointProblem != nullptr)
-        add(Kind::Adjoint, Entry::ComputePhysicsDerivatives, Cadence::PerAdjointSolve,
-            adjointProblem->getNg(), physicsPerCell, physicsNodes);
+        add(Kind::Adjoint, Entry::ComputePhysicsDerivatives, Cadence::PerAdjointSolve, 1,
+            physicsPerCell, physicsNodes);
+
+    // The discretisation estimate at the end of each steady solve: the physics
+    // and its derivatives at the nodes of the enriched basis, two degrees beyond
+    // the scheme's own physics interpolation. Listed whenever the solver is
+    // configured to estimate, since whether a given solve estimates is decided
+    // per slice; estimateDiscretisationError refuses any other solver, so the
+    // listing is exact.
+    if (estimateDiscretisation && adjointProblem != nullptr)
+    {
+        const Index ke = k + enrichmentIncrement();
+        const NodalBasis rich = NodalBasis::getBasis(ke);
+        Vector const &nodes = rich.getNodes();
+        std::vector<Position> richNodes;
+        richNodes.reserve(nCells * (ke + 1));
+        for (Index i = 0; i < nCells; ++i)
+            for (Index j = 0; j < ke + 1; ++j)
+                richNodes.push_back(grid[i].fromRef(nodes(j)));
+        add(Kind::DiscretisationEstimate, Entry::ComputePhysics, Cadence::PerObjectiveEstimate,
+            1, ke + 1, richNodes);
+        if (discretisationAdjoint == DiscretisationAdjoint::Enriched)
+            add(Kind::DiscretisationEstimate, Entry::ComputePhysicsDerivatives,
+                Cadence::PerObjectiveEstimate, 1, ke + 1, richNodes);
+    }
 
     // The pointwise hooks the L2 projection and the mass matrix integrate, at the
     // Gauss points of NodalBasis's integrator -- in the order boost's gauss<>
@@ -914,7 +963,10 @@ void SystemSolver::initialiseMatrices()
     // the exception: the degree-0 NodalBasis returns from its constructor before
     // building Vandermonde or BarycentricWeights (Basis.hpp:369-377), so it
     // cannot be evaluated off-node and there is nothing to reconstruct.
-    if (k >= 1)
+    //
+    // Not on the discretisation estimate's enriched solver (massFromHook off),
+    // which reports nothing and never reconstructs.
+    if (k >= 1 && massFromHook)
         postprocessor = std::make_unique<Postprocessor>(grid, k, nVars, nScalars, nAux);
     else if (superconvergent)
         throw std::invalid_argument(
@@ -1156,7 +1208,10 @@ void SystemSolver::initialiseMatrices()
 
         Eigen::MatrixXd X(nVars * (k + 1), nVars * (k + 1));
         X.setZero();
-        for (Index var = 0; var < nVars; var++)
+        // Left zero on the discretisation estimate's enriched solver: it only
+        // ever assembles at alpha = 0, where X does not appear, and building it
+        // would call aFn at points no evaluation plan announces.
+        for (Index var = 0; var < nVars && massFromHook; var++)
         {
             Eigen::MatrixXd Xvar(k + 1, k + 1);
             y.getBasis().MassMatrix(I, Xvar, [this, var](double x)
@@ -2050,10 +2105,6 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Ti
     // k+1 is what makes cellwise*() hand back the k+2 star values.
     const Index derivK = superconvergent ? k + 1 : k;
 
-    // G_y is built by emplace_back below, so it has to start empty: this runs once
-    // per objective and would otherwise grow by nCells entries each time.
-    G_y.clear();
-
     for (Index var = 0; var < nVars; var++)
     {
       dSigma_vals.add(nCells, derivK, nVars, nScalars, nAux);
@@ -2508,8 +2559,25 @@ void SystemSolver::updateMatricesForJacSolve()
       assembleScalarCoupling(yJac, dydtJac, nodes, jt, alpha, v_map, w_map, N_global);
     }
 
+    // Kept, so that an adjoint solve can assemble the same blocks again --
+    // transposed, at alpha = 0 -- without asking the case for any of them.
+    // Moved rather than copied: nothing above reads them again.
+    PhysicsDerivatives &rec = jacobianDerivatives;
+    rec.state.assign(yJac.data(), yJac.data() + yJac.getDoF());
+    rec.t = jt;
+    rec.alpha = alpha;
+    rec.dSigma = std::move(dSigma_vals);
+    rec.dSource = std::move(dSource_vals);
+    rec.dAux = std::move(dAux_vals);
+
     if (fieldModel)
-        assembleFieldCoupling(yJac, dydtJac, nodes, jt, alpha);
+    {
+        rec.stateDot.assign(dydtJac.data(), dydtJac.data() + dydtJac.getDoF());
+        rec.field = evaluateFieldCoupling(yJac, dydtJac, nodes, jt);
+        applyFieldCoupling(rec.field, alpha);
+        fieldBlocksHoldAdjoint = false;
+    }
+    rec.valid = true;
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const
@@ -2552,6 +2620,16 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
     {
         solveTransportJac(res_g, delY);
         return;
+    }
+
+    // An adjoint solve since the last build left its alpha = 0 field blocks in
+    // place of this Jacobian's. Put the build's back: the same evaluation at the
+    // build's alpha, so the forward solve is what it would have been without the
+    // adjoint solve in between. No physics call.
+    if (fieldBlocksHoldAdjoint && jacobianDerivatives.valid)
+    {
+        applyFieldCoupling(jacobianDerivatives.field, jacobianDerivatives.alpha);
+        fieldBlocksHoldAdjoint = false;
     }
 
     switch (fieldSolveMode)
@@ -3129,8 +3207,6 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     // O(h^(k+1)) consistency error with no orthogonality against the test space,
     // and that alone caps the rate at k+1. See Postprocessing.hpp.
     // physicsNodesAt makes that choice of nodes and fills the geometry.
-    const Index physicsDoF = superconvergent ? k + 2 : k + 1;
-
     PhysicsNodes nodes = physicsNodesAt(Y_h, tres);
     std::vector<Position> const &points = nodes.points;
     GlobalState &states = nodes.states;
@@ -3144,9 +3220,55 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
 
     auto values = problem->ComputePhysics(states, points, tres);
 
-    std::vector<Values> Sigma_vals = std::move(values[0]);
-    std::vector<Values> Source_vals = std::move(values[1]);
-    std::vector<Values> Aux_vals = std::move(values[2]);
+    assembleTransportResidual(Y_h, dYdt_h, values, res);
+
+    if (nScalars > 0)
+    {
+        // Sampled once for all the scalars, not once each: evalOnNodes walks
+        // every cell and node, and the scalars all see the same state.
+        const GlobalState scalarStates = Y_h.evalOnNodes();
+        const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
+
+        for (Index j = 0; j < nScalars; j++)
+            res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
+                                             weights, phiBoundary, tres);
+    }
+
+    if (fieldModel)
+    {
+        // Sampled once, like the scalars: every field row sees the same state.
+        //
+        // On the k+1 basis nodes even under the superconvergent scheme, because
+        // `weights` is the interpolatory quadrature of *that* basis and a field
+        // row's integrals are taken against it. The star nodes are a device for
+        // the transport residual's projection, not a different set of unknowns.
+        const GlobalState fieldStates = Y_h.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+
+        Vector fieldRes = Vector::Zero(nField);
+        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
+                                  fieldStates, Y_h.getPoints(), weights, tres);
+        res.getField() = fieldRes;
+    }
+
+    return 0;
+}
+
+// The transport rows of the residual -- the trace rows and every cell's sigma, q,
+// u and aux rows -- from physics values already evaluated at the physics nodes.
+// Split out of residual() so the discretisation estimate can assemble the same
+// rows at a higher degree from values it evaluated itself; residual() is this
+// plus the physics call, the scalar rows and the field rows.
+void SystemSolver::assembleTransportResidual(DGSoln const &Y_h, DGSoln const &dYdt_h,
+                                             PhysicsOutput const &values, DGSoln &res)
+{
+    const Index physicsDoF = superconvergent ? k + 2 : k + 1;
+
+    std::vector<Values> const &Sigma_vals = values[0];
+    std::vector<Values> const &Source_vals = values[1];
+    std::vector<Values> const &Aux_vals = values[2];
 
     // residual.lambda = C*sigma + G*u + H*lambda - L
     for (Index i = 0; i < nCells; i++)
@@ -3221,84 +3343,93 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         }
     }
 
+}
 
-    if (nScalars > 0)
+bool SystemSolver::PhysicsDerivatives::isAt(DGSoln const &Y, Time tEval) const
+{
+    return valid && t == tEval && state.size() == Y.getDoF() &&
+           std::memcmp(state.data(), Y.data(), state.size() * sizeof(double)) == 0;
+}
+
+// See the declaration. The reuse is what makes the end-of-run adjoint of a
+// steady solve that estimated its objective free of physics calls: the estimate
+// built the Jacobian at the converged state, and that is the state this is asked
+// about. Anything else -- a time march, whose last build was at one of IDA's
+// iterates, or a steady solve that did not estimate -- is evaluated once here, at
+// the state and time the adjoint is defined at, exactly as it always has been.
+SystemSolver::PhysicsDerivatives &
+SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEval)
+{
+    // With a field model the coupling was also differentiated at the build's
+    // psi', which the state alone does not pin.
+    const bool sameYdot =
+        !fieldModel || (jacobianDerivatives.stateDot.size() == Ydot.getDoF() &&
+                        std::memcmp(jacobianDerivatives.stateDot.data(), Ydot.data(),
+                                    jacobianDerivatives.stateDot.size() * sizeof(double)) == 0);
+    if (!problem->anySourceReadsTimeDerivatives() && sameYdot &&
+        jacobianDerivatives.isAt(Y, tEval))
+        return jacobianDerivatives;
+
+    // The nodes, and the geometry on them: with a field model attached a
+    // derivative hook reads State::geom just as it does in the forward Jacobian,
+    // which is why this is evaluatePhysicsDerivatives' first act too. Without it
+    // dSigmaFn_dq on a geometry-dependent case indexes slot 0 of a zero-length
+    // vector.
+    PhysicsNodes nodes = physicsNodesAt(Y, tEval);
+
+    PhysicsDerivatives &rec = adjointDerivatives;
+    const Index derivK = superconvergent ? k + 1 : k;
+    rec.dSigma = GlobalStateMatrix(nVars);
+    rec.dSource = GlobalStateMatrix(nVars);
+    rec.dAux = GlobalStateMatrix(nAux);
+    for (Index var = 0; var < nVars; var++)
     {
-        // Sampled once for all the scalars, not once each: evalOnNodes walks
-        // every cell and node, and the scalars all see the same state.
-        const GlobalState scalarStates = Y_h.evalOnNodes();
-        const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
-        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
-        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
-
-        for (Index j = 0; j < nScalars; j++)
-            res.Scalar(j) = problem->ScalarG(j, scalarStates, scalarStates_dt, Y_h.getPoints(),
-                                             weights, phiBoundary, tres);
+        rec.dSigma.add(nCells, derivK, nVars, nScalars, nAux);
+        rec.dSource.add(nCells, derivK, nVars, nScalars, nAux);
     }
+    for (Index aux = 0; aux < nAux; aux++)
+        rec.dAux.add(nCells, derivK, nVars, nScalars, nAux);
+
+    problem->ComputePhysicsDerivatives({rec.dSigma, rec.dSource, rec.dAux}, nodes.states,
+                                       nodes.points, tEval);
 
     if (fieldModel)
     {
-        // Sampled once, like the scalars: every field row sees the same state.
-        //
-        // On the k+1 basis nodes even under the superconvergent scheme, because
-        // `weights` is the interpolatory quadrature of *that* basis and a field
-        // row's integrals are taken against it. The star nodes are a device for
-        // the transport residual's projection, not a different set of unknowns.
-        const GlobalState fieldStates = Y_h.evalOnNodes();
-        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
-
-        Vector fieldRes = Vector::Zero(nField);
-        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
-                                  fieldStates, Y_h.getPoints(), weights, tres);
-        res.getField() = fieldRes;
+        rec.stateDot.assign(Ydot.data(), Ydot.data() + Ydot.getDoF());
+        rec.field = evaluateFieldCoupling(Y, Ydot, nodes, tEval);
     }
 
-    return 0;
+    rec.state.assign(Y.data(), Y.data() + Y.getDoF());
+    rec.t = tEval;
+    rec.alpha = 0.0;
+    rec.valid = true;
+    return rec;
 }
 
-void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
+// See the declaration.
+std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &objective,
+                                                            Index gIndex, DGSoln const &state,
+                                                            Time tEval)
 {
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
-    // See the G_y assembly below for why the u and q rows contract with the star
-    // mass matrix rather than with A9. physicsNodesAt builds u* below.
+    // physicsNodesAt builds u*, and fills the geometry an objective's dg may read.
     const Index derivK = superconvergent ? k + 1 : k;
 
-    // Rebuild rather than grow. Every container filled below is appended to, so
-    // a second adjoint solve on one solver used to leave them holding 2 * nCells
-    // entries with the stale ones at the front -- which is where every index
-    // into them lands. clearCellwiseVecs() carries the same note for the forward
-    // containers; these four are its adjoint counterpart.
-    G_y.clear();
-    adjoint_CEBlocks.clear();
-    adjoint_CGBlocks.clear();
-    A1_transpose_cellwise.clear();
-    A2_transpose_cellwise.clear();
-
     GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux);
+    PhysicsNodes nodes = physicsNodesAt(state, tEval);
+    objective.dg(gIndex, dGdvars, nodes.states, nodes.points);
 
-    // The nodes, and the geometry on them.
-    //
-    // Both the objective's dg and the case's own ComputePhysicsDerivatives are
-    // evaluated on these states, and with a field model attached a hook reads
-    // State::geom just as it does in the forward Jacobian -- which is why this
-    // is evaluatePhysicsDerivatives' first act too. Without it dSigmaFn_dq on a
-    // geometry-dependent case indexes slot 0 of a zero-length vector.
-    PhysicsNodes nodes = physicsNodesAt(y, jt);
-
-    std::vector<Position> const &points = nodes.points;
-    GlobalState const &states = nodes.states;
-
-    adjointProblem->dg(gIndex, dGdvars, states, points);
     Vector dGdu(nVars * (k + 1));
     Vector dGdq(nVars * (k + 1));
     Vector dGdsigma(nVars * (k + 1));
-
     Vector dGdaux(nAux * (k + 1));
 
+    std::vector<Vector> out;
+    out.reserve(nCells);
     for (Index i = 0; i < nCells; ++i)
     {
-        G_y.emplace_back(3 * nVars * (k + 1) + nAux * (k + 1));
+        out.emplace_back(3 * nVars * (k + 1) + nAux * (k + 1));
 
         if (superconvergent)
         {
@@ -3316,7 +3447,7 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
             Postprocessor const &pp = *postprocessor;
             const Vector &b1 = pp.starWeights(i);
 
-            G_y[i].setZero();
+            out[i].setZero();
 
             auto dFlux = dGdvars.cellwiseFlux(i);
             auto dDeriv = dGdvars.cellwiseDerivative(i);
@@ -3328,10 +3459,10 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
                 const Vector w_q = dDeriv.row(var).transpose().cwiseProduct(b1);
                 const Vector w_u = dVar.row(var).transpose().cwiseProduct(b1);
 
-                G_y[i].segment(var * (k + 1), k + 1) = pp.V(i).transpose() * w_sigma;
-                G_y[i].segment(nVars * (k + 1) + var * (k + 1), k + 1) =
+                out[i].segment(var * (k + 1), k + 1) = pp.V(i).transpose() * w_sigma;
+                out[i].segment(nVars * (k + 1) + var * (k + 1), k + 1) =
                     pp.V(i).transpose() * w_q + pp.B11(i).transpose() * w_u;
-                G_y[i].segment(2 * nVars * (k + 1) + var * (k + 1), k + 1) =
+                out[i].segment(2 * nVars * (k + 1) + var * (k + 1), k + 1) =
                     pp.B12(i).transpose() * w_u;
             }
 
@@ -3339,58 +3470,66 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
             {
                 auto dAux = dGdvars.cellwiseAux(i);
                 for (Index a = 0; a < nAux; ++a)
-                    G_y[i].segment(3 * nVars * (k + 1) + a * (k + 1), k + 1) =
+                    out[i].segment(3 * nVars * (k + 1) + a * (k + 1), k + 1) =
                         pp.V(i).transpose() *
                         Vector(dAux.row(a).transpose().cwiseProduct(b1));
             }
         }
         else
         {
-        DerivativeSubVector(0, dGdsigma, dGdvars.cellwiseFlux(i), y, i);
-        G_y[i].block(0, 0, nVars * (k + 1), 1) = dGdsigma;
+        DerivativeSubVector(0, dGdsigma, dGdvars.cellwiseFlux(i), state, i);
+        out[i].block(0, 0, nVars * (k + 1), 1) = dGdsigma;
 
-        DerivativeSubVector(0, dGdq, dGdvars.cellwiseDerivative(i), y, i);
-        G_y[i].block(nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdq;
+        DerivativeSubVector(0, dGdq, dGdvars.cellwiseDerivative(i), state, i);
+        out[i].block(nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdq;
 
-        DerivativeSubVector(0, dGdu, dGdvars.cellwiseVariable(i), y, i);
-        G_y[i].block(2 * nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdu;
+        DerivativeSubVector(0, dGdu, dGdvars.cellwiseVariable(i), state, i);
+        out[i].block(2 * nVars * (k + 1), 0, nVars * (k + 1), 1) = dGdu;
 
 
          if (nAux > 0)
          {
-             dGdaux_Vec(0, dGdaux, dGdvars.cellwiseAux(i), y, i);
-             G_y[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
+             dGdaux_Vec(0, dGdaux, dGdvars.cellwiseAux(i), state, i);
+             out[i].block(3 * nVars * (k + 1), 0, nAux * (k + 1), 1) = dGdaux;
          }
         }
     }
 
 
-    GlobalStateMatrix dSigma_vals(nVars);
-    GlobalStateMatrix dSource_vals(nVars);
-    GlobalStateMatrix dAux_vals(nAux);
+    return out;
+}
 
-    for (Index var = 0; var < nVars; var++)
-    {
-      dSigma_vals.add(nCells, derivK, nVars, nScalars, nAux);
-      dSource_vals.add(nCells, derivK, nVars, nScalars, nAux);
-    }
-    for (Index aux = 0; aux < nAux; aux++)
-    {
-      dAux_vals.add(nCells, derivK, nVars, nScalars, nAux);
-    }
+// See the declaration. The transposed twin of assembleCellMatrix, from derivative
+// blocks some earlier evaluation left in src.
+void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
+{
+    // Rebuild rather than grow. Every container filled below is appended to, so
+    // a second adjoint solve on one solver used to leave them holding 2 * nCells
+    // entries with the stale ones at the front -- which is where every index
+    // into them lands. clearCellwiseVecs() carries the same note for the forward
+    // containers; these four are its adjoint counterpart.
+    adjoint_CEBlocks.clear();
+    adjoint_CGBlocks.clear();
+    A1_transpose_cellwise.clear();
+    A2_transpose_cellwise.clear();
+    adjointMXSolvers.resize(nCells);
 
-    problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, states, points, jt);
+    GlobalStateMatrix &dSigma_vals = src.dSigma;
+    GlobalStateMatrix &dSource_vals = src.dSource;
+    GlobalStateMatrix &dAux_vals = src.dAux;
 
-   // We have to remake the M matrices because they're in the wrong order
-    // We also need to calculate the dSigmadX and dSourcedX matrices at the same time
+    // M is remade from the derivative blocks rather than read back out of the
+    // forward factorisation: that one is of MX at the build's alpha, and the
+    // adjoint wants dF/dy at alpha = 0.
 
     // Serial, unlike its forward twin in updateMatricesForJacSolve, and for a
     // reason that is about this loop rather than about the mathematics: it grows
     // adjoint_CEBlocks and adjoint_CGBlocks with emplace_back, so both the
     // container and the resulting order are shared state. Pre-sizing them and
-    // indexing by i would make it parallelisable -- but this runs once per run,
-    // against updateMatricesForJacSolve's once per Newton iteration, so it has
-    // never been where the time is. Measured breakdown is in TODO.
+    // indexing by i would make it parallelisable -- but this runs once per
+    // adjoint solve, at the end of a run or when one is asked for, against
+    // updateMatricesForJacSolve's once per Newton iteration, so it has never
+    // been where the time is. Measured breakdown is in TODO.
     for (unsigned int i = 0; i < nCells; i++)
     {
         Eigen::MatrixXd NLq(nVars * (k + 1), nVars * (k + 1));
@@ -3579,21 +3718,20 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 
         adjoint_CGBlocks.emplace_back(CG_vec.transpose());
 
-        MXSolvers[i].compute(M.transpose());
+        adjointMXSolvers[i].compute(M.transpose());
     }
 
     // no computation of scalars
 
     // The right-hand-side-independent half of the transposed HDG solve, built
     // once here because the coupled adjoint paths apply A^-T nField + 1 times
-    // (exact) or once per sweep (iterative).
+    // (exact) or once per sweep (iterative), and every objective shares it.
     factoriseAdjointTrace();
 
     // ---- the field coupling, transposed.
     //
-    // Re-assembled here rather than reused from the forward solve, and at
-    // alpha = 0, because that is what M above is: the block loop builds its rows
-    // from A_cellwise / B_cellwise / D_cellwise directly and never adds
+    // At alpha = 0, because that is what M above is: the block loop builds its
+    // rows from A_cellwise / B_cellwise / D_cellwise directly and never adds
     // assembleCellMatrix's alpha-weighted mass term X. So this is dF/dy at
     // alpha = 0 -- the steady adjoint -- and the field blocks have to be the
     // same operator's. B = dRdpsi + alpha dRddpsidt would otherwise carry
@@ -3602,31 +3740,135 @@ void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
     // alpha * dRdot for the same reason. Keeping the two in step block for block
     // is the whole discipline of this function; alpha is one of those blocks.
     //
-    // Note what that costs, because it is new and it is invisible: this
-    // *overwrites* the forward solve's own blocks. A1_cellwise and a2 are
-    // rewritten at alpha = 0, and updateFieldJacobian refactorises the model's B
-    // and Blu there too -- so after an adjoint solve the field model's stored
-    // factorisation is the steady one, not IDA's. Harmless as the solver is used
-    // today, for the same reason MXSolvers holding M^T rather than M is harmless:
-    // runAdjointSolve is the last thing integrate() does, and the next forward
-    // Jacobian solve is preceded by updateMatricesForJacSolve, which rebuilds all
-    // four. Anything that starts interleaving forward and adjoint solves -- a
-    // checkpointed transient adjoint, say -- has to refresh them, and will find
-    // no diagnostic if it does not.
+    // From the same evaluation as the transport blocks, applied at alpha = 0
+    // through the forward solve's own A1_cellwise, a2 and the model's B. That
+    // overwrites the forward Jacobian's, so fieldBlocksHoldAdjoint tells
+    // solveJacEq to put them back before the next forward solve uses them.
     if (fieldModel)
     {
-        G_field = Vector::Zero(nField);
         adjoint_field = Vector::Zero(nField);
-        assembleFieldCoupling(y, dydt, nodes, jt, 0.0);
+        applyFieldCoupling(src.field, 0.0);
+        fieldBlocksHoldAdjoint = true;
         transposeFieldCoupling();
     }
     else
-    {
-        G_field.resize(0);
         adjoint_field.resize(0);
-    }
+}
+
+void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
+{
+    assembleAdjointOperator(adjointDerivativesAt(y, dydt, jt));
+    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt);
+    if (fieldModel)
+        G_field = Vector::Zero(nField);
+    else
+        G_field.resize(0);
 
     initialised = true;
+}
+
+void SystemSolver::storeAdjointSolution(Index gIndex, DGSoln const &state, bool operatorAtState)
+{
+    const bool sameState =
+        adjointSolutionState.size() == state.getDoF() &&
+        std::memcmp(adjointSolutionState.data(), state.data(),
+                    adjointSolutionState.size() * sizeof(double)) == 0;
+    if (!sameState)
+    {
+        adjointSolutions.clear();
+        adjointSolutionState.assign(state.data(), state.data() + state.getDoF());
+    }
+    if (static_cast<Index>(adjointSolutions.size()) <= gIndex)
+        adjointSolutions.resize(gIndex + 1);
+    adjointSolutions[gIndex] =
+        AdjointSolution{adjoint_squ, adjoint_lambdas, adjoint_field, G_y, G_field, operatorAtState};
+}
+
+SystemSolver::AdjointSolution const *SystemSolver::adjointSolution(Index g,
+                                                                     DGSoln const &state) const
+{
+    if (g < 0 || g >= static_cast<Index>(adjointSolutions.size()) || !adjointSolutions[g])
+        return nullptr;
+    if (adjointSolutionState.size() != state.getDoF() ||
+        std::memcmp(adjointSolutionState.data(), state.data(),
+                    adjointSolutionState.size() * sizeof(double)) != 0)
+        return nullptr;
+    return &*adjointSolutions[g];
+}
+
+// See the declaration.
+void SystemSolver::solveAdjointAt(AdjointProblem &objective, std::vector<Index> const &objectives,
+                                  DGSoln const &state)
+{
+    if (nScalars > 0)
+        throw std::invalid_argument(
+            "The adjoint cannot be solved with global scalars: its operator does not carry the "
+            "scalar bordering, so J^T z = dG/dy would be solved for a different J.");
+    if (tauScaling != TauScaling::Constant)
+        throw std::invalid_argument(
+            "The adjoint cannot be solved under tauScaling = \"Diffusive\": tau depends on "
+            "the state there, and the adjoint operator carries no d tau / dy.");
+    if (!jacobianDerivatives.valid && !adjointDerivatives.valid)
+        throw std::logic_error(
+            "No Jacobian has been built on this solver, so there is no operator to transpose. "
+            "The adjoint is solved from the last build without evaluating the physics; run "
+            "the solver first.");
+
+    // The end-of-run adjoint's derivatives when they were taken at this state --
+    // which is the state a finished run leaves -- and otherwise the last build's.
+    auto sameState = [&state](PhysicsDerivatives const &d)
+    {
+        return d.valid && d.state.size() == state.getDoF() &&
+               std::memcmp(d.state.data(), state.data(), d.state.size() * sizeof(double)) == 0;
+    };
+    PhysicsDerivatives &src = sameState(adjointDerivatives) || !jacobianDerivatives.valid
+                                  ? adjointDerivatives
+                                  : jacobianDerivatives;
+    const bool operatorAtState = sameState(src);
+
+    for (Index g : objectives)
+        if (g < 0 || g >= objective.getNg())
+            throw std::out_of_range(std::format(
+                "Objective {} requested, but the adjoint problem defines {}.", g,
+                objective.getNg()));
+
+    assembleAdjointOperator(src);
+    for (Index g : objectives)
+    {
+        G_y = assembleObjectiveGradient(objective, g, state, src.t);
+        if (fieldModel)
+            G_field = Vector::Zero(nField);
+        else
+            G_field.resize(0);
+        solveAdjointState();
+        storeAdjointSolution(g, state, operatorAtState);
+    }
+}
+
+// See the declaration for the signs.
+SystemSolver::ObjectiveSensitivity
+SystemSolver::objectiveSensitivity(AdjointSolution const &z) const
+{
+    const Index perCell = superconvergent ? k + 2 : k + 1;
+    ObjectiveSensitivity out;
+    out.points = superconvergent ? postprocessor->starPoints() : yJac.getPoints();
+    out.flux = Matrix::Zero(nVars, nCells * perCell);
+    out.sources = Matrix::Zero(nVars, nCells * perCell);
+
+    for (Index i = 0; i < nCells; ++i)
+    {
+        // The projection projectOntoTestSpace applies to a physics value.
+        const Matrix P = superconvergent ? postprocessor->A9(i)
+                                         : yJac.getBasis().MassMatrix(grid[i]);
+        for (Index var = 0; var < nVars; ++var)
+        {
+            const Vector zSigma = z.squ[i].segment(var * (k + 1), k + 1);
+            const Vector zU = z.squ[i].segment(2 * nVars * (k + 1) + var * (k + 1), k + 1);
+            out.flux.block(var, i * perCell, 1, perCell) = -(P.transpose() * zSigma).transpose();
+            out.sources.block(var, i * perCell, 1, perCell) = (P.transpose() * zU).transpose();
+        }
+    }
+    return out;
 }
 
 // See the declaration. Split out of solveAdjointState so the repeated A^-T
@@ -3641,10 +3883,11 @@ void SystemSolver::factoriseAdjointTrace()
     // it is not -- lambda lives on faces, so cell i and cell i+1 both write the
     // trace block they share. Splitting it into a parallel solve and a serial
     // accumulation, the way solveHDGJac does, would work; it has not been done
-    // because this runs once per run rather than once per Newton iteration.
+    // because this runs once per adjoint solve rather than once per Newton
+    // iteration.
     for (Index i = 0; i < nCells; i++)
     {
-        adjoint_SQU_0[i] = MXSolvers[i].solve(adjoint_CGBlocks[i]);
+        adjoint_SQU_0[i] = adjointMXSolvers[i].solve(adjoint_CGBlocks[i]);
 
         const Matrix K_cell = H_cellwise[i].transpose() - adjoint_CEBlocks[i] * adjoint_SQU_0[i];
 
@@ -3670,7 +3913,7 @@ void SystemSolver::solveTransportAdjoint(std::vector<Vector> const &rhs,
     Vector F = Vector::Zero(nVars * (nCells + 1));
     for (Index i = 0; i < nCells; i++)
     {
-        SQU_f[i] = MXSolvers[i].solve(rhs[i]);
+        SQU_f[i] = adjointMXSolvers[i].solve(rhs[i]);
 
         const Vector CEf = adjoint_CEBlocks[i] * SQU_f[i];
         for (Index var = 0; var < nVars; var++)
@@ -3764,6 +4007,7 @@ void SystemSolver::transposeFieldCoupling()
 // and nothing else, which is what keeps every existing adjoint run what it was.
 void SystemSolver::solveAdjointState()
 {
+    ++nAdjointSolves;
     if (!fieldModel)
     {
         solveTransportAdjoint(G_y, adjoint_squ, adjoint_lambdas);
@@ -4013,14 +4257,15 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
                            ? adjointProblem->GFn(g, y, *postprocessor)
                            : adjointProblem->GFn(g, y);
 
-        // G_y is dG/dy for one objective, so it has to be rebuilt per objective.
-        initializeMatricesForAdjointSolve(g);
+        // dG/dy for this objective, from its dg alone: the Jacobian built above
+        // is the only one this needs, and it is not transposed.
+        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt);
 
         double dot = 0.0, dGdyNorm = 0.0;
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
             {
-                const double gy = G_y[i](j);
+                const double gy = Gy[i](j);
                 const double d = deltaData[i * localDOF + j];
                 dot += gy * d;
                 dGdyNorm += gy * gy;
@@ -4033,6 +4278,14 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     }
 
     out.valid = true;
+
+    // Its algebraic part is the correction just solved for, the number
+    // `corrected` subtracts, so the two estimates add.
+    if (estimateDiscretisation)
+    {
+        DGSoln deltaH(nVars, grid, k, N_VGetArrayPointer(delta), nScalars, nAux, nField);
+        out.discretisation = estimateDiscretisationError(*adjointProblem, y, deltaH, t0);
+    }
 
     N_VDestroy(zeroDeriv);
     N_VDestroy(F);
@@ -4085,10 +4338,22 @@ void SystemSolver::computeAdjointGradients()
     // hooks and nothing at ng = 1, which is every case in the tree bar this one;
     // caching it would cost np * nCells * localDOF, which with spatial parameters
     // is not obviously the better trade.
+    //
+    // The operator is the same for every objective, so it is assembled once:
+    // from the last Jacobian build when that was taken at this state, which a
+    // steady solve that estimated its objective leaves behind, and from one
+    // evaluation here otherwise.
+    assembleAdjointOperator(adjointDerivativesAt(y, dydt, jt));
+    initialised = true;
     for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
     {
-        initializeMatricesForAdjointSolve(gIndex);
+        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt);
+        if (fieldModel)
+            G_field = Vector::Zero(nField);
+        else
+            G_field.resize(0);
         solveAdjointState();
+        storeAdjointSolution(gIndex, y, true);
         accumulateAdjointGradients(gIndex);
     }
 }

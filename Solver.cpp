@@ -71,6 +71,16 @@ void SystemSolver::initialize()
 	// Jacobian build.
 	haveJacobianKappa = false;
 
+	// Nor the derivatives the last run's Jacobian builds left for an adjoint
+	// solve to reuse, nor the adjoint states solved from them: a reused solver
+	// may be running a case whose parameters have changed, at a state that
+	// happens to match.
+	jacobianDerivatives.valid = false;
+	adjointDerivatives.valid = false;
+	fieldBlocksHoldAdjoint = false;
+	adjointSolutions.clear();
+	adjointSolutionState.clear();
+
 	// A tau frozen per continuation step is set by the continuation loop, and a
 	// time march has none: tau would stay at the initial condition's for the
 	// whole run.
@@ -109,6 +119,23 @@ void SystemSolver::initialize()
 			"{} cells at k = {} hand the physics batches of {} points on every residual or "
 			"Jacobian build, past MaxPhysicsBatch = {}. Use fewer cells or a lower degree.",
 			nCells, k, plan->largestRecurringBatch(), maxPhysicsBatch));
+	// The discretisation estimate, checked here rather than at the end of the
+	// first solve it would make: what it refuses is fixed by now, and its batch,
+	// once a steady solve rather than every residual, is still a batch the case
+	// was promised it would not get.
+	if (estimateDiscretisation && adjointProblem != nullptr)
+	{
+		if (nScalars > 0 || fieldModel || k < 1 || tauScaling != TauScaling::Constant)
+			throw std::invalid_argument(
+				"EstimateDiscretisationError cannot estimate this run: it needs "
+				"PolynomialDegree >= 1, a constant tau, and no global scalars or field model.");
+		for (auto const &site : plan->sitesOf(EvaluationKind::DiscretisationEstimate))
+			if (maxPhysicsBatch > 0 && site.batchSize() > maxPhysicsBatch)
+				throw std::invalid_argument(std::format(
+					"EstimateDiscretisationError hands the physics a batch of {} points at the "
+					"end of each steady solve, past MaxPhysicsBatch = {}.",
+					site.batchSize(), maxPhysicsBatch));
+	}
 	problem->deliverEvaluationPlan(plan);
 
 	if (!initialised)
@@ -951,7 +978,8 @@ void SystemSolver::finishRun()
 		try
 		{
 			runAdjointSolve();
-			// WriteAdjoints();
+			if (writeAdjoints && writeOutput)
+				WriteAdjoints();
 		}
 		catch (std::exception const &e)
 		{
@@ -1104,10 +1132,10 @@ void SystemSolver::runAdjointSolve()
 	// This used to refuse a field model outright, because the adjoint matrices
 	// carried neither geometry nor a transpose of the coupling and so would have
 	// returned a silently wrong gradient beside a perfectly good G. Both are now
-	// here: initializeMatricesForAdjointSolve fills geometry before it evaluates
-	// anything and stores A1^T and A2^T beside M^T, and solveAdjointState
-	// eliminates them exactly (FieldSolve = exact) or sweeps to a checked
-	// backward error that *throws* if it is not reached.
+	// here: the adjoint fills geometry before it evaluates anything
+	// (physicsNodesAt), assembleAdjointOperator stores A1^T and A2^T beside M^T,
+	// and solveAdjointState eliminates them exactly (FieldSolve = exact) or
+	// sweeps to a checked backward error that *throws* if it is not reached.
 	//
 	// Two limits survive the lifting and are deliberate rather than overlooked.
 	// An objective whose integrand reads State::geom directly loses its dG/dpsi

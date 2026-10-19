@@ -87,9 +87,23 @@ Module contents
    * - ``getPostprocessedSolution()``
      - The same, with :math:`u^\star` in place of :math:`u`.
    * - ``G()``
-     - The objective value, without gradients.
+     - The objective value, without gradients: under ``Superconvergent`` the
+       :math:`u^\star`-based one, which is what ``getAdjointGradients()``
+       differentiates and ``objectiveEstimate()`` reports and bounds.
    * - ``getAdjointGradients()``
      - :math:`\mathrm{d}G/\mathrm{d}p`.
+   * - ``solve_adjoint(g=None)``
+     - Solves the adjoint at the current state from the last Jacobian build,
+       without calling the physics. See :ref:`adjoint-on-demand`.
+   * - ``adjoint_state(g)``, ``objective_gradient(g)``, ``objective_sensitivity(g)``
+     - The adjoint state :math:`z`, the right-hand side
+       :math:`\partial G/\partial y`, and :math:`\partial G/\partial \Gamma`
+       for the flux and the sources, as nodal arrays.
+   * - ``objectiveEstimate()``
+     - What the last steady solve estimated: ``value``, ``corrected`` and
+       ``uncertainty`` per objective, and with ``EstimateDiscretisationError``
+       ``discretisation``, ``discretisation_per_cell``, ``x_faces`` and
+       ``continuum``. See :ref:`discretisation-estimate`.
    * - ``physics_case``
      - The registered C++ case name this ``Runner`` was built from, or ``""``
        when it was handed a transport system object.

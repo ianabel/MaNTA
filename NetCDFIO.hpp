@@ -59,6 +59,29 @@ public:
 		newvar.putVar({0, 0}, {1, gridpoints.size()}, gridValues.data());
 	}
 
+	// A profile on the output grid with no time dimension, for a quantity a run
+	// defines once, at its end. An empty groupName is the file's root.
+	template <typename T>
+	void AddProfile(std::string const &groupName, std::string const &name, std::string const &description,
+					std::string const &units, T const &f)
+	{
+		netCDF::NcGroup group = groupName.empty() ? netCDF::NcGroup(data_file) : data_file.getGroup(groupName);
+		netCDF::NcVar newvar = group.addVar(name, netCDF::NcDouble(), SpaceDim);
+		newvar.putAtt("description", description);
+		if (units != "")
+			newvar.putAtt("units", units);
+		std::vector<double> values(gridpoints.size());
+		for (size_t i = 0; i < gridpoints.size(); ++i)
+			values[i] = f(gridpoints[i]);
+		newvar.putVar(values.data());
+	}
+
+	// Values on a dimension of the group's own, created on first use with the
+	// length of the first array put on it. For quantities that live on the
+	// solver's nodes rather than on the output grid.
+	void AddArray(std::string const &groupName, std::string const &name, std::string const &description,
+				  std::string const &dimName, std::vector<double> const &values);
+
 	void AddGroup(std::string name, std::string description);
 
 	netCDF::NcGroup CreateGroup(std::string name, std::string description);

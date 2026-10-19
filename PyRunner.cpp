@@ -478,6 +478,9 @@ py::dict PyRunner::steadyStats(void) const {
       "newton_iterations"_a = s.newtonIters, "residual_evaluations"_a = s.residualEvals,
       "jacobian_builds"_a = s.jacBuilds, "jacobian_solves"_a = s.jacSolves,
       "correction_norm"_a = s.correctionNorm, "correction_test"_a = s.correctionTest,
+      "adjoint_solves"_a = s.adjointSolves, "objective_test"_a = s.objectiveTest,
+      "objective_error"_a = s.objectiveError,
+      "objective_tolerance"_a = s.objectiveTolerance,
       "pseudo_transient_step"_a = system->getPseudoTransientStep());
 }
 
@@ -512,9 +515,20 @@ Vector PyRunner::G(void) {
   // GFn reads yJac, which holds the initial condition from initialize() and the
   // final solution after a run. So this does not run the solver -- call run() or
   // run_ss() first, exactly as for getAdjointGradients().
+  //
+  // Under Superconvergent the objective is the u*-based one, as it is for
+  // getAdjointGradients(), objectiveEstimate() and the objective test: that is
+  // the functional the gradient differentiates and the estimates bound, and the
+  // u_h-based one beside it converges more slowly and is held to nothing.
   Vector Gout(ap->getNg());
-  for (Index i = 0; i < ap->getNg(); i++)
-    Gout(i) = ap->GFn(i, system->yJac);
+  if (system->isSuperconvergent()) {
+    system->postprocessor->computeUStar(system->yJac);
+    for (Index i = 0; i < ap->getNg(); i++)
+      Gout(i) = ap->GFn(i, system->yJac, *system->postprocessor);
+  } else {
+    for (Index i = 0; i < ap->getNg(); i++)
+      Gout(i) = ap->GFn(i, system->yJac);
+  }
 
   return Gout;
 }
@@ -524,8 +538,22 @@ py::dict PyRunner::objectiveEstimate(void) const {
   const auto e = system->lastObjectiveEstimate();
   if (!e.valid)
     return py::dict();
-  return py::dict("value"_a = e.value, "corrected"_a = e.corrected,
-                  "uncertainty"_a = e.uncertainty);
+  py::dict out("value"_a = e.value, "corrected"_a = e.corrected,
+               "uncertainty"_a = e.uncertainty);
+  // With EstimateDiscretisationError: G_h - G per objective, its per-cell
+  // contributions beside the cell faces they lie between, and the continuum G
+  // the two estimates together put the objective at.
+  if (e.discretisation.valid) {
+    Vector faces(system->grid.getNCells() + 1);
+    for (Index i = 0; i < static_cast<Index>(system->grid.getNCells()); ++i)
+      faces(i) = system->grid[i].x_l;
+    faces(system->grid.getNCells()) = system->grid.upperBoundary();
+    out["discretisation"] = e.discretisation.total;
+    out["discretisation_per_cell"] = e.discretisation.perCell;
+    out["x_faces"] = faces;
+    out["continuum"] = Vector(e.corrected - e.discretisation.total);
+  }
+  return out;
 }
 
 py::tuple PyRunner::getAdjointGradients(void) {
@@ -563,6 +591,102 @@ py::tuple PyRunner::getAdjointGradients(void) {
   }
 
   return py::make_tuple(G, gp);
+}
+
+AdjointProblem &PyRunner::objectiveProblem() {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before its objective can be used.");
+  if (adjoint != nullptr)
+    return *adjoint;
+  if (objectiveOnlyAdjoint == nullptr)
+    objectiveOnlyAdjoint = pProblem->createAdjointProblem();
+  return *objectiveOnlyAdjoint;
+}
+
+py::dict PyRunner::nodalLayout(std::vector<Vector> const &cells,
+                               Vector const &lambda,
+                               Vector const &field) const {
+  using namespace pybind11::literals;
+  const Index nCells = system->nCells, k = system->k;
+  const Index nVars = system->nVars, nAux = system->nAux;
+  const Index nPoints = nCells * (k + 1);
+
+  // (nPoints, nVars), the orientation a batched case's GlobalState arrives in.
+  auto block = [&](Index offset, Index width) {
+    Matrix out(nPoints, width);
+    for (Index i = 0; i < nCells; ++i)
+      for (Index v = 0; v < width; ++v)
+        out.block(i * (k + 1), v, k + 1, 1) =
+            cells[i].segment(offset + v * (k + 1), k + 1);
+    return out;
+  };
+  Matrix lam(nCells + 1, nVars);
+  for (Index v = 0; v < nVars; ++v)
+    lam.col(v) = lambda.segment(v * (nCells + 1), nCells + 1);
+
+  return py::dict("x"_a = system->yJac.getPoints(),
+                  "x_faces"_a = getCellBoundaries(),
+                  "sigma"_a = block(0, nVars),
+                  "q"_a = block(nVars * (k + 1), nVars),
+                  "u"_a = block(2 * nVars * (k + 1), nVars),
+                  "aux"_a = block(3 * nVars * (k + 1), nAux), "lambda"_a = lam,
+                  "field"_a = field);
+}
+
+void PyRunner::solve_adjoint(std::optional<Index> g) {
+  AdjointProblem &ap = objectiveProblem();
+  std::vector<Index> objectives;
+  if (g)
+    objectives.push_back(*g);
+  else
+    for (Index i = 0; i < ap.getNg(); ++i)
+      objectives.push_back(i);
+  system->solveAdjointAt(ap, objectives, system->yJac);
+}
+
+py::dict PyRunner::adjoint_state(Index g) const {
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before reading an adjoint state.");
+  auto const *z = system->adjointSolution(g, system->yJac);
+  if (z == nullptr)
+    throw std::runtime_error(
+        "No adjoint state for objective " + std::to_string(g) +
+        " at the current state: call solve_adjoint() first, and again after "
+        "the state moves.");
+  py::dict out = nodalLayout(z->squ, z->lambda, z->field);
+  out["operator_at_state"] = z->operatorAtState;
+  return out;
+}
+
+py::dict PyRunner::objective_gradient(Index g) {
+  AdjointProblem &ap = objectiveProblem();
+  if (g < 0 || g >= ap.getNg())
+    throw std::out_of_range("Objective " + std::to_string(g) +
+                            " requested, but the adjoint problem defines " +
+                            std::to_string(ap.getNg()) + ".");
+  const std::vector<Vector> Gy =
+      system->assembleObjectiveGradient(ap, g, system->yJac, system->jt);
+  return nodalLayout(Gy, Vector::Zero(system->nVars * (system->nCells + 1)),
+                     Vector::Zero(system->getFieldDOF()));
+}
+
+py::dict PyRunner::objective_sensitivity(Index g) const {
+  using namespace pybind11::literals;
+  if (!configured)
+    throw std::runtime_error(
+        "Error: Runner must be configured before reading a sensitivity.");
+  auto const *z = system->adjointSolution(g, system->yJac);
+  if (z == nullptr)
+    throw std::runtime_error(
+        "No adjoint state for objective " + std::to_string(g) +
+        " at the current state: call solve_adjoint() first, and again after "
+        "the state moves.");
+  const auto w = system->objectiveSensitivity(*z);
+  return py::dict("x"_a = w.points, "flux"_a = Matrix(w.flux.transpose()),
+                  "sources"_a = Matrix(w.sources.transpose()),
+                  "operator_at_state"_a = z->operatorAtState);
 }
 
 Vector
