@@ -11,7 +11,28 @@ class AdjointProblem {
 public:
   virtual ~AdjointProblem() = default;
 
-  virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
+  // G = int I_h[g] dx: g evaluated at the k+1 basis nodes and its P_k
+  // interpolant integrated exactly, i.e. the interpolatory weights w of each
+  // cell dotted with g there. That is the functional dg differentiates --
+  // assembleObjectiveGradient weights the nodal dg/dZ by diag(w) -- so this
+  // and G_y are exactly a function and its derivative. An override that
+  // integrates g some other way, such as the exact integral of g(u_h), reports
+  // a different objective from the one the adjoint differentiates.
+  //
+  // Uses the batched gFn hook, whose default calls the pointwise one.
+  virtual Value GFn(Index gIndex, DGSoln &y) const {
+    const auto states = y.evalOnNodes();
+    const auto points = y.getPoints();
+    const Values g = gFn(gIndex, states, points);
+    const Index nNodes = y.getBasis().Order() + 1;
+
+    Value total = 0.0;
+    for (size_t i = 0; i < y.getGrid().getNCells(); ++i) {
+      const Vector weights = y.getBasis().getIntegrationWeights(y.getGrid()[i]);
+      total += g.segment(i * nNodes, nNodes).dot(weights);
+    }
+    return total;
+  }
 
   // The objective with the superconvergent scheme, where u* is the solution the
   // method actually delivers, so G is a functional of u* rather than of u_h.

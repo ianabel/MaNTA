@@ -1773,8 +1773,18 @@ Neumann problem constrains them), so the check needs a `g` at least quadratic in
 `u` and a `k` at which `u*` differs from `u_h`. A C++ case's `dGFndp(g, p, y)`
 integrates for itself and leaves no nodal values to weight, so the C++ base
 falls back to it; such a case differentiates the `u*` objective by overriding
-the `pp` overload. `Runner.G()` reports the `u*` objective too, as
-`getAdjointGradients()` does.
+the `pp` overload, as `AutodiffAdjointProblem` does. `Runner.G()` reports the
+`u*` objective too, as `getAdjointGradients()` does.
+
+**`GFn(g, y)` is the nodal sum `Σ_j w_j g(Z_j)` by default, and an override
+must keep it that.** That sum is the functional `dg` differentiates
+(`assembleObjectiveGradient` weights the nodal `dg/dZ` by `diag(w)`), so
+integrating `g(u_h)` any other way -- exactly, say -- reports a different
+objective from the one the adjoint differentiates. The two differ only at the
+level of the quadrature error, which a finite-difference gradient check at a
+loose tolerance cannot see; `the_autodiff_objective_is_the_functional_dg_differentiates`
+checks the pair at round-off, against a guard that the exact integral is
+visibly different.
 
 Only Python can set the flag (`Python.cpp` exposes it on `PyAdjointProblem`;
 the C++ base defaults false and `AdjointProblemTests.cpp` asserts as much).

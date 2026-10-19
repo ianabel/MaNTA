@@ -1,50 +1,85 @@
 #include "AutodiffAdjointProblem.hpp"
 
-Value AutodiffAdjointProblem::GFn(Index i, DGSoln &y) const
+// dG/dp of the objective GFn reports, G = sum_j w_j g(Z_j, p) over the nodes the
+// objective is integrated on: the k+1 basis nodes with their interpolatory
+// weights, or under Superconvergent the star nodes, at u*, with b1. Taking it at
+// the same nodes with the same weights is what makes it the derivative of the
+// reported G rather than of some other integral of g.
+//
+// setPval takes the *parameter* index. `i` selects the objective, and writing
+// through it would differentiate with respect to whichever parameter happens to
+// share the objective's number -- and, because setPval assigns the whole Real,
+// would leave that parameter holding another one's value afterwards. The physics
+// case would then evaluate a different problem for the rest of the run.
+//
+// Writing pIndex is also what restores it: p is a copy of that parameter's own
+// value with only its gradient seeded, so every assignment puts the value back.
+// clearGradients() removes the seed. AutodiffTransportSystem's dSigmaFn_dp and
+// dSources_dp rely on the same property.
+Value AutodiffAdjointProblem::nodalParameterDerivative(Index i, Index pIndex, GlobalState const &states,
+                                                       std::vector<Position> const &points,
+                                                       Vector const &weights) const
 {
-    auto g_wrapper = [this, i](const DGSoln &y, Position x)
+    Real p = PhysicsProblem->getPval(pIndex);
+    Value out = 0.0;
+    for (size_t j = 0; j < points.size(); ++j)
     {
-        State s = y.eval(x);
-        RealVector u(s.u());
-        RealVector q(s.q());
-        RealVector sigma(s.sigma());
-        RealVector phi(s.phi());
-        return g[i](x, u, q, sigma, phi).val;
-    };
+        const State s = states[j];
+        auto g_wrapper = [&](Real pv)
+        {
+            RealVector u(s.u());
+            RealVector q(s.q());
+            RealVector sigma(s.sigma());
+            RealVector phi(s.phi());
+            PhysicsProblem->setPval(pIndex, pv);
+            return g[i](points[j], u, q, sigma, phi);
+        };
+        out += weights(j) * autodiff::derivative(g_wrapper, wrt(p), at(p));
+    }
+    PhysicsProblem->clearGradients();
+    return out;
+}
 
-    return y.EvaluateIntegral(g_wrapper);
+Matrix AutodiffAdjointProblem::nodalParameterDerivatives(Index i, GlobalState const &states,
+                                                         std::vector<Position> const &points,
+                                                         Vector const &weights) const
+{
+    Matrix out = Matrix::Zero(1, np);
+    for (Index pIndex = 0; pIndex < getNpInternal(); ++pIndex)
+        out(0, pIndex) = nodalParameterDerivative(i, pIndex, states, points, weights);
+    return out;
 }
 
 Value AutodiffAdjointProblem::dGFndp(Index i, Index pIndex, DGSoln &y) const
 {
-    Real p = PhysicsProblem->getPval(pIndex);
+    return nodalParameterDerivative(i, pIndex, y.evalOnNodes(), y.getPoints(), nodalWeights(y));
+}
 
-    // setPval takes the *parameter* index. `i` selects the objective, and writing
-    // through it would differentiate with respect to whichever parameter happens
-    // to share the objective's number -- and, because setPval assigns the whole
-    // Real, would leave that parameter holding another one's value once the
-    // integral finished. The physics case would then evaluate a different problem
-    // for the rest of the run.
-    //
-    // Writing pIndex is also what restores it: p is a copy of that parameter's own
-    // value with only its gradient seeded, so the last assignment puts the value
-    // back. clearGradients() below removes the seed. AutodiffTransportSystem's
-    // dSigmaFn_dp and dSources_dp rely on the same property.
-    auto g_wrapper = [&](Real p, Position x)
-    {
-        State s = y.eval(x);
-        RealVector u(s.u());
-        RealVector q(s.q());
-        RealVector sigma(s.sigma());
-        RealVector phi(s.phi());
+Matrix AutodiffAdjointProblem::dGFndp(Index i, DGSoln &y) const
+{
+    return nodalParameterDerivatives(i, y.evalOnNodes(), y.getPoints(), nodalWeights(y));
+}
 
-        PhysicsProblem->setPval(pIndex, p);
-        return g[i](x, u, q, sigma, phi);
-    };
-    auto I = integrator::integrate([&](Position x)
-                                   { return autodiff::derivative(g_wrapper, wrt(p), at(p, x)); }, PhysicsProblem->xL, PhysicsProblem->xR, max_depth);
-    PhysicsProblem->clearGradients();
-    return I;
+// Reads the u* from the last pp.computeUStar(y), as AdjointProblem::GFn's
+// superconvergent form does.
+Matrix AutodiffAdjointProblem::dGFndp(Index i, DGSoln &y, Postprocessor const &pp) const
+{
+    const Index nCells = y.getGrid().getNCells();
+    const Index nStar = pp.starDoF();
+    Vector weights(nCells * nStar);
+    for (Index c = 0; c < nCells; ++c)
+        weights.segment(c * nStar, nStar) = pp.starWeights(c);
+    return nodalParameterDerivatives(i, pp.evalOnStarNodes(y), pp.starPoints(), weights);
+}
+
+Vector AutodiffAdjointProblem::nodalWeights(DGSoln const &y)
+{
+    const Index nCells = y.getGrid().getNCells();
+    const Index nNodes = y.getBasis().Order() + 1;
+    Vector weights(nCells * nNodes);
+    for (Index c = 0; c < nCells; ++c)
+        weights.segment(c * nNodes, nNodes) = y.getBasis().getIntegrationWeights(y.getGrid()[c]);
+    return weights;
 }
 
 Value AutodiffAdjointProblem::gFn(Index i, const State &s, Position x) const
