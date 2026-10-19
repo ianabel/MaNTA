@@ -270,8 +270,8 @@ void SystemSolver::initialize()
 				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
 				"mode costs more than exact in the worst case and never less accuracy. It is "
 				"only *cheaper* than exact when the sweep converges in fewer than {} sweeps, "
-				"which no test fixture in this tree manages -- it is a bet on a field block "
-				"far larger than the transport one, not a free improvement. Watch the "
+				"which depends on the coupling: the theta pinch does it in ~7.5 at any "
+				"resolution, while a strongly divergent coupling may not at all. Watch the "
 				"\"Coupled field sweeps\" line at the end of the run.",
 				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps,
 				nField + 1);

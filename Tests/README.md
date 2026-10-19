@@ -469,19 +469,21 @@ carries no information whatever about the equations.
   to do with the coupling -- and the source-consistency check would still pass,
   since it samples away from the kinks by more than the stencil's reach.
 
-### There is no coupled regression case, deliberately
+### The coupled regression case
 
-`Tests/RegressionTests/` has no `coupled-field.conf` and is not going to get one
-until a field model with physics in it exists. A regression case selects its
-model by name from `[configuration] FieldModel`, which resolves against the
-process-global registry, so the model would have to live in `PhysicsCases/` and
-be linked into the shipped binary. The only two models that exist are
-manufactured fixtures with no physics in them -- `ManufacturedField` and
-`ManufacturedFieldVector`, both under `Tests/UnitTests` and both deliberately
-unregistered -- and registering a fixture into the production binary to give the
-regression suite something to point at is a worse trade than the gap it closes.
+`Tests/RegressionTests/ThetaPinch.conf` runs the registered field model,
+`ThetaPinchEquilibrium`, under `ThetaPinchDiffusion`, through a `.conf` file:
+the config plumbing, the registry and the netCDF field group. The reference
+check compares the field group as well as the transport -- psi's time series and
+every geometry slot, relative to the reference's magnitude -- because the
+transport's L_2 check sees the field only through what it does to `u`. Its
+restart round trip resumes an algebraic psi, so it pins the coupled state rather
+than the field block of the file, which `psi_round_trips_through_a_restart`
+pins with a differential one.
 
-What covers the coupled path instead, and what each catches:
+The manufactured models stay unregistered: they exist to be compared with closed
+forms. What covers the coupled path beyond the regression case, and what each
+catches:
 
 | test | what only it sees |
 |---|---|
@@ -492,6 +494,9 @@ What covers the coupled path instead, and what each catches:
 | `SolverLifecycleTests.cpp::a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit` | a field model that caches across runs, or an `initialize()` that stops calling `resetForRun` |
 | `SolverLifecycleTests.cpp::a_coupled_run_writes_the_field_group` | the netCDF group: its name, its `label`, and psi and geometry written to the wrong shape |
 | `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
+| `ThetaPinchEquilibriumTests.cpp` | the theta pinch's spline, its derivatives, its sparse block solve in both directions, and its equilibrium against the closed form `V' = Phi / sqrt(C - p)`, at local orders 3.8-3.9 in the field resolution |
+| `FieldJacobianTests.cpp` (theta pinch cases) | the coupled Jacobian of a model whose `A2` lives only in an aux column and whose `A1` runs through four slots; that its sweep contracts at every `cj`, so a sweep that diverges on it is the sweep's defect |
+| `ThetaPinchRunTests.cpp` | a degree-changing restart losing psi; diagnostics evaluated without geometry; a reused solver; the coupled gradient for a parameter that reaches the transport only through the field (`T`); `G_field` against differences of the reported `G`; the objective estimate's field share; the adjoint sweep falling back when it should converge |
 
 **The restart case's oracle is the raw netCDF array, not `getSolution()`, and
 that is load bearing.** `yJac` is filled by `DGSoln::copy` — the function this
@@ -1047,20 +1052,17 @@ These are deliberate and tracked, not oversights:
   to end -- against a closed-form `dG/dp`, against finite differences, and
   against the transpose of a finite-differenced coupled Jacobian -- but there is
   no Python equivalent, and that is a gap in the *bindings* rather than in the
-  tests. `FieldModel` has no pybind11 class, so a Python case cannot define one;
-  the `FieldModel` configuration key names a *registered* model, and no field
-  model is registered anywhere in the tree (both manufactured ones live under
-  `Tests/UnitTests` and are deliberately unregistered). So there is nothing a
-  `python/Tests/test_adjoint.py` fixture could attach. Adding the coupled Python
-  check means first registering a production field model or binding `FieldModel`
-  to Python -- neither of which the adjoint work owns.
+  tests. `FieldModel` has no pybind11 class, so a Python case cannot define one,
+  and the `FieldModel` key -- which can now name a registered model,
+  `ThetaPinchEquilibrium` -- is an error in a `Runner.configure` dict. So a
+  `python/Tests/test_adjoint.py` fixture cannot attach one yet; that is the
+  Python phase of the theta-pinch work.
 
-  Two limits of the coupled adjoint itself are structural rather than untested,
-  and are recorded in `TODO` and beside `G_field` in `SystemSolver.hpp`: an
-  objective whose integrand reads `State::geom` directly loses its `dG/dpsi`
-  term, because `AdjointProblem` reports four state derivatives and geometry is
-  not among them; and a `FieldModel` cannot depend on an adjoint parameter at
-  all, so `d(field residual)/dp` is zero by construction.
+  One limit of the coupled adjoint itself is structural rather than untested,
+  and is recorded in `TODO`: a `FieldModel` cannot depend on an adjoint
+  parameter at all, so `d(field residual)/dp` is zero by construction. An
+  objective may read `State::geom`; its `dG/dpsi` is covered in
+  `ThetaPinchRunTests.cpp`.
 
   One defect that fixture found was **not** in the coupling. The adjoint's local
   matrix stored `+Sq` where the forward Jacobian builds `-Sq` -- the `u` row's

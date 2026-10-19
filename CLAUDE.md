@@ -1333,14 +1333,42 @@ moves the answer by 3.2e-4. And `psi_round_trips_through_a_restart` uses a
 *values*, so an algebraic `psi` would be recomputed from the restored transport
 state and the case would pass without ever reading `psi` off disk.
 
+**The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
+read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
+physics). Three things about it are load-bearing. Its pressure crosses as the
+transport case's aux variable, so its `A2` lives *only* in aux columns and its
+`A1` runs through four geometry slots — the combination the manufactured
+fixtures never reach. Its unknowns live on its own spline grid, so `nField` is
+independent of `k` and the mesh, which is what lets a degree-changing restart
+carry `psi` verbatim (`setInitialConditions`' projection path). And
+`ThetaPinchDiffusion` refuses to run without a field model unless
+`VacuumGeometry = true`, so a frozen-geometry run is a choice rather than a
+forgotten key.
+
+**Irons-Tuck accelerates only along aligned increments**, and that guard is
+the difference between converging and diverging on the theta pinch's adjoint.
+The step extrapolates along the last increment as though the sweep had settled
+into its dominant eigendirection. A non-normal iteration matrix amplifies and
+turns an increment before that — tenfold, at `cos = -0.27`, on the theta pinch
+at `cj = 0`, with a spectral radius of 0.14 — and extrapolating from that pair
+took the sweep to a backward error of 1e68, every gradient silently rescued by
+the exact fallback. `ironsTuck` now requires `|cos| >= 0.9`; the divergent
+fixtures it exists for give `|cos| > 0.99`. A fallback that always rescues is
+also a fallback that hides: `getFieldSweepStats().adjointFellBack` is what
+`the_objective_estimate_carries_the_field_share` asserts against.
+
 **`FieldSolve = iterative` is a cost choice, never an accuracy one.** The block
 Gauss-Seidel sweep escalates to the exact Schur solve when it exhausts its cap,
 in *both* the forward and the adjoint directions, so it can be slower than
 `exact` and can never be less accurate. The break-even is
 `#sweeps < nField + 1` — one transport solve per sweep against `nField + 1` for
-the exact solve — and **no fixture in this tree is on the winning side of it**:
-iterative is ~1.5x more expensive at `nField = 1` and 2.2-6.3x at `nField = 5`.
-It is a bet on `N_magnetics >> N_HDG`, which nothing here exercises. Note that
+the exact solve, plus its dense `O(nField^3)` Schur factorisation — and which
+side a problem is on is a property of the coupling. The manufactured fixtures
+lose (iterative ~1.5x more expensive at `nField = 1`, 2.2-6.3x at `nField = 5`);
+the theta pinch wins at every resolution measured, from 1.3x at `nField = 12`
+to 28x at `nField = 516`, because its sweep contracts at 0.10-0.19 at every
+`cj` and takes ~7.5 sweeps per solve whatever `nField` is.
+`docs/field_coupling.rst` has the table. Note that
 isolated Jacobian solves with *random* right-hand sides needed 13-38 sweeps at
 `nField = 5`, while a real integration averages 2.5-3.6 and has never hit the
 cap; Newton's right-hand sides are far more benign than random vectors, and
@@ -2362,12 +2390,6 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   A coupled restart is not in that class either — `psi` is copied out of the
   file and, being differential, held fixed by `IDACalcIC`, so it round-trips
   bit for bit at whatever tolerance the run itself survives.
-* **No field model is registered anywhere in the tree**, so `FieldModel` has
-  nothing to name in the shipped binary and there is no coupled regression case.
-  The two models that exist are unregistered fixtures under `Tests/UnitTests`.
-  `Tests/README.md` names what this leaves uncovered: nothing exercises the
-  coupled path through a `.conf` file, so the config plumbing and the netCDF
-  group have unit-test cover only.
 * **A field model cannot be reached from Python.** `FieldModel` has no pybind11
   class and `FieldModel` is a `ProblemSelection` key, so it is an error in a
   `Runner.configure` dict. `PyRunner::configure` therefore *refuses* a restart

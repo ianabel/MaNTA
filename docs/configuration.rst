@@ -113,7 +113,7 @@ Problem definition
        feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
        ``RestartData/nField`` is written on every run, and reads back as ``0``.
        An unrecognised name is an error listing what *is* registered;
-       note that no field model is registered in this tree yet. Like
+       ``ThetaPinchEquilibrium`` is the one in this tree. Like
        ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
        ``Runner.configure`` is an error rather than being ignored. See
        :doc:`field_coupling`.

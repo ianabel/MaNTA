@@ -305,10 +305,12 @@ prints one extra line beside the step and Jacobian counts at the end::
 
 The ratio is what to read. A sweep is one transport solve; the exact Schur
 complement is :math:`\texttt{nField}+1` of them. So the iterative path is
-*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`, and
-on every fixture in this tree it is not — see :doc:`field_coupling` for the
-numbers. Measured in a real integration the sweep runs 2.5 to 3.6 iterations per
-Jacobian solve.
+*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`.
+Whether it is depends on the coupling: the theta pinch runs about 7.5 sweeps per
+Jacobian solve at every field resolution, so iterative wins from
+:math:`\texttt{nField} = 12` up, while the small manufactured fixtures run 2.5
+to 3.6 against an :math:`\texttt{nField}+1` of 2 to 6 and lose — see
+:doc:`field_coupling` for the numbers.
 
 .. important::
 

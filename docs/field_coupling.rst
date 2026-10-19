@@ -237,13 +237,53 @@ A run selects one by name:
    [configuration]
    FieldModel = "Equilibrium"
 
-.. note::
+The theta pinch
+~~~~~~~~~~~~~~~
 
-   **No field model is registered in this tree.** The two that exist
-   (``ManufacturedField`` and ``ManufacturedFieldVector``) are test fixtures
-   under ``Tests/UnitTests`` and are deliberately unregistered, so there is
-   nothing for ``FieldModel`` to name in the shipped binary yet. The whole
-   coupling is exercised by the unit suite instead; see ``Tests/README.md``.
+``ThetaPinchEquilibrium`` is the field model registered in this tree, and
+``ThetaPinchDiffusion`` the transport case written against it. Together they
+are a diamagnetic theta pinch in a flux-conserving wall:
+``docs/superpowers/specs/2026-10-19-theta-pinch-field-model-design.md`` is the
+design.
+
+* The transport label is the normalised axial flux :math:`x = \Phi/\Phi_a`, so
+  surfaces move in :math:`r` while their labels do not, and the equilibrium
+  reaches the transport purely as metric coefficients on a fixed grid.
+* Force balance is :math:`p + B^2 = C` on every surface (units with
+  :math:`2\mu_0 = 1`, so :math:`p` is the local beta), and the wall fixes the
+  area it encloses, :math:`\int_0^1 V' \,\mathrm{d}x = \pi a^2`. That
+  integral is what determines :math:`C`.
+* The unknowns are :math:`V' = \mathrm{d}A/\mathrm{d}x` as a cubic B-spline on
+  the model's own grid of ``Intervals`` intervals, plus :math:`C`; the rows are
+  Galerkin against the same splines. The geometry slots are :math:`V'`,
+  :math:`\mathrm{d}V'/\mathrm{d}x`, :math:`\langle|\nabla x|^2\rangle` and
+  :math:`B`.
+* The pressure crosses as an auxiliary variable of the transport case, named
+  by index (``PressureAux``), so the model knows nothing else about the
+  transport. The case evolves :math:`N = V' n`, which keeps continuity exactly
+  conservative while :math:`V'` moves.
+* The block is banded with a one-row, one-column border, and the model
+  overrides all four ``B`` operations with Eigen's ``SparseLU``. So ``nField``
+  is set by ``Intervals`` independently of the transport's degree and mesh.
+
+.. code-block:: toml
+
+   [configuration]
+   TransportSystem = "ThetaPinchDiffusion"
+   FieldModel = "ThetaPinchEquilibrium"
+
+   [ThetaPinchEquilibrium]
+   Intervals = 32        # nField = Intervals + 4
+   PressureAux = 0
+
+   [ThetaPinchDiffusion]
+   Temperature = 0.3
+   D0 = 0.5
+   Gamma = 2.0           # D = D0 (Bref / B)^Gamma
+
+The two manufactured models under ``Tests/UnitTests`` (``ManufacturedField``
+and ``ManufacturedFieldVector``) remain deliberately unregistered: they exist to
+be checked against closed forms, not to be run.
 
 .. _field-solve:
 
@@ -280,13 +320,62 @@ The break-even is
    \#\text{sweeps} < \texttt{nField} + 1
 
 because a sweep costs one transport solve and the exact solve costs
-:math:`\texttt{nField}+1`, and **no fixture in this tree is on the winning side
-of it**: iterative is about 1.5× more expensive than exact at
-:math:`\texttt{nField} = 1` and 2.2–6.3× at :math:`\texttt{nField} = 5`, for the
-same answer. The iterative path is a bet on the regime this feature exists for,
-:math:`N_\text{magnetics} \gg N_\text{HDG}`, where the exact solve's
-:math:`\texttt{nField}+1` transport solves and its :math:`O(\texttt{nField}^3)`
-dense factorisation are hopeless. Nothing in the tree exercises that regime yet.
+:math:`\texttt{nField}+1`, plus an :math:`O(\texttt{nField}^3)` dense
+factorisation of its Schur complement. Which side of it a problem is on is a
+property of the coupling, and the tree has both:
+
+* The manufactured fixtures, with :math:`\texttt{nField}` of 1 and 5, are on
+  the losing side: iterative is about 1.5× more expensive than exact at
+  :math:`\texttt{nField} = 1` and 2.2–6.3× at :math:`\texttt{nField} = 5`.
+* The theta pinch is on the winning side at every resolution measured, because
+  its sweep contracts strongly (spectral radius 0.10–0.19 at every
+  :math:`c_j`) and takes about 7.5 sweeps per Jacobian solve whatever
+  :math:`\texttt{nField}` is. On 16 cells at :math:`k = 4`, one BLAS thread,
+  best of three:
+
+  .. list-table::
+     :header-rows: 1
+
+     * - ``Intervals``
+       - ``nField``
+       - ``exact``
+       - ``iterative``
+       - speed-up
+     * - 8
+       - 12
+       - 252 ms
+       - 196 ms
+       - 1.3×
+     * - 32
+       - 36
+       - 583 ms
+       - 228 ms
+       - 2.6×
+     * - 128
+       - 132
+       - 3948 ms
+       - 496 ms
+       - 8×
+     * - 512
+       - 516
+       - 49185 ms
+       - 1772 ms
+       - 28×
+
+  with the same step sequence in both modes and no fallbacks. That is the
+  regime the iterative path exists for, :math:`N_\text{magnetics} \gg
+  N_\text{HDG}`, where the exact solve's cost grows as
+  :math:`\texttt{nField}^3` and the sweep's not at all.
+
+The Irons–Tuck step extrapolates along the last increment, which is exact once
+the sweep has settled into its dominant eigendirection and unjustified before.
+A strongly non-normal iteration matrix can amplify and turn an increment several
+times over before contracting -- the theta pinch's adjoint sweep grows its first
+increment tenfold, at a cosine of :math:`-0.27` to the one before, while its
+spectral radius is 0.14 -- so the step is taken only when two consecutive
+increments are aligned to :math:`|\cos| \ge 0.9`, and the plain sweep
+otherwise. The divergent couplings the acceleration exists for give
+:math:`|\cos| > 0.99`.
 
 Adjoints
 --------
@@ -317,17 +406,35 @@ it. That derivation is why the iterate *accepted* has to be the unaccelerated
 field row off by :math:`B^T \mu \, \delta`, and the stopping test silently
 becomes an estimate.
 
-Two limits are structural rather than untested, and both are zero today by
-construction rather than by assumption:
+**An objective may read the geometry.** :math:`\psi` reaches nothing outside
+the field rows except through the geometry slots, so the explicit share of
+:math:`G = \sum_j w_j\, g(\text{geom}(\psi, x_j))` is
 
-* **An objective whose integrand reads ``State::geom`` directly loses its
-  :math:`\mathrm{d}G/\mathrm{d}\psi` term.** ``AdjointProblem`` reports
-  :math:`\partial g/\partial u`, :math:`\partial q`, :math:`\partial\sigma` and
-  :math:`\partial\phi`, and geometry is not among them.
-* **A field model cannot depend on an adjoint parameter**, so
-  :math:`\partial R/\partial p` is zero.
+.. math::
 
-Both are recorded in ``TODO`` and beside ``G_field`` in ``SystemSolver.hpp``.
+   \frac{\partial G}{\partial \psi_m} = \sum_j w_j \sum_s
+     \left(\frac{\partial g}{\partial g_s}\right)_j
+     \frac{\partial g_s}{\partial \psi_m}(x_j)
+
+over the nodes :math:`G` is summed on, with the weights it is summed with. An
+objective reports :math:`\partial g/\partial g_s` pointwise, through
+``dgFn_dgeom`` or the geometry rows of ``dg``'s output -- the solver owns the
+weights and ``dGeometry_dpsi``, so a case reports a derivative of :math:`g` and
+never of :math:`G`. An objective that reads no geometry leaves them zero, which
+is the right answer. ``AutodiffAdjointProblem::addGWithGeometry`` takes an
+objective of :math:`(x, u, q, \sigma, \phi, \text{geom})` and differentiates
+it for itself.
+
+On a coupled run the solver evaluates :math:`G`, and its explicit
+:math:`\partial G/\partial p`, on its own geometry-filled physics-node states
+(``AdjointProblem::GFnAtNodes`` and ``dGFndpAtNodes``), since nothing else can
+fill their geometry rows. The objective estimate and the ``"Objective"`` steady
+test carry :math:`G_\psi \cdot \delta\psi` beside the cells' and the
+scalars' shares.
+
+One limit is structural rather than untested: **a field model cannot depend on
+an adjoint parameter**, so :math:`\partial R/\partial p` is zero because there
+is no hook a model could fill. It is recorded in ``TODO``.
 
 Current restrictions
 --------------------

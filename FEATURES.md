@@ -49,24 +49,22 @@ proposed are there and are selected by `FieldSolve`: the exact block elimination
 (a Schur complement onto `psi`, `nField + 1` transport solves per Jacobian
 solve) and the iterate-assuming-weak-coupling one (block Gauss-Seidel with
 Irons-Tuck acceleration, one transport solve per sweep). The guess that the
-exact route "would almost certainly be expensive" turned out to be the wrong way
-round for every problem in the tree so far: the break-even is
-`#sweeps < nField + 1`, and nothing here is on the winning side of it. The
-iterative path is a bet on `N_magnetics >> N_HDG`, which is the regime this
-entry was written for and which nothing yet exercises. See
+exact route "would almost certainly be expensive" depends on the coupling: the
+break-even is `#sweeps < nField + 1`, the manufactured fixtures are on the losing
+side of it, and the theta pinch -- the registered model -- is on the winning
+side at every resolution measured, 28x faster than exact at `nField = 516`. See
 `docs/field_coupling.rst`.
 
   What remains, and is not in scope of that work:
 
-  * **A field model with real physics in it.** Nothing is registered in the tree
-    — the two that exist are unregistered test fixtures — so `FieldModel` has
-    nothing to name in the shipped binary. A 2-D Grad-Shafranov solve is the
-    obvious first one; a DESC stellarator equilibrium is the other. Both plug in
+  * **A field model in more than one dimension.** The registered one,
+    `ThetaPinchEquilibrium`, is a 1-D theta pinch. A 2-D Grad-Shafranov solve is
+    the obvious next; a DESC stellarator equilibrium is the other. Both plug in
     by overriding `updateFieldJacobian`, `applyB`/`applyBTranspose` and
-    `solveB`/`solveBTranspose` so MaNTA never forms the model's Jacobian.
+    `solveB`/`solveBTranspose` so MaNTA never forms the model's Jacobian, as the
+    theta pinch does with a sparse LU.
   * **`nScalars > 0` alongside a field model**, refused today for a reason
     recorded at `setFieldModel`.
   * **A Python or JAX field model.** `FieldModel` has no pybind11 class.
-  * Two structural gaps in the coupled adjoint — an objective that reads
-    geometry, and a field residual that depends on an adjoint parameter — both
-    in `TODO`.
+  * A structural gap in the coupled adjoint: a field residual that depends on
+    an adjoint parameter, in `TODO`.
