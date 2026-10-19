@@ -67,6 +67,18 @@ void SystemSolver::initialize()
 	if (fieldModel)
 		fieldModel->resetForRun();
 
+	// The case's route to geometry outside the residual (its diagnostics),
+	// installed by the solver that runs it and cleared by one with no field
+	// model, so a case reused under a different solver never keeps a stale one.
+	// Here rather than in setFieldModel or the constructor: the discretisation
+	// estimate builds a second solver on the same case that never initialises.
+	if (fieldModel)
+		problem->setGeometryProvider(fieldModel->nGeometry(),
+		                             [model = fieldModel](VectorRef out, Vector const &psi, Position x, Time t)
+		                             { model->Geometry(out, psi, x, t); });
+	else
+		problem->setGeometryProvider(0, {});
+
 	// Nor does the kappa a held nodal tau took from the last run's final
 	// Jacobian build.
 	haveJacobianKappa = false;

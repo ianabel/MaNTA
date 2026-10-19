@@ -1,6 +1,8 @@
 #ifndef TRANSPORTSYSTEM_HPP
 #define TRANSPORTSYSTEM_HPP
 
+#include <functional>
+
 #include "State.hpp"
 #include "Types.hpp"
 #include "SystemSpec.hpp"
@@ -706,6 +708,31 @@ public:
 
   std::map<int, std::string> subVars = {{0, "u"}, {1, "q"}, {2, "sigma"}, {3, "S"}};
 
+  /// The geometry at x, from a field block psi. Set by the solver that runs this
+  /// case -- in initialize(), to the attached field model's Geometry, or cleared
+  /// when there is none -- so a case can fill State::geom outside the residual
+  /// path, where the solver fills it. Diagnostics are the one such place.
+  using GeometryProvider = std::function<void(VectorRef out, Vector const &psi, Position x, Time t)>;
+  void setGeometryProvider(Index nGeometry, GeometryProvider provider)
+  {
+    nGeometryProvided = provider ? nGeometry : 0;
+    geometryProvider = std::move(provider);
+  }
+
+protected:
+  /// Fill s.geom() at x from y's field block, as the residual would. Leaves it
+  /// empty when no field model is attached, which is what the residual does too.
+  void fillGeometry(State &s, DGSoln const &y, Position x, Time t) const
+  {
+    if (!geometryProvider)
+      return;
+    Vector g = Vector::Zero(nGeometryProvided);
+    geometryProvider(g, Vector(y.getField()), x, t);
+    s.geom() = g;
+  }
+
+public:
+
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
   std::optional<std::reference_wrapper<Values>> getSourceCache(Index var) { 
@@ -718,6 +745,9 @@ public:
   }
 
 private:
+  GeometryProvider geometryProvider;
+  Index nGeometryProvided = 0;
+
   // Shared by the two boundary defaults above. Not .at(): out_of_range names a
   // vector, not the thing the case has to do about it.
   Value boundaryFallback(std::vector<Value> const &values, Index i,

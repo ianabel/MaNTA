@@ -586,6 +586,7 @@ void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, DGSoln const &dy
 		for (Index i = 0; i < nAux; ++i)
 			nc.AppendToGroup("AuxG", tIndex, "Aux" + std::to_string(i), [this, i, &y, &t](double x)
 							 {  State s = y.eval(x);
+								fillGeometry(s, y, x, t);
 								return this->AuxG(i, s, x, t); });
 	}
 
