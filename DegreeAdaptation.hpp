@@ -8,6 +8,7 @@
 
 class AdjointProblem;
 class Grid;
+struct EvaluationPlan;
 class PhysicsInstance;
 class SystemSolver;
 class TransportSystem;
@@ -49,6 +50,37 @@ class TransportSystem;
 // progress; returns 0 when the target is already met.
 unsigned int degreeIncrement(double E, double eps, double base);
 
+// A solved level measured against its objectives, for AdaptationTarget =
+// "Objective": each objective's discretisation estimate eta_g (the end-of-solve
+// ObjectiveEstimate::discretisation) against the discretisation share of its
+// tolerance,
+//
+//     tol_g = share * max( ObjectiveTolerance_g |G_g|, ObjectiveAbsoluteTolerance_g )
+//
+// with G_g the objective at the discrete fixed point (ObjectiveEstimate::corrected)
+// and `share` the first entry of ObjectiveBudget. `ratio` is the worst objective's
+// |eta_g| / tol_g: the quantity the degree rule drives to 1, and what the mesh
+// decision asks whether there is anything to grade for.
+//
+// Throws std::logic_error for a solver whose last steady solve made no
+// discretisation estimate -- which configuring for the target rules out.
+struct ObjectiveAccuracy
+{
+    double ratio = 0.0;
+    Index worst = 0;
+    Vector eta;
+    Vector tolerance;
+    Vector G;
+};
+ObjectiveAccuracy objectiveAccuracy(SystemSolver const &system);
+
+// Whether the discretisation estimate a level of `plan` makes fits within
+// maxBatch (always, at 0). Its batch is not a recurring one, so the ParallelFill
+// functions do not count it, but MaxPhysicsBatch bounds it and initialize()
+// refuses a level past it; the objective target, which makes it at every level,
+// holds the levels it chooses to this as well.
+bool discretisationEstimateFits(EvaluationPlan const &plan, Index maxBatch);
+
 // `config` with the pseudo-transient step a finished solve reached as the next
 // solve's first one, for a solve warm-started from that one's state.
 //
@@ -66,6 +98,12 @@ SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &p
 
 // Solve `physics`, adapting the global polynomial degree between solves, and
 // return the solver that produced the final answer.
+//
+// What a level is measured by is AdaptationTarget's. "Solution": the relative
+// L2 gap between u* and u_h against DegreeTolerance. "Objective": the worst
+// objective's discretisation estimate against its share of ObjectiveTolerance
+// (objectiveAccuracy), met at 1. Either goes through Giorgiani's rule below with
+// DegreeAdaptationBase; nothing else about the loop differs.
 //
 // Builds and destroys one SystemSolver per level and is careful never to have
 // two alive at once: Integrator's weight cache is a process-wide global keyed

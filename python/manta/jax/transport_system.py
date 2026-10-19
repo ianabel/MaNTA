@@ -6,6 +6,7 @@ from abc import abstractmethod
 
 from .adjoint_problem import JAXAdjointProblem
 from .state import MaNTA_Decorator, ShiftedState_Decorator
+from .scalars import ScalarConstraints
 
 """
 JAX-based transport system base class that overloads MaNTA TransportSystem.
@@ -13,11 +14,12 @@ Enables automatic differentiation of sigma and source terms using JAX.
 """
 
 # Base class for JAX-based transport systems
-class JAXTransportSystem(MaNTA.TransportSystem):
+class JAXTransportSystem(ScalarConstraints, MaNTA.TransportSystem):
     # The spec comes from the concrete case and is forwarded: this base has no
     # way to know how many variables its subclass has.
     def __init__(self, spec):
         MaNTA.TransportSystem.__init__(self, spec)
+        self._check_scalar_hooks()
         self.dSigmadvar = jax.jit(jax.grad(self.sigma, argnums=1))
         self.dSourcedvar = jax.jit(jax.grad(self.source, argnums=1))
 
@@ -101,6 +103,11 @@ class JAXTransportSystem(MaNTA.TransportSystem):
     def dSources_dsigma( self, index, state, x, t ):
         return self.dSourcedvar(index,state,x,t, self.params).Flux
     
+    @MaNTA_Decorator
+    def dSources_dScalars(self, index, state, x, t):
+        # dS_index/dmu: the Scalars component of source's state gradient.
+        return self.dSourcedvar(index, state, x, t, self.params).Scalars
+
     @MaNTA_Decorator
     def dSources_dPhi( self, index, state, x, t ):
         return self.dSourcedvar(index,state,x,t, self.params).Aux

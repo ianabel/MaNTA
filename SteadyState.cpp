@@ -255,15 +255,44 @@ int SystemSolver::nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, 
         return std::isfinite(delnrm) ? SUN_SUCCESS : SUN_NLS_CONV_RECVR;
     }
 
+    // The correction is at round-off in the error weights: the iteration has
+    // nothing left to do, whichever test is being made.
+    const bool stoppedMoving = delnrm <= NLS_PASS_OUTRIGHT * tol;
+
+    if (objectiveTestActive())
+    {
+        // A C callback: anything the objective's dg throws is carried out to
+        // steadyNewtonSolve and rethrown there, as nlsSys does.
+        try
+        {
+            estimateObjectiveError(del);
+        }
+        catch (...)
+        {
+            nlsException = std::current_exception();
+            return -1;
+        }
+    }
+
     if (m == 0)
     {
         nlsOldNorm = delnrm;
         nlsPrevNorm = delnrm;
         nlsFirstNorm = delnrm;
-        if (delnrm <= NLS_PASS_OUTRIGHT * tol)
+        if (stoppedMoving)
         {
             nlsLastTest = nlsSS * delnrm;
-            return SUN_SUCCESS;
+            return objectiveTestActive() ? objectiveVerdict(true, true) : SUN_SUCCESS;
+        }
+        // No rate yet, so nothing says Newton has reached its own regime. The
+        // estimate is trusted on a first correction already within one unit
+        // of the error weights -- the gauge the continuation uses for a state
+        // that has stopped moving -- and otherwise only once the corrections
+        // are seen to contract.
+        if (objectiveTestActive())
+        {
+            nlsLastTest = nlsSS * delnrm;
+            return objectiveVerdict(delnrm <= UNDAMPED_ATTEMPT_CORRECTION, false);
         }
     }
     else
@@ -294,7 +323,9 @@ int SystemSolver::nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, 
         if (rate >= 1.0)
         {
             nlsLastTest = std::numeric_limits<double>::infinity();
-            return SUN_NLS_CONTINUE;
+            return objectiveTestActive()
+                       ? objectiveVerdict(false, stoppedMoving || objectiveStalled(delnrm, tol))
+                       : SUN_NLS_CONTINUE;
         }
         // Never less than 1: the distance left is taken to be at least the
         // last correction, as in Deuflhard's error-oriented Newton termination.
@@ -308,7 +339,161 @@ int SystemSolver::nlsConvTest(SUNNonlinearSolver NLS, N_Vector del, double tol, 
     }
 
     nlsLastTest = nlsSS * delnrm;
+    if (objectiveTestActive())
+        return objectiveVerdict(true, stoppedMoving || objectiveStalled(nlsLastTest, tol));
     return nlsLastTest <= tol ? SUN_SUCCESS : SUN_NLS_CONTINUE;
+}
+
+// The second way an iteration stops moving, for a run whose error weights are
+// too tight for the correction ever to reach NLS_PASS_OUTRIGHT: the solution
+// passes NewtonStep's own test, so it is converged to the run's tolerances, and
+// the objective estimate has stopped falling -- it is at the floor the
+// arithmetic leaves it, or contracting slower than IDA allows a corrector
+// (NLS_RATEMAX). Iterating on would only run the solve to its cap.
+bool SystemSolver::objectiveStalled(double correctionTest, double tol) const
+{
+    return correctionTest <= tol && std::isfinite(nlsObjectivePrevTest) &&
+           !(nlsObjectiveTest < NLS_RATEMAX * nlsObjectivePrevTest);
+}
+
+int SystemSolver::objectiveVerdict(bool trusted, bool stoppedMoving)
+{
+    // At round-off the estimate is as small as the correction it came with, and
+    // trusted for that reason.
+    if ((trusted || stoppedMoving) && nlsObjectiveTest <= 1.0)
+        return SUN_SUCCESS;
+    // Converged as far as the iteration can go, with the test unmet: stopping
+    // is all that is left, and the solve says so rather than calling it a
+    // convergence or iterating to its cap.
+    if (stoppedMoving)
+    {
+        nlsObjectiveStalled = true;
+        return SUN_SUCCESS;
+    }
+    return SUN_NLS_CONTINUE;
+}
+
+void SystemSolver::setObjectiveTolerance(std::vector<double> relative, std::vector<double> absolute)
+{
+    auto check = [](std::vector<double> const &v, const char *name)
+    {
+        if (v.empty())
+            throw std::logic_error(std::format("{} needs at least one value.", name));
+        for (double x : v)
+            if (!(x >= 0.0) || !std::isfinite(x))
+                throw std::logic_error(std::format(
+                    "{} must be finite and non-negative; got {:g}.", name, x));
+    };
+    check(relative, "ObjectiveTolerance");
+    check(absolute, "ObjectiveAbsoluteTolerance");
+    if (relative.size() > 1 && absolute.size() > 1 && relative.size() != absolute.size())
+        throw std::logic_error(std::format(
+            "ObjectiveTolerance gives {} values and ObjectiveAbsoluteTolerance {}; each is one "
+            "value for every objective or one per objective, so two lists must agree.",
+            relative.size(), absolute.size()));
+    objectiveRelTol = std::move(relative);
+    objectiveAbsTol = std::move(absolute);
+}
+
+void SystemSolver::setObjectiveBudget(double discretisation, double algebraic)
+{
+    if (!(discretisation >= 0.0) || !(algebraic >= 0.0) || !std::isfinite(discretisation) ||
+        !std::isfinite(algebraic) || std::abs(discretisation + algebraic - 1.0) > 1.0e-12)
+        throw std::logic_error(std::format(
+            "ObjectiveBudget is the (discretisation, algebraic) shares of ObjectiveTolerance: "
+            "two non-negative numbers summing to 1. Got ({:g}, {:g}).",
+            discretisation, algebraic));
+    objectiveBudgetDiscretisation = discretisation;
+    objectiveBudgetAlgebraic = algebraic;
+}
+
+void SystemSolver::checkObjectiveTest() const
+{
+    if (adjointProblem == nullptr)
+        throw std::invalid_argument(
+            "SteadyStateTest = \"Objective\" stops on the objectives the adjoint problem "
+            "defines, and this run has none: set solveAdjoint, on a case that provides "
+            "createAdjointProblem.");
+    if (tauScaling != TauScaling::Constant)
+        throw std::invalid_argument(
+            "SteadyStateTest = \"Objective\" cannot be used under tauScaling = "
+            "\"Diffusive\": the adjoint operator carries no d tau / dy.");
+    if (!(objectiveBudgetAlgebraic > 0.0))
+        throw std::invalid_argument(
+            "SteadyStateTest = \"Objective\" spends the algebraic share of ObjectiveBudget, "
+            "and it is zero.");
+
+    const Index ng = adjointProblem->getNg();
+    for (auto const &[v, name] : {std::pair{&objectiveRelTol, "ObjectiveTolerance"},
+                                  std::pair{&objectiveAbsTol, "ObjectiveAbsoluteTolerance"}})
+        if (v->size() != 1 && static_cast<Index>(v->size()) != ng)
+            throw std::invalid_argument(std::format(
+                "{} gives {} values, and the adjoint problem defines {} objectives: give one "
+                "value for all of them or one each.",
+                name, v->size(), ng));
+    for (Index g = 0; g < ng; ++g)
+        if (!(objectiveRelTol[objectiveRelTol.size() == 1 ? 0 : g] > 0.0) &&
+            !(objectiveAbsTol[objectiveAbsTol.size() == 1 ? 0 : g] > 0.0))
+            throw std::invalid_argument(std::format(
+                "Objective {} is given neither a relative nor an absolute tolerance; a "
+                "tolerance of zero cannot be met.",
+                g));
+}
+
+double SystemSolver::objectiveAlgebraicTolerance(Index g, double G) const
+{
+    const double rel = objectiveRelTol[objectiveRelTol.size() == 1 ? 0 : g];
+    const double abs = objectiveAbsTol[objectiveAbsTol.size() == 1 ? 0 : g];
+    return objectiveBudgetAlgebraic * std::max(rel * std::abs(G), abs);
+}
+
+// See the declaration. z^T F is the dual-weighted estimate of G(y) - G(y*), and
+// with J^T z = dG/dy it is (dG/dy) J^-1 F: the first-order change in G that the
+// Newton correction from y makes. The iteration has just solved for that
+// correction with the build at nlsU, so the estimate is a dot product with it --
+// the same number an adjoint solve from that build would give, without the
+// assembly, the nCells factorisations and the per-objective solves
+// solveAdjointAt spends on its own copy of J^T: a quarter to a third of a whole
+// Newton iteration on a C++ case whose physics is cheap.
+void SystemSolver::estimateObjectiveError(N_Vector correction)
+{
+    const Index ng = adjointProblem->getNg();
+    DGSoln state(nVars, grid, k, N_VGetArrayPointer(nlsU), nScalars, nAux, nField);
+    double const *d = N_VGetArrayPointer(correction);
+    const Index cellDOF = static_cast<Index>(localDOF);
+    DGSoln correctionMap(nVars, grid, k, N_VGetArrayPointer(correction), nScalars, nAux, nField);
+
+    nlsObjectivePrevTest = nlsObjectiveTest;
+    nlsObjectiveError.resize(ng);
+    nlsObjectiveTolerance.resize(ng);
+    double worst = 0.0;
+    for (Index g = 0; g < ng; ++g)
+    {
+        // dG/dy has no trace or field block, so the cells contribute, and with
+        // global scalars the scalars' part of the correction through dG/dmu.
+        Vector Gmu;
+        const std::vector<Vector> Gy =
+            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu);
+        double change = 0.0;
+        for (Index i = 0; i < static_cast<Index>(nCells); ++i)
+            change += Gy[i].dot(Eigen::Map<const Vector>(d + i * cellDOF, cellDOF));
+        if (nScalars > 0)
+            change += Gmu.dot(correctionMap.Scalars());
+
+        if (superconvergent)
+            postprocessor->computeUStar(state);
+        const double G = superconvergent ? adjointProblem->GFn(g, state, *postprocessor)
+                                         : adjointProblem->GFn(g, state);
+        nlsObjectiveError(g) = std::abs(change);
+        nlsObjectiveTolerance(g) = objectiveAlgebraicTolerance(g, G);
+        const double ratio = nlsObjectiveError(g) == 0.0
+                                 ? 0.0
+                                 : nlsObjectiveError(g) / nlsObjectiveTolerance(g);
+        // Written so that a NaN carries through and fails the test.
+        if (!(ratio <= worst))
+            worst = ratio;
+    }
+    nlsObjectiveTest = worst;
 }
 
 int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
@@ -322,6 +507,10 @@ int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
     nlsAtStart = true;
     nlsStartNorm = std::numeric_limits<double>::quiet_NaN();
     nlsFirstNorm = nlsLastNorm = nlsLastTest = std::numeric_limits<double>::quiet_NaN();
+    nlsObjectiveTest = nlsObjectivePrevTest = std::numeric_limits<double>::quiet_NaN();
+    nlsObjectiveError.resize(0);
+    nlsObjectiveTolerance.resize(0);
+    nlsObjectiveStalled = false;
     nlsException = nullptr;
 
     SUNNonlinSolSetMaxIters(steadyNLS, static_cast<int>(newtonMaxIters));
@@ -337,6 +526,7 @@ int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
     rec.firstCorrection = nlsFirstNorm;
     rec.correctionNorm = nlsLastNorm;
     rec.correctionTest = nlsLastTest;
+    rec.objectiveTest = nlsObjectiveTest;
 
     if (nlsException)
     {
@@ -498,6 +688,19 @@ void SystemSolver::reportSteadyStep(SteadyStepStats const &s) const
                               : "rejected");
 }
 
+// One line per objective, when the estimate carries a discretisation error --
+// which it does only when asked for, so an ordinary run prints nothing new.
+void SystemSolver::reportObjectiveEstimate(ObjectiveEstimate const &e) const
+{
+    if (!e.valid || !e.discretisation.valid)
+        return;
+    for (Index g = 0; g < e.value.size(); ++g)
+        std::println("  objective {}: G = {:.10g}, algebraic error {:.3e}, discretisation "
+                     "error {:.3e}, so G ~ {:.10g}",
+                     g, e.value(g), e.value(g) - e.corrected(g), e.discretisation.total(g),
+                     e.corrected(g) - e.discretisation.total(g));
+}
+
 void SystemSolver::reportSteadyStats(std::string_view outcome, SteadyStats const &s) const
 {
     if (!steadyDiagnostics)
@@ -609,7 +812,8 @@ void SystemSolver::solveSteadyState(bool resume)
     if (!initialised)
         throw std::runtime_error("solveSteadyState called before initialize()");
 
-    if (steadyTest == SteadyTest::NewtonStep)
+    // Objective is NewtonStep's loop with another test in its undamped solve.
+    if (steadyTest == SteadyTest::NewtonStep || steadyTest == SteadyTest::Objective)
     {
         solveSteadyStateNewtonStep(resume);
         return;
@@ -728,7 +932,7 @@ void SystemSolver::solveSteadyState(bool resume)
     // and it costs one residual per continuation step plus this one.
     SteadyStats stats;
     const long residualEvals0 = nResidualEvals, jacBuilds0 = nJacBuilds,
-               jacSolves0 = nJacSolves;
+               jacSolves0 = nJacSolves, adjointSolves0 = nAdjointSolves;
 
     // Cleared, not appended to: this describes one solve, and PyRunner runs many
     // on one solver.
@@ -781,9 +985,12 @@ void SystemSolver::solveSteadyState(bool resume)
         stats.residualEvals = nResidualEvals - residualEvals0;
         stats.jacBuilds = nJacBuilds - jacBuilds0;
         stats.jacSolves = nJacSolves - jacSolves0;
+        stats.adjointSolves = nAdjointSolves - adjointSolves0;
         steadyStats = stats;
 
         reportSteadyStats(outcome, stats);
+        if (estimateObjectiveOnFinish)
+            reportObjectiveEstimate(objectiveEstimate);
     };
 
     // Entering the loop. Unconditional and on stdout, because the equivalent for
@@ -1108,6 +1315,10 @@ void SystemSolver::solveSteadyState(bool resume)
 // one that raised it shrinks dt by the same ratio.
 void SystemSolver::solveSteadyStateNewtonStep(bool resume)
 {
+    const bool objectiveTest = steadyTest == SteadyTest::Objective;
+    if (objectiveTest)
+        checkObjectiveTest();
+
     allocateSteadyScratch();
     allocateNewtonStepScratch();
 
@@ -1145,7 +1356,7 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
 
     SteadyStats stats;
     const long residualEvals0 = nResidualEvals, jacBuilds0 = nJacBuilds,
-               jacSolves0 = nJacSolves;
+               jacSolves0 = nJacSolves, adjointSolves0 = nAdjointSolves;
     steadyStepStats.clear();
     steadyOutcome = SteadyOutcome::NotRun;
 
@@ -1166,23 +1377,33 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         stats.residualEvals = nResidualEvals - residualEvals0;
         stats.jacBuilds = nJacBuilds - jacBuilds0;
         stats.jacSolves = nJacSolves - jacSolves0;
+        stats.adjointSolves = nAdjointSolves - adjointSolves0;
         steadyStats = stats;
         reportSteadyStats(outcome, stats);
+        if (estimateObjectiveOnFinish)
+            reportObjectiveEstimate(objectiveEstimate);
     };
 
-    std::println("Steady solve: {} on {} cells at k = {}, NewtonStep test at {:g}",
-                 steadyMode == SteadyMode::Newton ? "Newton" : "PseudoTransient",
-                 nCells, k, steadyStepTol);
+    if (objectiveTest)
+        std::println("Steady solve: {} on {} cells at k = {}, Objective test on {} objective(s), "
+                     "algebraic share {:g} of ObjectiveTolerance",
+                     steadyMode == SteadyMode::Newton ? "Newton" : "PseudoTransient", nCells, k,
+                     adjointProblem->getNg(), objectiveBudgetAlgebraic);
+    else
+        std::println("Steady solve: {} on {} cells at k = {}, NewtonStep test at {:g}",
+                     steadyMode == SteadyMode::Newton ? "Newton" : "PseudoTransient",
+                     nCells, k, steadyStepTol);
     std::println("  dt = {:g}, SER rate {:g}, floor {:g}, max step {:g}",
                  ptcStep, ptcSERRate, ptcSERFloor, ptcMaxStep);
 
     // ||F|| is the steady residual at the start of the step; |d1| and |d| the
     // step's first and last corrections, and ss|d| the tested quantity, all
-    // WRMS in the error weights.
+    // WRMS in the error weights. Under the objective test the tested quantity
+    // is "obj", max |z^T F| / tolerance, after them.
     if (steadyStepDiagnostics)
-        std::println("  {:>4}  {:>10}  {:>10}  {:>5}  {:>5}  {:>5}  {:>6}  {:>10}  {:>10}  {}",
+        std::println("  {:>4}  {:>10}  {:>10}  {:>5}  {:>5}  {:>5}  {:>6}  {:>10}  {:>10}  {}{}",
                      "step", "dt", "||F||", "iters", "res", "jac", "solves", "|d1|",
-                     "ss|d|", "outcome");
+                     "ss|d|", objectiveTest ? std::format("{:>10}  ", "obj") : "", "outcome");
 
     int step = 0;
     unsigned int rejected = 0;
@@ -1193,7 +1414,7 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         rec.undamped = nsUndampedNext;
         rec.dt = nsUndampedNext ? std::numeric_limits<double>::infinity() : ptcStep;
         const long stepResidualEvals0 = nResidualEvals, stepJacBuilds0 = nJacBuilds,
-                   stepJacSolves0 = nJacSolves;
+                   stepJacSolves0 = nJacSolves, stepAdjointSolves0 = nAdjointSolves;
 
         auto closeRecord = [&](bool accepted, std::string_view outcome)
         {
@@ -1201,13 +1422,16 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
             rec.residualEvals = nResidualEvals - stepResidualEvals0;
             rec.jacBuilds = nJacBuilds - stepJacBuilds0;
             rec.jacSolves = nJacSolves - stepJacSolves0;
+            rec.adjointSolves = nAdjointSolves - stepAdjointSolves0;
             stats.add(rec);
             steadyStepStats.push_back(rec);
             if (steadyStepDiagnostics)
-                std::println("  {:>4}  {:>10.3e}  {:>10.3e}  {:>5}  {:>5}  {:>5}  {:>6}  {:>10.3e}  {:>10.3e}  {}",
+                std::println("  {:>4}  {:>10.3e}  {:>10.3e}  {:>5}  {:>5}  {:>5}  {:>6}  {:>10.3e}  {:>10.3e}  {}{}",
                              rec.step, rec.dt, rec.residualNorm, rec.newtonIters,
                              rec.residualEvals, rec.jacBuilds, rec.jacSolves,
-                             rec.firstCorrection, rec.correctionTest, outcome);
+                             rec.firstCorrection, rec.correctionTest,
+                             objectiveTest ? std::format("{:>10.3e}  ", rec.objectiveTest) : "",
+                             outcome);
         };
 
         if (tauFrozenPerStep() && !tauAtY)
@@ -1252,11 +1476,22 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
 
         const bool converged = (retval == SUN_SUCCESS);
 
+        // The objective test's verdict at the last undamped iteration, kept
+        // whether or not it passed: a solve that ends short of its tolerance
+        // reports how far short.
+        if (objectiveTest && rec.undamped && nlsObjectiveError.size() > 0)
+        {
+            stats.objectiveTest = rec.objectiveTest;
+            stats.objectiveError = nlsObjectiveError;
+            stats.objectiveTolerance = nlsObjectiveTolerance;
+        }
+
         if (converged && rec.undamped)
         {
+            const bool stalled = nlsObjectiveStalled;
             stats.correctionNorm = rec.correctionNorm;
             stats.correctionTest = rec.correctionTest;
-            closeRecord(true, "converged");
+            closeRecord(true, stalled ? "stalled" : "converged");
 
             // As the Residual path: yJac is what outlives the solve, and dy/dt
             // vanishes at a steady state by definition.
@@ -1264,8 +1499,28 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
             setJacEvalY(Y, ptcDYdt);
             N_VConst(0.0, dYdt);
 
-            std::println("  converged: ss|d| = {:g} after {} steps.", rec.correctionTest,
-                         step + 1);
+            if (stalled)
+            {
+                std::println("  stalled: the correction reached round-off with max |z^T F| / "
+                             "tolerance = {:g} after {} steps.",
+                             rec.objectiveTest, step + 1);
+                finish("stopped: the objective tolerance is below what the solve resolves",
+                       step + 1, rejected, SteadyOutcome::Stalled);
+                logmsg<LOG_LEVEL::WARNING>(
+                    "Steady solve stalled: the Newton correction is at round-off, and the "
+                    "estimated error in an objective is still {:g} times its tolerance. The "
+                    "state is as converged as the solve can make it; an objective near zero "
+                    "needs ObjectiveAbsoluteTolerance.",
+                    rec.objectiveTest);
+                return;
+            }
+
+            if (objectiveTest)
+                std::println("  converged: max |z^T F| / tolerance = {:g} after {} steps.",
+                             rec.objectiveTest, step + 1);
+            else
+                std::println("  converged: ss|d| = {:g} after {} steps.", rec.correctionTest,
+                             step + 1);
             finish("converged", step + 1, rejected, SteadyOutcome::Converged);
             return;
         }
@@ -1330,6 +1585,12 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
     }
 
     finish("FAILED: ran out of continuation steps", step, rejected, SteadyOutcome::OutOfSteps);
+    if (objectiveTest)
+        throw std::runtime_error(std::format(
+            "Steady solve did not converge in {} continuation steps (Objective test; last "
+            "max |z^T F| / tolerance {:g}), with dt = {:g}. SteadyStateSolver = \"TimeMarch\" "
+            "is the fallback.",
+            maxContinuationSteps, stats.objectiveTest, ptcStep));
     throw std::runtime_error(std::format(
         "Steady solve did not converge in {} continuation steps (NewtonStep test at {:g}), "
         "with dt = {:g}. SteadyStateSolver = \"TimeMarch\" is the fallback.",

@@ -92,6 +92,9 @@ const std::vector<Entry> &table()
          "Base name for output files; defaults to the config file's stem."},
         {"solveAdjoint", {}, Type::Bool, Category::Solver, false, false, false,
          "Build the adjoint problem and solve for dG/dp after the integration."},
+        {"WriteAdjoints", {}, Type::Bool, Category::Solver, false, false, false,
+         "Write G, dG/dp and each objective's adjoint state z into the netCDF output at the "
+         "end of the run; needs solveAdjoint. See docs/adjoints.rst."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
          "Arms steady-state termination by its presence. Its value is compared against dy/dt "
          "under TimeMarch, and against a mesh-independent weighted norm of the steady residual "
@@ -113,6 +116,11 @@ const std::vector<Entry> &table()
          "Estimate the objective and its remaining error at the end of each steady solve. Costs "
          "one residual, one Jacobian build and one solve, and needs solveAdjoint. Charged per "
          "solve, so a solve driven in slices pays it per slice."},
+        {"EstimateDiscretisationError", {}, Type::Bool, Category::Solver, false, false, false,
+         "With the objective estimate, also estimate each objective's discretisation error and "
+         "its per-cell contributions, dual-weighted on a richer discretisation of the same mesh. "
+         "Costs one physics and one derivative evaluation at the enriched nodes per estimate. "
+         "Needs solveAdjoint and EstimateObjectiveOnFinish. See docs/adjoints.rst."},
         {"MaxContinuationSteps", {}, Type::UInt, Category::Solver, false, false, 200u,
          "KINSol calls one steady solve may make before giving up. Each is a full Newton solve, "
          "so a healthy run uses ten or so and the default is a runaway backstop. Lower it to stop "
@@ -140,7 +148,27 @@ const std::vector<Entry> &table()
          "corrector test passes on the undamped Newton correction, ss*||J^-1 F|| in the run's "
          "error weights at or below SteadyStateStepTolerance, and takes each damped step as one "
          "Newton iteration (Kelley-Keyes); Residual stops when the weighted residual norm falls below "
-         "SteadyStateTolerance and keeps a continuation step only if that norm fell."},
+         "SteadyStateTolerance and keeps a continuation step only if that norm fell; Objective "
+         "continues as NewtonStep and stops when the adjoint estimate |z^T F| of every objective's "
+         "remaining error is within the algebraic share of ObjectiveTolerance. Objective needs "
+         "solveAdjoint, and controls only the objectives: see docs/running.rst."},
+        {"ObjectiveTolerance", {}, Type::DoubleList, Category::Solver, false, false,
+         std::vector<double>{1e-3},
+         "Under SteadyStateTest or AdaptationTarget = Objective, the accuracy asked of each "
+         "objective G, relative to |G|: one value for every objective, or an array with one per "
+         "objective. The tolerance is max(ObjectiveTolerance |G|, ObjectiveAbsoluteTolerance), "
+         "split by ObjectiveBudget."},
+        {"ObjectiveAbsoluteTolerance", {}, Type::DoubleList, Category::Solver, false, false,
+         std::vector<double>{0.0},
+         "The floor under ObjectiveTolerance, in the objective's own units, for an objective "
+         "near zero: one value, or one per objective. 0 sets none, and an objective at zero then "
+         "asks for an accuracy no solve resolves (outcome Stalled)."},
+        {"ObjectiveBudget", {}, Type::DoubleList, Category::Solver, false, false,
+         std::vector<double>{0.5, 0.5},
+         "How ObjectiveTolerance is divided between the discretisation error and the algebraic "
+         "error, as the array [discretisation, algebraic]: non-negative, summing to 1. The "
+         "Objective steady test spends the algebraic share, AdaptationTarget = Objective the "
+         "discretisation share."},
         {"SteadyStateStepTolerance", {}, Type::Double, Category::Solver, false, false, 0.33,
          "The NewtonStep test's threshold, in units of the run's error weights. 0.33 is IDA's "
          "corrector constant; IDACalcIC uses 0.0033. Must be positive."},
@@ -185,9 +213,9 @@ const std::vector<Entry> &table()
          "u* - u_h, and re-solving at a higher degree. Steady solves only; implies "
          "Superconvergent."},
         {"DegreeTolerance", {}, Type::Double, Category::Solver, false, false, 1.0e-6,
-         "Target for DegreeAdaptation: the estimated L2 error relative to the "
-         "solution's own L2 norm, worst variable. Relative so that one number means "
-         "the same thing for variables in different units."},
+         "Target for DegreeAdaptation under AdaptationTarget = Solution: the estimated L2 "
+         "error relative to the solution's own L2 norm, worst variable. Relative so that "
+         "one number means the same thing for variables in different units."},
         {"MaxPolynomialDegree", {}, Type::UInt, Category::Solver, false, false, 10u,
          "Ceiling on the degree DegreeAdaptation may reach. Reaching it warns and "
          "returns the best result available rather than failing."},
@@ -199,11 +227,20 @@ const std::vector<Entry> &table()
          "How much error one extra degree is assumed to buy, in Giorgiani's rule "
          "dk = ceil(log_base(E/tolerance)). 10 is cautious, 100 aggressive; must be "
          "between 10 and 100."},
+        {"AdaptationTarget", {}, Type::String, Category::Solver, false, false, std::string{"Solution"},
+         "What DegreeAdaptation and MeshAdaptation adapt to. Solution (default): the degree "
+         "to DegreeTolerance on u* - u_h. Objective: the degree until every objective's "
+         "estimated discretisation error is within the discretisation share of "
+         "ObjectiveTolerance, and the mesh graded, where the modal decay says, only if the "
+         "sample does not meet that already. "
+         "Objective needs solveAdjoint, turns EstimateDiscretisationError on, and makes "
+         "Objective the default SteadyStateTest. See docs/adaptivity.rst."},
         {"MeshAdaptation", {}, Type::Bool, Category::Solver, false, false, false,
          "Run the p -> h -> p sequence: solve uniform at PolynomialDegree, decide from "
-         "the per-cell modal decay rate whether an end of the domain wants grading, "
-         "regrade at the same cell count if so, then adapt the degree to "
-         "DegreeTolerance. Needs PolynomialDegree >= 3, because at 2 the decision is "
+         "the per-cell modal decay rate whether an end of the domain wants grading (under "
+         "AdaptationTarget = Objective, only if the objectives' tolerance is not yet met), "
+         "regrade at the same cell count if so, then adapt the degree. Needs "
+         "PolynomialDegree >= 3, because at 2 the decision is "
          "reversed rather than merely noisy. Steady solves only; implies "
          "DegreeAdaptation and so Superconvergent. See docs/adaptivity.rst."},
         {"RebuildPhysicsOnRegrid", {}, Type::Bool, Category::Solver, false, false, false,

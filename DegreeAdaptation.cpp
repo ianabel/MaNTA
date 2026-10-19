@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <limits>
 #include <print>
 #include <stdexcept>
 #include <vector>
@@ -137,6 +138,55 @@ LevelError measure(SystemSolver &system, SolverConfig const &config,
 }
 } // namespace
 
+ObjectiveAccuracy objectiveAccuracy(SystemSolver const &system)
+{
+    const SystemSolver::ObjectiveEstimate e = system.lastObjectiveEstimate();
+    if (!e.valid || !e.discretisation.valid)
+        throw std::logic_error(
+            "objectiveAccuracy needs the discretisation estimate of the level's last steady "
+            "solve, and this solver made none: AdaptationTarget = \"Objective\" configures "
+            "every level to.");
+
+    std::vector<double> const &rel = system.getObjectiveTolerance();
+    std::vector<double> const &abs = system.getObjectiveAbsoluteTolerance();
+    const double share = system.getObjectiveBudget().first;
+    const Index ng = e.corrected.size();
+    auto pick = [](std::vector<double> const &v, Index g)
+    { return v[v.size() == 1 ? 0 : static_cast<size_t>(g)]; };
+
+    ObjectiveAccuracy out;
+    out.eta = e.discretisation.total;
+    out.G = e.corrected;
+    out.tolerance.resize(ng);
+    for (Index g = 0; g < ng; ++g)
+    {
+        const double tol = share * std::max(pick(rel, g) * std::abs(e.corrected(g)), pick(abs, g));
+        out.tolerance(g) = tol;
+
+        // A tolerance of zero -- an objective at zero with no absolute floor -- is
+        // one nothing meets, and reads as infinitely far from it rather than as a
+        // division by zero.
+        const double r = tol > 0.0 ? std::abs(out.eta(g)) / tol
+                                   : std::numeric_limits<double>::infinity();
+        if (g == 0 || r > out.ratio)
+        {
+            out.ratio = r;
+            out.worst = g;
+        }
+    }
+    return out;
+}
+
+bool discretisationEstimateFits(EvaluationPlan const &plan, Index maxBatch)
+{
+    if (maxBatch == 0)
+        return true;
+    for (auto const &site : plan.sitesOf(EvaluationKind::DiscretisationEstimate))
+        if (site.batchSize() > maxBatch)
+            return false;
+    return true;
+}
+
 SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &previous)
 {
     SolverConfig carried = config;
@@ -174,6 +224,26 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     const Index nVars = physics.problem().getNumVars();
     const double eps = config.DegreeTolerance;
 
+    // The objectives are the adjoint problem's, so the target needs one -- and
+    // tolerances that name each of its objectives once, or all of them together.
+    const bool toObjective = config.AdaptationTarget == "Objective";
+    if (toObjective)
+    {
+        if (adjoint == nullptr)
+            throw std::invalid_argument(
+                "AdaptationTarget = \"Objective\" adapts to the objectives the case's adjoint "
+                "problem defines, and this case provides none.");
+        const Index ng = adjoint->getNg();
+        for (auto const &[v, name] :
+             {std::pair{&config.ObjectiveTolerance, "ObjectiveTolerance"},
+              std::pair{&config.ObjectiveAbsoluteTolerance, "ObjectiveAbsoluteTolerance"}})
+            if (v->size() != 1 && static_cast<Index>(v->size()) != ng)
+                throw std::invalid_argument(std::format(
+                    "{} gives {} values, and the adjoint problem defines {} objectives: give "
+                    "one value for all of them or one each.",
+                    name, v->size(), ng));
+    }
+
     if (k0 > config.MaxPolynomialDegree)
         throw std::invalid_argument(
             "PolynomialDegree already exceeds MaxPolynomialDegree, so degree "
@@ -191,6 +261,17 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         kMax = degreeCeiling([&](Grid const &g, unsigned int kk)
                              { return planner->evaluationPlanFor(g, kk); },
                              grid, k0, config.MaxPolynomialDegree, config.MaxPhysicsBatch);
+
+        // The objective target makes the discretisation estimate at every level.
+        // Its batch is not a recurring one, so degreeCeiling does not count it,
+        // but MaxPhysicsBatch bounds it all the same -- initialize() refuses a
+        // level whose estimate breaks the cap -- and it is the larger, at two
+        // degrees beyond the residual's nodes. So the ceiling comes down to the
+        // last degree whose estimate fits as well.
+        if (toObjective)
+            while (kMax > k0 && !discretisationEstimateFits(planner->evaluationPlanFor(grid, kMax),
+                                                            config.MaxPhysicsBatch))
+                --kMax;
     }
     const bool batchBound = kMax < config.MaxPolynomialDegree;
 
@@ -200,12 +281,16 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     if (kMax > k0)
         physics.requireAdaptable("DegreeAdaptation");
 
-    std::println("Degree adaptation: starting at k = {}, ceiling {}{}, relative "
-                 "tolerance {:g}, base {:g}",
-                 k0, kMax,
-                 batchBound ? std::format(" (MaxPhysicsBatch = {})", config.MaxPhysicsBatch)
-                            : std::string{},
-                 eps, config.DegreeAdaptationBase);
+    const std::string ceilingNote =
+        batchBound ? std::format(" (MaxPhysicsBatch = {})", config.MaxPhysicsBatch) : std::string{};
+    if (toObjective)
+        std::println("Degree adaptation: starting at k = {}, ceiling {}{}, to the objectives' "
+                     "discretisation share {:g} of ObjectiveTolerance, base {:g}",
+                     k0, kMax, ceilingNote, config.ObjectiveBudget[0], config.DegreeAdaptationBase);
+    else
+        std::println("Degree adaptation: starting at k = {}, ceiling {}{}, relative "
+                     "tolerance {:g}, base {:g}",
+                     k0, kMax, ceilingNote, eps, config.DegreeAdaptationBase);
 
     std::unique_ptr<SystemSolver> system;
     unsigned int k = k0;
@@ -308,23 +393,45 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             ++levels;
         }
 
-        // runSolver has already freed the SUNDIALS state; accuracyEstimate
-        // reads yJac, which owns its own memory, and the postprocessor, which is
-        // a member -- so both outlive it.
-        const LevelError err = measure(*system, config, grid, nVars);
+        // The control quantity E and the target it is held to. Under the
+        // solution target E is the relative L2 gap between u* and u_h and the
+        // target DegreeTolerance; under the objective target E is already a
+        // ratio to the tolerance, so the target is 1.
+        double E = 0.0, target = eps;
+        if (toObjective)
+        {
+            // Read off the estimate the level's steady solve made on its way
+            // out, so measuring a level costs nothing beyond what solving it did.
+            const ObjectiveAccuracy acc = objectiveAccuracy(*system);
+            for (Index g = 0; g < acc.eta.size(); ++g)
+                std::println("  k = {}: objective {}: discretisation error {:.3e} against "
+                             "{:.3e} ({:.3g}x), G ~ {:.10g}",
+                             k, g, acc.eta(g), acc.tolerance(g),
+                             std::abs(acc.eta(g)) / acc.tolerance(g), acc.G(g) - acc.eta(g));
+            E = acc.ratio;
+            target = 1.0;
+        }
+        else
+        {
+            // runSolver has already freed the SUNDIALS state; accuracyEstimate
+            // reads yJac, which owns its own memory, and the postprocessor, which
+            // is a member -- so both outlive it.
+            const LevelError err = measure(*system, config, grid, nVars);
 
-        // Both aggregates, every level. globalL2 drives the decision because it
-        // is the quantity the benchmarks quote, so the tolerance means the same
-        // thing as the numbers they report; worstCell is the binding constraint
-        // on a *single* global degree and is the one to watch if the loop stops
-        // while some corner of the domain is plainly unresolved.
-        std::println("  k = {}: relative L2 error {:.3e} (variable {}), "
-                     "absolute {:.3e}, worst cell {:.3e} at cell {}",
-                     k, err.relative, err.worstVar, err.globalL2, err.worstCell,
-                     err.worstCellIndex);
+            // Both aggregates, every level. globalL2 drives the decision because
+            // it is the quantity the benchmarks quote, so the tolerance means the
+            // same thing as the numbers they report; worstCell is the binding
+            // constraint on a *single* global degree and is the one to watch if
+            // the loop stops while some corner of the domain is plainly
+            // unresolved.
+            std::println("  k = {}: relative L2 error {:.3e} (variable {}), "
+                         "absolute {:.3e}, worst cell {:.3e} at cell {}",
+                         k, err.relative, err.worstVar, err.globalL2, err.worstCell,
+                         err.worstCellIndex);
+            E = err.relative;
+        }
 
-        const unsigned int bump = degreeIncrement(err.relative, eps,
-                                                  config.DegreeAdaptationBase);
+        const unsigned int bump = degreeIncrement(E, target, config.DegreeAdaptationBase);
 
         if (bump == 0)
         {
@@ -339,14 +446,15 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             // available and the caller can still have it; what must not happen
             // is that the run reports success at a tolerance it never reached.
             logmsg<LOG_LEVEL::WARNING>(
-                "Degree adaptation stopped at the ceiling k = {} ({}) with a relative "
-                "L2 error of {:g} against a tolerance of {:g}. The result is the best "
-                "this degree can do, not a converged one.",
+                "Degree adaptation stopped at the ceiling k = {} ({}) with {} of {:g} against "
+                "{:g}. The result is the best this degree can do, not a converged one.",
                 kMax,
                 batchBound ? std::format("the highest degree within MaxPhysicsBatch = {}",
                                          config.MaxPhysicsBatch)
                            : std::string("MaxPolynomialDegree"),
-                err.relative, eps);
+                toObjective ? "a discretisation error, relative to its share of ObjectiveTolerance,"
+                            : "a relative L2 error",
+                E, target);
             std::println("  stopped at the ceiling k = {}, tolerance not met", kMax);
             break;
         }

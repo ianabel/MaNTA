@@ -168,7 +168,5 @@ What is not covered
 * :math:`k = 0` is **rejected** with ``std::invalid_argument``. The degree-0 basis
   cannot be evaluated away from its node, and the theory requires
   :math:`k \ge 1` regardless.
-* **Spatial adjoint parameters** are rejected with the flag on; see
-  :doc:`adjoints`.
 * ``nAux > 0`` and ``nScalars > 0`` are handled by the flag-on Jacobian, but no
   order study measures them.

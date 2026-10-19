@@ -250,7 +250,7 @@ interpreter to use, and runs the regression driver and pytest with it. A fresh
 configure picks up `build/venv`, or failing that a `.venv` of your own in the
 repository root, without being told.
 
-It builds the environment with a *versioned* interpreter (`python3.13` by
+It builds the environment with a *versioned* interpreter (`python3.14` by
 default) on purpose: a venv created by plain `python3 -m venv` records the
 unversioned `/usr/bin/python3`, so when your distribution moves that symlink to a
 new release the environment's packages are stranded in the old
