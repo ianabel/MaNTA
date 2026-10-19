@@ -1560,6 +1560,21 @@ three properties of the subpackage are load-bearing rather than stylistic:
   `JAX_PLATFORM_NAME=cpu`; as library code that last one would have disabled the
   GPU path `ffi_runner` exists to provide. Those writes live in the drivers that
   need them now — `python-physics/stellarator/`.
+* **A JAX case's global scalars come from one pure function**,
+  `scalar(index, states, states_dot, integrator, t, params)`, beside `sigma`,
+  `source` and `aux` (`manta/jax/scalars.py`). Both bases derive `ScalarG`,
+  `ScalarGPrime` and `dSources_dScalars` from it and `source`, and
+  `JAXAdjointProblem` derives `dScalarG_dp` — the one hook with no C++ default.
+  It is optional: a case writing `ScalarG` itself, as mirror-plasma does, keeps
+  its own methods, and only its adjoint stops, asking for `scalar`. Two details
+  are load-bearing. `dg`'s `Scalars` entry has to be *integrated* dG/dmu, and a
+  vmapped gradient carries it per point — `State.to_manta` would keep the first
+  point's and drop the rest — so `JAXAdjointProblem.dg` contracts it with
+  `manta.getPhysicsWeights` over the plan's grid. And with spatial parameters
+  the pointwise `dSources_dScalars` finds its node's parameters by position in
+  the plan's `Residual` points; with uniform fields, or a coupling that does not
+  read them, a wrong lookup is exact, which is why
+  `test_a_spatial_scalar_coupling_reads_each_nodes_parameters` uses neither.
 
 `python/` holds exactly two things: `manta/` and `Tests/`. Every driver, config
 and notebook is one self-contained directory under either **`python-examples/`**

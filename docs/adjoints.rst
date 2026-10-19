@@ -88,9 +88,10 @@ Two hooks carry the scalars' parts:
   parameters an ``(np, nPoints)`` array with one column per physics node. It
   has **no default** — a constraint the parameters do not enter returns zeros,
   and an adjoint problem that does not define it stops the run by name, rather
-  than drop a term from the gradient. ``manta.jax``'s ``JAXAdjointProblem``
-  cannot derive it, because a JAX case's ``ScalarG`` does not take the
-  parameters, so a JAX case with scalars defines it too.
+  than drop a term from the gradient. ``manta.jax`` derives it from a case's
+  ``scalar`` function, and ``JAXAdjointProblem`` integrates its pointwise
+  :math:`\partial g/\partial\mu` into the ``"Scalars"`` entry itself
+  (:doc:`python`).
 
 Spatial parameters
 ------------------

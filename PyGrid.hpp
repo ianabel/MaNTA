@@ -71,4 +71,29 @@ inline Vector getPhysicsNodes(Position x_l, Position x_u, Index nCells,
   return physicsNodesOn(Grid(x_l, x_u, nCells), k, superconvergent);
 }
 
+// One quadrature weight per physics node, in the same order: the integration
+// weights of the degree-k basis, or of the degree-(k+1) star basis with the
+// superconvergent scheme -- the b1 the objective is integrated with there. So
+// weights . g is the objective GFn reports for g sampled on physicsNodesOn.
+inline Vector physicsWeightsOn(Grid const &grid, unsigned int k,
+                               bool superconvergent) {
+  const unsigned int order = superconvergent ? k + 1 : k;
+  const NodalBasis basis = BasisType::getBasis(order);
+  Vector weights((order + 1) * grid.getNCells());
+  for (size_t i = 0; i < grid.getNCells(); ++i)
+    weights.segment(i * (order + 1), order + 1) =
+        basis.getIntegrationWeights(grid[i]);
+  return weights;
+}
+
+inline Vector getPhysicsWeights(const std::vector<double> &cellBoundaries,
+                                unsigned int k, bool superconvergent) {
+  return physicsWeightsOn(Grid(cellBoundaries), k, superconvergent);
+}
+
+inline Vector getPhysicsWeights(Position x_l, Position x_u, Index nCells,
+                                unsigned int k, bool superconvergent) {
+  return physicsWeightsOn(Grid(x_l, x_u, nCells), k, superconvergent);
+}
+
 #endif // PYGRID_HPP

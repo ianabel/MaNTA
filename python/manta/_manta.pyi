@@ -7,7 +7,7 @@ import enum
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'getPhysicsNodes', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'getPhysicsNodes', 'getPhysicsWeights', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -732,6 +732,16 @@ def getPhysicsNodes(cellBoundaries: collections.abc.Sequence[typing.SupportsFloa
 def getPhysicsNodes(x_l: typing.SupportsFloat | typing.SupportsIndex, x_u: typing.SupportsFloat | typing.SupportsIndex, nCells: typing.SupportsInt | typing.SupportsIndex, k: typing.SupportsInt | typing.SupportsIndex, superconvergent: bool = False) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
     """
     The points the physics is evaluated at, and a spatial adjoint parameter defined: the k+1 basis nodes per cell, or the k+2 star nodes with the superconvergent scheme
+    """
+@typing.overload
+def getPhysicsWeights(cellBoundaries: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex], k: typing.SupportsInt | typing.SupportsIndex, superconvergent: bool = False) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    One quadrature weight per point getPhysicsNodes returns: weights . g is the objective MaNTA reports for g sampled there
+    """
+@typing.overload
+def getPhysicsWeights(x_l: typing.SupportsFloat | typing.SupportsIndex, x_u: typing.SupportsFloat | typing.SupportsIndex, nCells: typing.SupportsInt | typing.SupportsIndex, k: typing.SupportsInt | typing.SupportsIndex, superconvergent: bool = False) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+    """
+    One quadrature weight per point getPhysicsNodes returns: weights . g is the objective MaNTA reports for g sampled there
     """
 def load_physics_plugin(path: str) -> None:
     """

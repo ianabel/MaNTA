@@ -46,6 +46,7 @@ from ._manta import (
     TomlValue as TomlValue,
     getNodes as getNodes,
     getPhysicsNodes as getPhysicsNodes,
+    getPhysicsWeights as getPhysicsWeights,
     load_physics_plugin as load_physics_plugin,
     numbered_spec as numbered_spec,
     physics_cases as physics_cases,
