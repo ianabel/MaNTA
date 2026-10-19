@@ -3,7 +3,6 @@
 
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
-#include <boost/math/quadrature/gauss_kronrod.hpp>
 
 #include "AutodiffTransportSystem.hpp"
 #include "Types.hpp"
@@ -16,8 +15,10 @@ class AutodiffAdjointProblem : public AdjointProblem
 public:
     AutodiffAdjointProblem(AutodiffTransportSystem *TransportSystem) : PhysicsProblem(TransportSystem) { AdjointProblem::ng = 0; }
 
-    virtual Value GFn(Index i, DGSoln &y) const override;
+    // GFn is AdjointProblem's nodal default, the objective dg differentiates.
     virtual Value dGFndp(Index i, Index pIndex, DGSoln &y) const override;
+    virtual Matrix dGFndp(Index i, DGSoln &y) const override;
+    virtual Matrix dGFndp(Index i, DGSoln &y, Postprocessor const &pp) const override;
 
     virtual Value gFn(Index i, const State &s, Position x) const override;
 
@@ -45,8 +46,11 @@ public:
 private:
     std::vector<ftype> g;
 
-    using integrator = boost::math::quadrature::gauss_kronrod<double, 15>;
-    constexpr static int max_depth = 2;
+    Value nodalParameterDerivative(Index i, Index pIndex, GlobalState const &states,
+                                   std::vector<Position> const &points, Vector const &weights) const;
+    Matrix nodalParameterDerivatives(Index i, GlobalState const &states,
+                                     std::vector<Position> const &points, Vector const &weights) const;
+    static Vector nodalWeights(DGSoln const &y);
     AutodiffTransportSystem *PhysicsProblem;
 
     std::map<std::tuple<Index, Index>, bool> upperBoundarySensitivities;

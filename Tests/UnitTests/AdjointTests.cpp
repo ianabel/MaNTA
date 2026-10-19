@@ -325,7 +325,10 @@ BOOST_AUTO_TEST_CASE(each_objective_gets_its_own_gradient) {
       const double fd = (Gplus(g) - Gminus(g)) / (2.0 * h);
       BOOST_TEST_MESSAGE("objective " << g << ", parameter " << p
                          << ": adjoint " << G_p(g, p) << " against " << fd);
-      BOOST_TEST(G_p(g, p) == fd, boost::test_tools::tolerance(2e-4));
+      // 1e-8, not looser: GFn and dg are now one functional, and the agreement
+      // measured is 6e-10. A GFn integrating g some other way moves this by
+      // the difference between the two quadratures, not by rounding.
+      BOOST_TEST(G_p(g, p) == fd, boost::test_tools::tolerance(1e-8));
     }
   }
 
@@ -425,5 +428,163 @@ BOOST_AUTO_TEST_CASE(the_corrected_objective_beats_the_tolerance_it_was_solved_a
 
   std::filesystem::remove("adjoint_objective_estimate.nc");
 }
+
+// An autodiff objective's value and its gradient are one functional.
+//
+// G_y is the derivative of G = sum_j w_j g(Z_j) over the nodes the objective is
+// integrated on -- assembleObjectiveGradient weights the nodal dg/dZ by diag(w)
+// -- so GFn has to report that sum, and dGFndp has to differentiate it. Both
+// used to integrate g(u_h) exactly instead, with a Gauss-Kronrod rule over the
+// whole domain: a different functional, close enough that a finite-difference
+// check of the gradient at 2e-4 could not tell. These check each half at
+// round-off, against a guard that the exact integral is visibly different.
+namespace {
+
+struct AutodiffObjectiveFixture {
+  Grid grid;
+  std::unique_ptr<AdjointTestProblem> problem;
+  std::unique_ptr<AutodiffAdjointProblem> objective;
+  std::unique_ptr<SystemSolver> sys;
+
+  explicit AutodiffObjectiveFixture(bool superconvergent)
+      : grid(0.0, 1.0, 6),
+        problem(std::make_unique<AdjointTestProblem>(config_snippet, grid)) {
+    // Nonlinear in u, varying in x, and reading a parameter, so neither the
+    // nodal rule nor the star rule integrates it exactly and dG/dp is nonzero.
+    objective = std::make_unique<AutodiffAdjointProblem>(problem.get());
+    AdjointTestProblem *pr = problem.get();
+    objective->addG([pr](Position x, RealVector &u, RealVector &, RealVector &,
+                         RealVector &) -> Real {
+      return pr->getPval(0) * (1.0 + x) * u(0) * u(0);
+    });
+    objective->setNp(1);
+
+    sys = std::make_unique<SystemSolver>(grid, 3, problem.get());
+    sys->setTau(10.0);
+    sys->setInputFile("autodiff_objective_quadrature");
+    sys->setWriteOutput(false);
+    sys->setWriteDatFile(false);
+    sys->setOutputCadence(1.0);
+    sys->setNOutput(2);
+    sys->setInitialTime(0.0);
+    sys->setSuperconvergent(superconvergent);
+    sys->setAdjointProblem(objective.get());
+    sys->setSolveAdjoint(false);
+    CapturedOutput quiet;
+    sys->initialize();
+  }
+
+  ~AutodiffObjectiveFixture() {
+    CapturedOutput quiet;
+    sys->destroySundials();
+  }
+
+  // G at the state held in `buf`, as the solver would report it.
+  double G(std::vector<double> &buf) {
+    DGSoln v(problem->getNumVars(), grid, 3, buf.data(), 0, problem->getNumAux());
+    if (sys->isSuperconvergent()) {
+      sys->postprocessor->computeUStar(v);
+      return objective->GFn(0, v, *sys->postprocessor);
+    }
+    return objective->GFn(0, v);
+  }
+};
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(the_autodiff_objective_is_the_functional_dg_differentiates) {
+  for (bool superconvergent : {false, true}) {
+    BOOST_TEST_CONTEXT("superconvergent = " << superconvergent) {
+      AutodiffObjectiveFixture f(superconvergent);
+      DGSoln const &y = f.sys->yJac;
+      std::vector<double> base(y.data(), y.data() + y.getDoF());
+
+      const auto Gy = f.sys->assembleObjectiveGradient(*f.objective, 0, y, f.sys->jt);
+      const Index cellDOF = Gy[0].size();
+      std::vector<double> delta(base.size(), 0.0);
+      double predicted = 0.0;
+      for (size_t i = 0; i < Gy.size(); ++i)
+        for (Index d = 0; d < cellDOF; ++d) {
+          const Index n = static_cast<Index>(i) * cellDOF + d;
+          delta[n] = std::sin(1.7 * n + 0.3);
+          predicted += Gy[i](d) * delta[n];
+        }
+
+      // G is quadratic in the state (u* is linear in u and q), so a central
+      // difference is exact up to rounding.
+      const double h = 1e-4;
+      auto shifted = [&](double s) {
+        std::vector<double> buf(base);
+        for (size_t n = 0; n < buf.size(); ++n)
+          buf[n] += s * delta[n];
+        return buf;
+      };
+      std::vector<double> plus = shifted(h), minus = shifted(-h);
+      const double fd = (f.G(plus) - f.G(minus)) / (2.0 * h);
+      BOOST_TEST_MESSAGE("dG/dy . delta " << predicted << " against " << fd);
+      BOOST_TEST(predicted == fd, boost::test_tools::tolerance(1e-9));
+
+      // Not vacuous: the exact integral of g(u_h), which GFn used to report, has
+      // a derivative this test would have rejected.
+      if (!superconvergent) {
+        auto exact = [&](std::vector<double> &buf) {
+          DGSoln v(f.problem->getNumVars(), f.grid, 3, buf.data(), 0, f.problem->getNumAux());
+          return v.EvaluateIntegral([&](DGSoln const &w, Position x) {
+            return f.objective->gFn(0, w.eval(x), x);
+          });
+        };
+        const double fdExact = (exact(plus) - exact(minus)) / (2.0 * h);
+        BOOST_TEST(std::abs(fdExact - predicted) > 1e-6 * std::abs(predicted),
+                   "the exact integral's derivative " << fdExact << " is within "
+                       << std::abs(fdExact - predicted)
+                       << " of dG/dy, so this fixture cannot tell the two apart");
+      }
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(the_autodiff_parameter_derivative_is_of_the_reported_objective) {
+  Value basisDerivative = 0.0, starDerivative = 0.0;
+  for (bool superconvergent : {false, true}) {
+    BOOST_TEST_CONTEXT("superconvergent = " << superconvergent) {
+      AutodiffObjectiveFixture f(superconvergent);
+      DGSoln &y = f.sys->yJac;
+      std::vector<double> base(y.data(), y.data() + y.getDoF());
+      const double p0 = f.problem->getPval(0).val;
+
+      Value analytic = 0.0;
+      if (superconvergent) {
+        f.sys->postprocessor->computeUStar(y);
+        analytic = f.objective->dGFndp(0, y, *f.sys->postprocessor)(0, 0);
+        starDerivative = analytic;
+      } else {
+        analytic = f.objective->dGFndp(0, y)(0, 0);
+        BOOST_TEST(f.objective->dGFndp(0, 0, y) == analytic,
+                   boost::test_tools::tolerance(1e-15));
+        basisDerivative = analytic;
+      }
+      BOOST_TEST(f.problem->getPval(0).val == p0,
+                 "dGFndp left the parameter at " << f.problem->getPval(0).val);
+
+      // G is linear in p, so the central difference is exact up to rounding.
+      const double h = 1e-3;
+      f.problem->setPval(0, Real(p0 + h));
+      const double Gplus = f.G(base);
+      f.problem->setPval(0, Real(p0 - h));
+      const double Gminus = f.G(base);
+      f.problem->setPval(0, Real(p0));
+      const double fd = (Gplus - Gminus) / (2.0 * h);
+      BOOST_TEST_MESSAGE("dG/dp " << analytic << " against " << fd);
+      BOOST_TEST(analytic == fd, boost::test_tools::tolerance(1e-10));
+    }
+  }
+
+  // Not vacuous: at this k, u* differs from u_h enough that a superconvergent
+  // dGFndp taken on the basis nodes, which is what it used to be, would fail.
+  BOOST_TEST(std::abs(starDerivative - basisDerivative) > 1e-6 * std::abs(starDerivative),
+             "the star-node and basis-node derivatives agree to "
+                 << std::abs(starDerivative - basisDerivative));
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()
