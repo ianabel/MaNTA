@@ -375,7 +375,8 @@ CoupledSolver multiDofFixture(Index nCells, Index k, double strength = 1.0)
 /// The pressure is high enough (T = 0.3, central density 1) that the field is
 /// far from vacuum, so the coupling blocks are not evaluated at a degenerate
 /// point; `intervals` sets the field block's size, M + 4.
-CoupledSolver thetaPinchFixture(Index nCells, Index k, Index intervals, bool superconvergent = false)
+CoupledSolver thetaPinchFixture(Index nCells, Index k, Index intervals, bool superconvergent = false,
+                                double cj = 1.7)
 {
     using namespace toml::literals::toml_literals;
     static const toml::value config = u8R"(
@@ -388,7 +389,7 @@ CoupledSolver thetaPinchFixture(Index nCells, Index k, Index intervals, bool sup
     return makeCoupledSolverAtState(
         nCells, k, std::make_unique<ThetaPinchDiffusion>(config, grid),
         std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{.intervals = intervals}, grid),
-        superconvergent);
+        superconvergent, /*tau=*/0.75, cj);
 }
 
 double spectralRadius(CoupledSolver const &solver, int iterations = 60)
@@ -1476,5 +1477,23 @@ BOOST_AUTO_TEST_CASE(the_theta_pinch_iterative_solve_agrees_with_the_exact_one)
     N_VDestroy(iterative);
 }
 
+
+
+// The theta pinch's block Gauss-Seidel iteration contracts at every cj,
+// steady (cj = 0, where the adjoint always runs) to stiff, and at every field
+// resolution: measured 0.10 to 0.19. So a sweep on it that fails to converge is
+// a defect in the sweep, not a property of the coupling -- which is how the
+// alignment guard in ironsTuck was found.
+BOOST_AUTO_TEST_CASE(the_theta_pinch_sweep_contracts_at_every_cj)
+{
+    for (double cj : {0.0, 1.7, 100.0, 1e4})
+        for (Index M : {8, 64})
+        {
+            auto solver = thetaPinchFixture(6, 3, M, false, cj);
+            const double rho = spectralRadius(solver, 200);
+            BOOST_TEST_MESSAGE("cj = " << cj << ", M = " << M << ": rho = " << rho);
+            BOOST_TEST(rho < 0.3);
+        }
+}
 
 BOOST_AUTO_TEST_SUITE_END()

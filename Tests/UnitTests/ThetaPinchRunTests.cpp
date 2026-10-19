@@ -508,6 +508,16 @@ BOOST_AUTO_TEST_CASE(the_objective_estimate_carries_the_field_share)
     const Index nField = sys.getFieldDOF();
     DGSoln state(sys.nVars, *run.grid, sys.k, N_VGetArrayPointer(sys.Y), 0, sys.nAux, nField);
     sys.solveAdjointAt(objective, {0, 1}, state);
+
+    // The iterative adjoint sweep converged on its own. Its iteration matrix
+    // amplifies the first increment tenfold before contracting at 0.14, and an
+    // Irons-Tuck step taken from that pair diverged to a backward error of 1e68,
+    // leaving the exact solve to rescue every gradient -- correct, and paying
+    // for both. ironsTuck now accelerates only along aligned increments.
+    const auto sweeps = sys.getFieldSweepStats();
+    BOOST_TEST_MESSAGE("adjoint sweeps: " << sweeps.adjointSweeps);
+    BOOST_TEST(!sweeps.adjointFellBack);
+    BOOST_TEST(sweeps.adjointSweeps <= 30);
     N_Vector zero = N_VClone(sys.Y), F = N_VClone(sys.Y);
     N_VConst(0.0, zero);
     sys.residual(sys.t0, sys.Y, zero, F);

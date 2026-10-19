@@ -2841,6 +2841,20 @@ Vector SystemSolver::ironsTuck(const Vector &g, const Vector &delta, const Vecto
     if (!(secant.norm() > 1e-12 * scale))
         return g;
 
+    // Only along a direction the two increments agree on. The step is exact
+    // when delta = lambda deltaPrev -- the sweep settled into its dominant
+    // eigendirection -- and is an extrapolation with no evidence behind it
+    // otherwise. A strongly non-normal iteration matrix amplifies and turns an
+    // increment before that regime is reached: the theta pinch's adjoint sweep
+    // at cj = 0 grows its first increment tenfold at cos = -0.27, while its
+    // spectral radius is 0.14. Extrapolating from that pair is what drove that
+    // sweep to a backward error of 1e68, where the plain iteration converges in
+    // ten sweeps. The divergent couplings this acceleration exists for give
+    // pairs with |cos| above 0.99, so they are untouched.
+    const double alignment = delta.dot(deltaPrev) / (delta.norm() * deltaPrev.norm());
+    if (!(std::abs(alignment) >= 0.9))
+        return g;
+
     const Vector accelerated = g - (delta.dot(secant) / secant.squaredNorm()) * delta;
 
     // The guard above bounds the denominator relative to the numerator, so this
@@ -2951,17 +2965,14 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     //
     //     #sweeps  <  nField + 1
     //
-    // and *no fixture in this tree is on the winning side of it*: at nField == 1
-    // the sweep takes 3 against exact's 2, and at nField == 5 it takes 13 to 38
-    // against exact's 6. Measured, the iterative path is 1.5x more expensive than
-    // exact at nField == 1 and 2-6x more expensive at nField == 5, for the same
-    // answer -- and an escalation pays fieldSolveMaxSweeps *plus* the exact solve
-    // on top. That is not a defect: this path is a bet on N_magnetics >> N_HDG,
-    // where nField + 1 transport solves and an O(nField^3) dense solve are
-    // hopeless and one sweep per iteration is the only affordable option. It is
-    // a bet, though, and not a free improvement, which is why it is written down
-    // here, in the initialize() warning, and in TODO rather than left to be
-    // rediscovered.
+    // and which side of it a run is on is a property of the coupling. The
+    // manufactured fixtures lose: at nField == 1 the sweep takes 3 against
+    // exact's 2, and at nField == 5 it takes 13 to 38 against exact's 6. The
+    // theta pinch wins: its sweep contracts at 0.10-0.19 and takes ~7.5 per
+    // solve whatever nField is, so iterative is 1.3x faster at nField == 12 and
+    // 28x at nField == 516. An escalation, though, pays fieldSolveMaxSweeps
+    // *plus* the exact solve on top -- which is why the mode is a cost choice,
+    // stated here, in the initialize() message and in docs/field_coupling.rst.
     //
     // Counted, not warned: a warning here would fire once per Jacobian solve.
     // The count is reported once per run, in Solver.cpp.
