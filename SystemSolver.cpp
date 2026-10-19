@@ -717,6 +717,15 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             if (sameGrid)
                 for (Index v = 0; v < nVars; ++v)
                     y.lambda(v) = restart.lambda(v);
+
+            // Nor do the field unknowns: they are the field model's own
+            // representation, sized by the model rather than by the transport's
+            // degree or mesh, and runManta refuses a file whose nField differs
+            // from the model's. So they transfer verbatim, which is also the
+            // only choice that leaves them set at all -- InitialFieldValue is
+            // not called on a restart, and resetCoeffs left psi zero.
+            if (nField > 0)
+                y.getField() = restart.getField();
         }
 
         ApplyDirichletBCs(y, t); // If dirichlet, overwrite with those boundary conditions
