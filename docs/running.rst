@@ -1540,9 +1540,9 @@ nothing.
    some 320 ``(k+1)`` sites in the core — and the measurements in
    ``MESH-REFINEMENT.md`` say most of the available win does not need them.
 
-   Adaptation is also refused alongside spatial adjoint parameters, for the same
-   reason ``Superconvergent`` already is: those are indexed by node, so changing
-   the degree changes how many parameters there are.
+   Adaptation is also refused alongside spatial adjoint parameters: those are
+   indexed by physics node, so changing the degree changes how many parameters
+   there are.
 
 .. _suppress-algebraic-error:
 

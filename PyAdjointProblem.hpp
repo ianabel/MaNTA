@@ -71,48 +71,59 @@ public:
         std::to_string(np) + ", " + std::to_string(nPoints) + ")." + hint);
   }
 
-  Matrix dGFndp(Index gIndex, DGSoln &y) const override {
-    const auto states = y.evalOnNodes();
-    const auto points = y.getPoints();
-    Matrix out;
-
+  // The explicit dG/dp of G = sum_m w_m g(Z_m, p), from dgFndp at the nodes the
+  // objective is evaluated on, nNodes per cell, with one weight per node.
+  //
+  // A spatial parameter takes its own value p_m at each of those nodes, so
+  // dG/dp_m = w_m dg/dp_m: one row per node, (nPoints, np), the layout of G_p's
+  // block for this objective. That is the discrete derivative the adjoint term
+  // computes too -- d(residual)/dp_m through the cell projection -- which is
+  // what lets the two halves of G_p add. A parameter that is one number gets
+  // the sum over nodes, (1, np).
+  Matrix explicitParameterDerivative(Index gIndex, GlobalState const &states,
+                                     std::vector<Position> const &points,
+                                     Vector const &weights, Index nNodes) const {
     Matrix dgdp = dgFndp(gIndex, states, points);
     checkDgFndpShape(dgdp, points.size());
 
-    // If parameters are spatial, int dg/dp dx = int dg/dp_cell
-    // delta(x - x_cell) dx, so we just return dg/dp evaluated at
-    // the nodes. Otherwise, we need to integrate dg/dp over the
-    // domain to get the total sensitivity with respect to that
-    // parameter.
-    if (areParametersSpatial()) {
-      // Transposed on the way out: computeAdjointGradients assigns this into a
-      // (nCells * (k + 1), np) block of G_p, while the hook reports (np,
-      // nPoints) -- the orientation the non-spatial branch below indexes as
-      // dgdp(p, ind).
-      return dgdp.transpose();
-    }
+    if (areParametersSpatial())
+      return (dgdp * weights.asDiagonal()).transpose();
 
-    out.resize(1, np);
+    Matrix out(1, np);
     out.setZero();
-
-    for (size_t i = 0; i < y.getGrid().getNCells(); i++) {
-      const Interval &I = y.getGrid()[i];
-
-      // interpolate dgFndp onto the quadrature points
-      // integrate interpolation to get weights
-      // compute integral as sum dgFndp * weights
-      const auto k = y.getBasis().Order();
-
-      const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
-
-      const auto weights = y.getBasis().getIntegrationWeights(I);
-      for (Index p = 0; p < np; p++) {
-        const Vector dgdp_cellwise = dgdp(p, ind);
-        out(p) += dgdp_cellwise.dot(weights);
-      }
-    }
-
+    const Index nCells = static_cast<Index>(points.size()) / nNodes;
+    for (Index i = 0; i < nCells; i++)
+      for (Index p = 0; p < np; p++)
+        out(p) += dgdp.row(p).segment(i * nNodes, nNodes).dot(
+            weights.segment(i * nNodes, nNodes));
     return out;
+  }
+
+  Matrix dGFndp(Index gIndex, DGSoln &y) const override {
+    const Index nCells = y.getGrid().getNCells();
+    const Index nNodes = y.getBasis().Order() + 1;
+    Vector weights(nCells * nNodes);
+    for (Index i = 0; i < nCells; i++)
+      weights.segment(i * nNodes, nNodes) =
+          y.getBasis().getIntegrationWeights(y.getGrid()[i]);
+
+    return explicitParameterDerivative(gIndex, y.evalOnNodes(), y.getPoints(),
+                                       weights, nNodes);
+  }
+
+  // At the star nodes, with u* and the star basis's weights b1: the derivative
+  // of AdjointProblem::GFn's superconvergent form. Reads the u* from the last
+  // pp.computeUStar(y).
+  Matrix dGFndp(Index gIndex, DGSoln &y,
+                Postprocessor const &pp) const override {
+    const Index nCells = y.getGrid().getNCells();
+    const Index nNodes = pp.starDoF();
+    Vector weights(nCells * nNodes);
+    for (Index i = 0; i < nCells; i++)
+      weights.segment(i * nNodes, nNodes) = pp.starWeights(i);
+
+    return explicitParameterDerivative(gIndex, pp.evalOnStarNodes(y),
+                                       pp.starPoints(), weights, nNodes);
   }
   Value gFn(Index gIndex, const State &s, Position x) const override {
     throw std::runtime_error(

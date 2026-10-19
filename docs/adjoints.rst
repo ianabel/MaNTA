@@ -58,6 +58,41 @@ parameter that acts through a boundary condition rather than through the
 equations must be placed in the trailing block and declared with
 ``computeLowerBoundarySensitivity`` / ``computeUpperBoundarySensitivity``.
 
+Spatial parameters
+------------------
+
+Setting ``spatialParameters = True`` (Python only) gives each internal parameter
+its own value at every node where the physics is evaluated, so a parameter is a
+*field*: a diffusivity :math:`\kappa(x)` in :math:`\hat\sigma = \kappa(x)\, q`,
+say. Those nodes are the :math:`k+1` basis nodes of each cell, or its
+:math:`k+2` star nodes with ``Superconvergent = true``, and
+``manta.getPhysicsNodes(x_l, x_u, nCells, k, superconvergent)`` returns them in
+the order the solver uses. A case defines its field on exactly those points and
+looks its value up by position; the plan's ``Residual`` site carries the same
+points (:doc:`physics_interface`).
+
+The hooks report the pointwise derivative at every node — ``dSigma`` returns
+:math:`\partial\hat\sigma/\partial\kappa = q` everywhere, ``dgFndp`` returns
+:math:`\partial g/\partial p` — and the solver places each value at the node it
+belongs to. ``G_p`` is then ``(ng * nPoints, np)``: one row per (objective,
+node), one column per field, and each entry is the **discrete** derivative
+:math:`\partial G/\partial p_m`. Both halves of the gradient agree on that:
+
+* the adjoint term differentiates the residual through the cell's projection of
+  nodal physics values onto the test space — the mass matrix, or ``A9`` over the
+  star nodes;
+* the explicit term is :math:`w_m\, \partial g/\partial p_m`, with
+  :math:`w_m` the weight of the quadrature ``GFn`` integrates :math:`g` with — the
+  basis weights, or the star weights at :math:`u^*`.
+
+So the column sums to the derivative with respect to a uniform shift of the
+field, and an approximation to the functional derivative
+:math:`\delta G/\delta p(x_m)` is ``G_p[m] / w_m``.
+
+A boundary parameter is one number whatever ``spatialParameters`` says. Its
+gradient is in the row of the boundary cell's first physics node, so sum its
+column to read it.
+
 How the gradient is computed
 ----------------------------
 
@@ -263,9 +298,6 @@ suite are worth copying:
 Limitations
 -----------
 
-* Spatial adjoint parameters — those indexed by node — are **rejected** when
-  ``Superconvergent`` is set, because the postprocessed node set would silently
-  redefine how many parameters there are. See :doc:`superconvergence`.
 * Anything indexed per auxiliary variable is sized ``nAux``, not ``nVars``.
 
 The corrected objective and its error bar

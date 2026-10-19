@@ -47,6 +47,18 @@ public:
     return static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(out);
   }
 
+  // dG/dp|explicit with the superconvergent scheme: the derivative of the
+  // objective GFn(gIndex, y, pp) reports, b1 . g over the star nodes with u*.
+  //
+  // The default is the form above, because a C++ case reports dG/dp through
+  // dGFndp(gIndex, pIndex, y), which integrates for itself and leaves the
+  // solver no nodal values to weight: such a case differentiates the u*-based
+  // objective by overriding this. PyAdjointProblem has the batched dgFndp and
+  // overrides it with the exact derivative.
+  virtual Matrix dGFndp(Index gIndex, DGSoln &y, Postprocessor const &) const {
+    return dGFndp(gIndex, y);
+  }
+
   virtual void ComputePhysicsDerivatives(
       std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS>
           &&out,

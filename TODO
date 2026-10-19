@@ -664,10 +664,6 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     scalars and one aux, and ScalarJacobianTests.cpp with three scalars, but
     neither measures a rate.
 
-  - Spatial adjoint parameters with Superconvergent = true currently throw. They
-    index the parameter vector by node, so the star node set would redefine how
-    many parameters there are.
-
 
 The regression suite compares only `u`, never the `q`, `sigma` and `u_star` that
 every run also writes. Closing it means regenerating the references and picking

@@ -467,8 +467,7 @@ Adjoints and superconvergence
    * - ``Superconvergent``
      - ``false``
      - Switch the residual and Jacobian to the superconvergent interpolatory
-       scheme. Requires :math:`k \ge 1`, and is incompatible with spatial adjoint
-       parameters. See :doc:`superconvergence`. ``DegreeAdaptation`` turns this
+       scheme. Requires :math:`k \ge 1`. See :doc:`superconvergence`. ``DegreeAdaptation`` turns this
        on; setting it to ``false`` alongside that is refused rather than
        overridden, so leave it out if you want the default.
    * - ``SteadyStateSolve``

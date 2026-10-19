@@ -1025,7 +1025,7 @@ Against it:
   * The early-return an adaptive driver hits first on every level, right after a transfer, is still a risk — but a *smaller* one now, and in the safe direction. A transferred state is far from a solution, so it sits in the regime where the weighted norm is larger than the flat one was; the early return therefore fires less often than before rather than more. It is not eliminated, and nothing yet tests it.
   * Verified on the two configs in the tree that arm a continuation solve, both at `1.0e-11`: the initial `‖F‖` rises by exactly `1/sqrt(h)` — park-convergence 0.553794 → 1.10759 on 4 cells, jardin-critical-gradient 1.23603 → 3.90868 on 10 — and **neither run's step count changes**, 3 and 5. `shestakov-nonlinear` pins `TimeMarch`, whose test is on `dY/dt` and never reaches this function.
 * **Never two solvers alive at once.** `Integrator`'s cache (`PyIntegrator.hpp:16-43`) is process-global and keyed on one `(order, grid)` pair, and `residual()` calls `invalidateIfStale` on every evaluation (`SystemSolver.cpp:1255`). Two live solvers with different grids thrash it, and `getIntegrationWeights` returns a reference *into* the map `clear()` destroys. Extract grid + a `std::vector<double>` of `yJac`, destroy, then build — `PyRunner::configure`'s own discipline.
-* **Adaptivity with `spatialParameters = true` must throw**, for the identical reason `Superconvergent = true` already does at `SystemSolver.cpp:1690`: a remesh redefines how many parameters there are.
+* **Adaptivity with `spatialParameters = true` must throw**: the parameters are indexed by physics node, so a remesh redefines how many there are.
 
 ## If picking this up again — suggested order
 
@@ -1231,10 +1231,9 @@ having whether or not per-cell degrees are ever built:
 
 ### What must refuse rather than guess
 
-* **Spatial adjoint parameters.** `G_p` is `(ng * nCells * (k+1), np)`, indexed by
-  node, so varying degrees redefine how many parameters there are. `Superconvergent`
-  already throws for this at `SystemSolver.cpp:1690` and `runAdaptiveDegree` throws
-  for the same reason; a third instance of the same objection wants the same answer.
+* **Spatial adjoint parameters.** `G_p` is `(ng * nCells * nPhys, np)`, indexed by
+  physics node, so varying degrees redefine how many parameters there are.
+  `runAdaptiveDegree` throws for this; per-cell degrees want the same answer.
 * **A restart whose per-cell orders do not match the run's** — until a transfer
   exists for it. #16 projects across a *uniform* degree change; the nesting
   argument it rests on is per cell, so it extends to per-cell degrees on the same

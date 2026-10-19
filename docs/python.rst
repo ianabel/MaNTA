@@ -42,8 +42,12 @@ Module contents
      - Load a C++ case built outside this tree, so that ``Runner(name)`` can
        reach it. The dict equivalent of the ``PhysicsPlugins`` config key.
    * - ``manta.getNodes(...)``
-     - The positions at which fluxes and sources are evaluated, for a given grid
-       and polynomial degree.
+     - The ``k+1`` basis nodes of every cell, for a given grid and polynomial
+       degree.
+   * - ``manta.getPhysicsNodes(..., superconvergent=False)``
+     - The positions at which fluxes and sources are evaluated: the basis
+       nodes, or the ``k+2`` star nodes per cell with ``Superconvergent =
+       true``. A spatial adjoint parameter takes one value at each.
 
 ``Runner``
 ----------

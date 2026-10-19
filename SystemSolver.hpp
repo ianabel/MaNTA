@@ -1782,6 +1782,9 @@ class SystemSolver
         // handed one set of cell points per level, never two.
         PhysicsNodes physicsNodesAt(DGSoln const &Y, Time tEval);
 
+        // How many of those nodes each cell has.
+        Index physicsNodesPerCell() const { return superconvergent ? k + 2 : k + 1; }
+
         // ( X, phi_i )_K for a physics value X sampled on the cell's physics
         // nodes: A9 times the star-node values with the superconvergent scheme,
         // the interpolatory mass-matrix form of arXiv:1811.09667 otherwise.

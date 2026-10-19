@@ -339,9 +339,6 @@ Current restrictions
   superconvergent twin reads states that already carry them — so a case reading
   geometry there would work with ``Superconvergent = true`` and read out of
   bounds with it off.
-* **``Superconvergent = true`` with spatial adjoint parameters** throws, as it
-  does without a field model: the star node set would redefine how many
-  parameters there are.
 * **A field model cannot be written in Python.** ``FieldModel`` has no pybind11
   class, and ``FieldModel`` is a ``ProblemSelection`` key, so it is an error in
   a ``Runner.configure`` dict. A coupled run is a config-file run.

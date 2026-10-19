@@ -156,6 +156,22 @@ PYBIND11_MODULE(_manta, m) {
   m.def("getNodes",
         py::overload_cast<Position, Position, Index, unsigned int>(&getNodes),
         py::return_value_policy::reference, "Get the points of a grid");
+  m.def("getPhysicsNodes",
+        py::overload_cast<const std::vector<double> &, unsigned int, bool>(
+            &getPhysicsNodes),
+        py::arg("cellBoundaries"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "The points the physics is evaluated at, and a spatial adjoint "
+        "parameter defined: the k+1 basis nodes per cell, or the k+2 star "
+        "nodes with the superconvergent scheme");
+  m.def("getPhysicsNodes",
+        py::overload_cast<Position, Position, Index, unsigned int, bool>(
+            &getPhysicsNodes),
+        py::arg("x_l"), py::arg("x_u"), py::arg("nCells"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "The points the physics is evaluated at, and a spatial adjoint "
+        "parameter defined: the k+1 basis nodes per cell, or the k+2 star "
+        "nodes with the superconvergent scheme");
 
   // A physics case describes itself as data, in Python exactly as in C++. This
   // replaces setting self.nVars / self.isUpperDirichlet after construction,

@@ -1714,29 +1714,57 @@ Anything indexed per auxiliary variable is sized `nAux`, not `nVars`. Those
 coincide in every fixture except `test_adjoint_aux.py`, so a confusion between
 them is invisible in the rest of the suite; `dGdaux_Vec` had two.
 
-**With `spatialParameters = true` the parameter vector is indexed by node, and
-`G_p` is `(ng * nCells * (k+1), np)` — one row per (objective, node), one column
-per parameter *field*.** Two places in `computeAdjointGradients` fill that matrix
-and they have to agree on the orientation: the explicit term assigns `dGFndp`
-into a `(nPoints, np)` block (`SystemSolver.cpp:1675`), and the adjoint term
-writes `G_p(gIndex * nPoints + node, pIndex)` (`SystemSolver.cpp:1814`). The
-Python hook underneath, `dgFndp`, returns the *other* orientation, `(np,
-nPoints)` — which is what the non-spatial branch of `PyAdjointProblem::dGFndp`
-indexes as `dgdp(p, ind)` — so the spatial branch has to transpose, and for a
-long time did not. Every spatial run aborted inside Eigen's assignment, and
-would have transposed the gradient *silently* had `np` ever equalled the node
-count. Note `checkShapeAndSet` is a plain assignment outside a `DEBUG` build, so
-the only diagnostic was Eigen's own `resize()` assertion, naming
-`Block<Matrix<double,-1,-1>,-1,-1,false>` and nothing about MaNTA.
+**With `spatialParameters = true` each parameter takes its own value at every
+*physics* node, and `G_p` is `(ng * nCells * nPhys, np)` — one row per
+(objective, node), one column per parameter *field*.** `nPhys` is
+`physicsNodesPerCell()`: `k+1` basis nodes, or `k+2` star nodes with
+`Superconvergent = true`, because that is where the case evaluates the field.
+`manta.getPhysicsNodes` returns the same points in the same order. Interpolating
+a basis-node field onto the star nodes instead would make the parameter count
+scheme-independent, and is the wrong trade: a coefficient like `kappa(x)` in
+`kappa(x) q` is data at the points the flux is evaluated, and an interpolant of
+it is a different coefficient.
 
-Only Python can set the flag (`Python.cpp:307` exposes it on
-`PyAdjointProblem`; the C++ base defaults false and `AdjointProblemTests.cpp:322`
-asserts as much), so this is a trampoline concern rather than a solver one.
-`Superconvergent = true` with spatial parameters throws rather than guessing —
-the star node set would redefine how many parameters there are.
+Every entry is the **discrete** derivative `dG/dp_m`, and the two halves of
+`accumulateAdjointGradients` have to agree on that, not merely on the shape:
 
-The spatial gradient is now exact per node as well as in total, both pinned in
-`test_adjoint.py`. Getting there turned up the more general trap below.
+* the adjoint term is `-z^T F_p` with column `m` of `F_p` the projection of node
+  `m`'s value alone (`projectOntoTestSpace`: `A9` or the mass matrix), written to
+  `G_p(gIndex * nPoints + i * nPhys + m, pIndex)`;
+* the explicit term is `w_m dg/dp_m` (`PyAdjointProblem::explicitParameterDerivative`),
+  `w` being the quadrature `GFn` integrates `g` with. `dgFndp` reports
+  `(np, nPoints)`, so it is weighted and transposed on the way in;
+  `checkDgFndpShape` refuses the other orientation by name, because
+  `checkShapeAndSet` is a plain assignment outside `DEBUG` and a square mismatch
+  would transpose silently.
+
+An unweighted explicit term is a pointwise derivative beside a discrete one,
+off by `1/w_m` — 20 to 100 at `k = 4` — and nothing that zeroes
+`dgFndp` sees it, which is every value test that differences the *physics*.
+`test_a_spatial_field_in_the_objective_is_weighted_by_the_quadrature` puts the
+field in `g` alone, so `Runner.G()` on the one converged state differences it
+exactly at every node. And note the sum test's blind spot: summing over nodes
+cannot see a row-stride error in the adjoint term, which preserves the total —
+only the node-by-node finite difference catches that.
+
+**With `Superconvergent = true` the explicit term is taken at the star nodes, at
+`u*`, with the star weights `b1`** — `AdjointProblem::dGFndp(gIndex, y, pp)`,
+the derivative of `GFn(gIndex, y, pp)`, for spatial and scalar parameters alike.
+Taken at `u_h` with the basis weights it is a derivative of a different
+objective, 2.3% out at `k = 1`. That is invisible to any `g` *linear* in `u`,
+because `u*` has the cell means of `u_h` by construction (paper I's local
+Neumann problem constrains them), so the check needs a `g` at least quadratic in
+`u` and a `k` at which `u*` differs from `u_h`. A C++ case's `dGFndp(g, p, y)`
+integrates for itself and leaves no nodal values to weight, so the C++ base
+falls back to it; such a case differentiates the `u*` objective by overriding
+the `pp` overload. `Runner.G()` reports the `u*` objective too, as
+`getAdjointGradients()` does.
+
+Only Python can set the flag (`Python.cpp` exposes it on `PyAdjointProblem`;
+the C++ base defaults false and `AdjointProblemTests.cpp` asserts as much).
+
+The spatial gradient is exact per node as well as in total, on both node sets,
+pinned in `test_adjoint.py`. Getting there turned up the more general trap below.
 
 **The adjoint's `dG/dZ` is `diag(w)`, not the mass matrix, and the difference is
 invisible in every aggregate.** `GFn` reports `G = Σ_m w_m g(Z_m)` — the
