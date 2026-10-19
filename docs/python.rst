@@ -42,8 +42,15 @@ Module contents
      - Load a C++ case built outside this tree, so that ``Runner(name)`` can
        reach it. The dict equivalent of the ``PhysicsPlugins`` config key.
    * - ``manta.getNodes(...)``
-     - The positions at which fluxes and sources are evaluated, for a given grid
-       and polynomial degree.
+     - The ``k+1`` basis nodes of every cell, for a given grid and polynomial
+       degree.
+   * - ``manta.getPhysicsNodes(..., superconvergent=False)``
+     - The positions at which fluxes and sources are evaluated: the basis
+       nodes, or the ``k+2`` star nodes per cell with ``Superconvergent =
+       true``. A spatial adjoint parameter takes one value at each.
+   * - ``manta.getPhysicsWeights(..., superconvergent=False)``
+     - One quadrature weight per point ``getPhysicsNodes`` returns, so that
+       ``weights @ g`` is the objective MaNTA reports for ``g`` sampled there.
 
 ``Runner``
 ----------
@@ -456,7 +463,31 @@ rather than a dependency — ``import manta`` stays numpy-only::
 ``manta.jax.JAXTransportSystem`` is the pointwise base class and
 ``manta.jax.VectorizedTransportSystem`` the batched one;
 ``manta.jax.JAXAdjointProblem`` supplies the objective and its parameter
-derivatives. Worked examples are in ``python-examples/jax-diffusion``,
+derivatives.
+
+A case writes its physics as pure functions of the parameters,
+``sigma(index, state, x, t, params)``, ``source(...)`` and ``aux(...)``, and the
+base classes derive every state derivative from them; ``JAXAdjointProblem``
+derives the parameter ones. Global scalar constraints are the same:
+
+.. code-block:: python
+
+   def scalar(self, index, states, states_dot, integrator, t, params):
+       u = states.Variable[:, 0]
+       mu = states.Scalars[0]
+       return mu - integrator(u)          # G_0 = mu - int u dx
+
+``states`` is the state on the basis nodes, ``integrator`` the quadrature over
+them, and the return is :math:`G_s` for scalar ``index``. From it come
+``ScalarG``, ``ScalarGPrime`` and the adjoint's ``dScalarG_dp``;
+``dSources_dScalars`` comes from ``source``, and the adjoint's
+:math:`\partial G/\partial\mu` from the objective. A case that writes
+``ScalarG`` and ``ScalarGPrime`` itself goes on working — its own methods are
+used — but its adjoint then has no ``params`` to differentiate, and asks for
+``scalar`` or a hand-written ``dScalarG_dp`` rather than assume the constraints
+ignore the parameters.
+
+Worked examples are in ``python-examples/jax-diffusion``,
 ``python-examples/jax-linear-diffusion`` and
 ``python-examples/jax-nonlinear-adjoint``.
 

@@ -4,6 +4,7 @@
 // Helper functions for obtaining points fluxes and sources are evaluated at for
 // Python output
 
+#include "Postprocessing.hpp"
 #include "Basis.hpp"
 #include "gridStructures.hpp"
 
@@ -23,11 +24,9 @@ using BasisType = NodalBasis;
 // the keyword outright would still have linked. It would break as soon as a second
 // includer appeared, which is not a trap worth leaving behind.
 
-// For passing cell boundaries in
-inline Vector getNodes(const std::vector<double> &cellBoundaries,
-                       unsigned int k) {
-  Grid grid(cellBoundaries);
-  Vector points((k + 1) * (cellBoundaries.size() - 1));
+// The k+1 basis nodes of every cell, cell-major.
+inline Vector basisNodesOn(Grid const &grid, unsigned int k) {
+  Vector points((k + 1) * grid.getNCells());
   auto nodes = BasisType::getBasis(k).getNodes();
   for (size_t i = 0; i < grid.getNCells(); ++i) {
     auto const &cell = grid[i];
@@ -38,19 +37,63 @@ inline Vector getNodes(const std::vector<double> &cellBoundaries,
   return points;
 }
 
+// For passing cell boundaries in
+inline Vector getNodes(const std::vector<double> &cellBoundaries,
+                       unsigned int k) {
+  return basisNodesOn(Grid(cellBoundaries), k);
+}
+
 // For using MaNTA's grid structure
 inline Vector getNodes(Position x_l, Position x_u, Index nCells,
                        unsigned int k) {
-  Grid grid(x_l, x_u, nCells);
-  Vector points(nCells * (k + 1));
-  auto nodes = BasisType::getBasis(k).getNodes();
-  for (size_t i = 0; i < grid.getNCells(); ++i) {
-    auto const &cell = grid[i];
+  return basisNodesOn(Grid(x_l, x_u, nCells), k);
+}
 
-    for (auto j = 0; j < nodes.size(); ++j)
-      points(i * (k + 1) + j) = cell.fromRef(nodes(j));
-  }
-  return points;
+// Where the physics is evaluated: the k+1 basis nodes of each cell, or its k+2
+// star nodes with the superconvergent scheme, cell-major. A spatial adjoint
+// parameter takes one value at each of these points, in this order, and G_p
+// has one row per point.
+inline Vector physicsNodesOn(Grid const &grid, unsigned int k,
+                             bool superconvergent) {
+  if (!superconvergent)
+    return basisNodesOn(grid, k);
+  const std::vector<Position> star = Postprocessor::starPointsOn(grid, k);
+  return Eigen::Map<const Vector>(star.data(), star.size());
+}
+
+inline Vector getPhysicsNodes(const std::vector<double> &cellBoundaries,
+                              unsigned int k, bool superconvergent) {
+  return physicsNodesOn(Grid(cellBoundaries), k, superconvergent);
+}
+
+inline Vector getPhysicsNodes(Position x_l, Position x_u, Index nCells,
+                              unsigned int k, bool superconvergent) {
+  return physicsNodesOn(Grid(x_l, x_u, nCells), k, superconvergent);
+}
+
+// One quadrature weight per physics node, in the same order: the integration
+// weights of the degree-k basis, or of the degree-(k+1) star basis with the
+// superconvergent scheme -- the b1 the objective is integrated with there. So
+// weights . g is the objective GFn reports for g sampled on physicsNodesOn.
+inline Vector physicsWeightsOn(Grid const &grid, unsigned int k,
+                               bool superconvergent) {
+  const unsigned int order = superconvergent ? k + 1 : k;
+  const NodalBasis basis = BasisType::getBasis(order);
+  Vector weights((order + 1) * grid.getNCells());
+  for (size_t i = 0; i < grid.getNCells(); ++i)
+    weights.segment(i * (order + 1), order + 1) =
+        basis.getIntegrationWeights(grid[i]);
+  return weights;
+}
+
+inline Vector getPhysicsWeights(const std::vector<double> &cellBoundaries,
+                                unsigned int k, bool superconvergent) {
+  return physicsWeightsOn(Grid(cellBoundaries), k, superconvergent);
+}
+
+inline Vector getPhysicsWeights(Position x_l, Position x_u, Index nCells,
+                                unsigned int k, bool superconvergent) {
+  return physicsWeightsOn(Grid(x_l, x_u, nCells), k, superconvergent);
 }
 
 #endif // PYGRID_HPP

@@ -715,9 +715,6 @@ residual row.
   returns from its constructor before building `Vandermonde` or
   `BarycentricWeights` (`Basis.hpp:369-377`), so it cannot be evaluated off-node.
   Paper I requires `k >= 1` for the superconvergence in any case.
-* **Spatial adjoint parameters** are rejected with the flag on: they index the
-  parameter vector by node, so the star node set would silently redefine how many
-  parameters there are.
 * **More than one aux variable or scalar at a time.** Every manufactured case
   here has `nAux <= 1` and `nScalars <= 1`, so a block-indexing error that only
   appears at the second one would not show. `SystemSolverMatrixTests.cpp` covers

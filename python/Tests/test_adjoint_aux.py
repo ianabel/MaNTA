@@ -597,11 +597,10 @@ def test_the_aux_parameter_block_matches_the_closed_form(tmp_path, scheme):
 
 # ------------------------------------ ...and the same block, indexed by node --
 #
-# The spatial branch is a separate loop: it fills one F_p column per node rather
-# than one vector per cell, and nothing reached it before -- test_adjoint.py's
-# spatial fixtures have nAux = 0, and every fixture with nAux > 0 sets
-# spatialParameters False. Superconvergent is refused with spatial parameters,
-# so there is only the one path to cover here.
+# The spatial branch fills one F_p column per physics node rather than one
+# vector per cell, and test_adjoint.py's spatial fixtures have nAux = 0, so the
+# aux rows of that branch are reached only here -- over the k+1 basis nodes, and
+# over the k+2 star nodes with the superconvergent scheme.
 
 SPATIAL_KAPPA = 1.0
 SPATIAL_S0 = 2.0
@@ -622,7 +621,7 @@ class NodalConstraintSource(MaNTA.TransportSystem):
     that owns the point and zero elsewhere -- which the solver expresses by
     handing the hook one column per node. Routing it through phi rather than
     returning it from Sources is the whole difference from
-    test_adjoint.py::NodalSourceDiffusion, whose gradient is checked there
+    test_adjoint.py::NodalFieldDiffusion, whose gradient is checked there
     against both a closed form and node-by-node finite differences.
     """
 
@@ -742,15 +741,23 @@ class NodalConstraintAdjoint(MaNTA.AdjointProblem):
         return "S"
 
 
-def spatial_aux_solve(source_nodes, tmp_path):
-    points = np.asarray(
-        MaNTA.getNodes(0.0, 1.0, SPATIAL_NCELLS, SPATIAL_K), dtype=float
+def spatial_aux_points(superconvergent=False):
+    return np.asarray(
+        MaNTA.getPhysicsNodes(0.0, 1.0, SPATIAL_NCELLS, SPATIAL_K, superconvergent),
+        dtype=float,
     )
+
+
+def spatial_aux_solve(source_nodes, tmp_path, superconvergent=False):
+    points = spatial_aux_points(superconvergent)
     system = NodalConstraintSource(points, source_nodes)
     runner = MaNTA.Runner(system)
     runner.configure(
         aux_adjoint_config(
-            tmp_path, PolynomialDegree=SPATIAL_K, GridSize=SPATIAL_NCELLS
+            tmp_path,
+            PolynomialDegree=SPATIAL_K,
+            GridSize=SPATIAL_NCELLS,
+            Superconvergent=superconvergent,
         )
     )
     runner.run(T_FINAL)
@@ -758,7 +765,8 @@ def spatial_aux_solve(source_nodes, tmp_path):
     return float(np.asarray(G)[0]), np.asarray(gradients["G_p"]), points
 
 
-def test_the_spatial_aux_gradient_sums_to_the_closed_form(tmp_path):
+@pytest.mark.parametrize("superconvergent", [False, True], ids=["basis", "star"])
+def test_the_spatial_aux_gradient_sums_to_the_closed_form(tmp_path, superconvergent):
     """Perturbing every node together is perturbing the scalar source.
 
     G is quadratic in the parameters, so the sum is dG/dS = S / (120 kappa^2)
@@ -767,8 +775,8 @@ def test_the_spatial_aux_gradient_sums_to_the_closed_form(tmp_path):
     about the direct route, and it holds here only if the aux rows of F_p carry
     the right weighting and the right sign.
     """
-    nodes = SPATIAL_S0 * np.ones(SPATIAL_NCELLS * (SPATIAL_K + 1))
-    G, G_p, _ = spatial_aux_solve(nodes, tmp_path)
+    nodes = SPATIAL_S0 * np.ones(len(spatial_aux_points(superconvergent)))
+    G, G_p, _ = spatial_aux_solve(nodes, tmp_path, superconvergent)
 
     assert G_p.shape == (len(nodes), 1), G_p.shape
     assert G == pytest.approx(SPATIAL_S0**2 / (240.0 * SPATIAL_KAPPA**2), rel=1e-6)

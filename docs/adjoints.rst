@@ -42,6 +42,9 @@ What you implement
    * - ``dSigmaFn_dp``, ``dSources_dp``, ``dAux_dp``
      - How the flux, source and auxiliary constraints depend on each parameter.
        These are what make the gradient non-trivial.
+   * - ``dScalarG_dp(s, y, ydot, abscissae, weights, phiBoundary, t)``
+     - How global scalar constraint ``s`` depends on each parameter. Required
+       whenever the transport system has scalars; see below.
    * - ``getName(pIndex)``
      - The parameter's name, used to label it in the output file.
 
@@ -57,6 +60,73 @@ which are internal. Several defaults loop only up to ``getNpInternal()``, so a
 parameter that acts through a boundary condition rather than through the
 equations must be placed in the trailing block and declared with
 ``computeLowerBoundarySensitivity`` / ``computeUpperBoundarySensitivity``.
+
+Global scalars
+--------------
+
+A transport system with global scalars :math:`\mu` (``nScalars > 0``) solves a
+bordered system: the scalars enter the sources, and their constraints
+:math:`G_s(\mu, y) = 0` read the solution. The adjoint is the transpose of all
+of it, so it solves for a scalar adjoint :math:`z_\mu` beside :math:`z` and the
+gradient carries a term for each route:
+
+.. math::
+
+   \frac{dG}{dp} = \frac{\partial G}{\partial p}
+     - z^T \frac{\partial F}{\partial p}
+     - z_\mu^T \frac{\partial G_s}{\partial p}
+
+Two hooks carry the scalars' parts:
+
+* ``dg`` returns, beside its pointwise entries, a ``"Scalars"`` entry of length
+  ``nScalars``: :math:`\partial G/\partial\mu`, the derivative of the
+  objective itself, already integrated. For :math:`g = \mu u` that is
+  :math:`\int u\,\mathrm{d}x`, taken with the quadrature :math:`G` is. Zeros if
+  the objective does not read the scalars.
+* ``dScalarG_dp`` takes exactly ``ScalarG``'s arguments and returns
+  :math:`\partial G_s/\partial p`: a length-``np`` vector, or with spatial
+  parameters an ``(np, nPoints)`` array with one column per physics node. It
+  has **no default** — a constraint the parameters do not enter returns zeros,
+  and an adjoint problem that does not define it stops the run by name, rather
+  than drop a term from the gradient. ``manta.jax`` derives it from a case's
+  ``scalar`` function, and ``JAXAdjointProblem`` integrates its pointwise
+  :math:`\partial g/\partial\mu` into the ``"Scalars"`` entry itself
+  (:doc:`python`).
+
+Spatial parameters
+------------------
+
+Setting ``spatialParameters = True`` (Python only) gives each internal parameter
+its own value at every node where the physics is evaluated, so a parameter is a
+*field*: a diffusivity :math:`\kappa(x)` in :math:`\hat\sigma = \kappa(x)\, q`,
+say. Those nodes are the :math:`k+1` basis nodes of each cell, or its
+:math:`k+2` star nodes with ``Superconvergent = true``, and
+``manta.getPhysicsNodes(x_l, x_u, nCells, k, superconvergent)`` returns them in
+the order the solver uses. A case defines its field on exactly those points and
+looks its value up by position; the plan's ``Residual`` site carries the same
+points (:doc:`physics_interface`).
+
+The hooks report the pointwise derivative at every node — ``dSigma`` returns
+:math:`\partial\hat\sigma/\partial\kappa = q` everywhere, ``dgFndp`` returns
+:math:`\partial g/\partial p` — and the solver places each value at the node it
+belongs to. ``G_p`` is then ``(ng * nPoints, np)``: one row per (objective,
+node), one column per field, and each entry is the **discrete** derivative
+:math:`\partial G/\partial p_m`. Both halves of the gradient agree on that:
+
+* the adjoint term differentiates the residual through the cell's projection of
+  nodal physics values onto the test space — the mass matrix, or ``A9`` over the
+  star nodes;
+* the explicit term is :math:`w_m\, \partial g/\partial p_m`, with
+  :math:`w_m` the weight of the quadrature ``GFn`` integrates :math:`g` with — the
+  basis weights, or the star weights at :math:`u^*`.
+
+So the column sums to the derivative with respect to a uniform shift of the
+field, and an approximation to the functional derivative
+:math:`\delta G/\delta p(x_m)` is ``G_p[m] / w_m``.
+
+A boundary parameter is one number whatever ``spatialParameters`` says. Its
+gradient is in the row of the boundary cell's first physics node, so sum its
+column to read it.
 
 How the gradient is computed
 ----------------------------
@@ -131,12 +201,13 @@ solve — and **without calling the physics**:
      - :math:`z` as nodal arrays: ``sigma``, ``q`` and ``u`` of shape
        ``(nPoints, nVars)``, ``aux`` of shape ``(nPoints, nAux)``, ``lambda``
        of shape ``(nCells + 1, nVars)`` on the faces, ``field`` of shape
-       ``(nField,)``, the node positions ``x`` and face positions ``x_faces``;
-       and ``operator_at_state``.
+       ``(nField,)``, ``scalars`` of shape ``(nScalars,)`` — the global
+       scalars' :math:`z_\mu` — the node positions ``x`` and face positions
+       ``x_faces``; and ``operator_at_state``.
    * - ``objective_gradient(g)``
-     - :math:`\partial G/\partial y`, the right-hand side, in the same layout.
-       Its ``lambda`` is zero, since no objective reads the trace. Needs no
-       solve.
+     - :math:`\partial G/\partial y`, the right-hand side, in the same layout,
+       its ``scalars`` being :math:`\partial G/\partial\mu`. Its ``lambda`` is
+       zero, since no objective reads the trace. Needs no solve.
    * - ``objective_sensitivity(g)``
      - :math:`w = \partial G/\partial \Gamma` for the flux and the sources:
        ``flux`` and ``sources`` of shape ``(nPoints, nVars)``, one row per
@@ -185,9 +256,9 @@ them. For a linear problem the two are the same matrix.
 The adjoint keeps its own factorisations, so an adjoint solve between two
 forward ones leaves the forward solve bit for bit as it was: a sliced steady
 solve with an adjoint solve between every slice ends where one without them
-does. It is refused with global scalars, whose bordering its operator does not
-carry, and under ``tauScaling = "Diffusive"``, whose
-:math:`\mathrm{d}\tau/\mathrm{d}y` it does not.
+does. Global scalars' bordering comes from the same build, as the field
+coupling does. It is refused under ``tauScaling = "Diffusive"``, whose
+:math:`\mathrm{d}\tau/\mathrm{d}y` the operator does not carry.
 
 ``manta.jax.FFIRunner`` inherits all four calls: they run on the host and touch
 no device memory.
@@ -263,9 +334,6 @@ suite are worth copying:
 Limitations
 -----------
 
-* Spatial adjoint parameters — those indexed by node — are **rejected** when
-  ``Superconvergent`` is set, because the postprocessed node set would silently
-  redefine how many parameters there are. See :doc:`superconvergence`.
 * Anything indexed per auxiliary variable is sized ``nAux``, not ``nVars``.
 
 The corrected objective and its error bar

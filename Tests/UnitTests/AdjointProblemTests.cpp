@@ -354,6 +354,21 @@ BOOST_AUTO_TEST_CASE(dgfndp_over_a_global_state_is_python_only_and_says_so)
     BOOST_CHECK_THROW(adj.dgFndp(0, states, pts), std::runtime_error);
 }
 
+BOOST_AUTO_TEST_CASE(dscalarg_dp_has_no_default_and_says_so)
+{
+    // A scalar constraint's parameter derivative has no default of zero: the
+    // solver asks for it only when the system has scalars, and an adjoint
+    // problem that has not said how its constraints depend on the parameters
+    // must stop the gradient rather than drop a term from it.
+    MockAdjoint adj;
+    GlobalState states = makeStates(2, 1, 2, 1);
+    const auto pts = makePoints(static_cast<Index>(states.size()));
+    const Values weights = Values::Ones(static_cast<Index>(states.size()));
+    const Matrix phiBoundary = Matrix::Zero(2, 2);
+    BOOST_CHECK_THROW(adj.dScalarG_dp(0, states, states, pts, weights, phiBoundary, 0.0),
+                      std::logic_error);
+}
+
 // -------------------------------------------------------- batched defaults --
 
 BOOST_AUTO_TEST_CASE(batched_g_matches_the_pointwise_form)

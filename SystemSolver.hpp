@@ -649,6 +649,9 @@ class SystemSolver
             Vector field;
             std::vector<Vector> G_y;
             Vector G_field;
+            // The scalar adjoint z_mu and dG/dmu; empty without global scalars.
+            Vector mu;
+            Vector G_mu;
             // Whether the operator was built at the state the right-hand side was
             // taken at. False when it is the last Jacobian build's and that
             // build was at an earlier iterate -- see solveAdjointAt.
@@ -689,9 +692,12 @@ class SystemSolver
         // | aux ] layout: G_y, the adjoint's right-hand side. Calls only the
         // objective's dg, at the physics nodes physicsNodesAt gives -- u* on the
         // star nodes under the superconvergent scheme, so that this is the exact
-        // derivative of the objective GFn reports.
+        // derivative of the objective GFn reports. With global scalars, dG/dmu
+        // -- dg's Scalars entry, already integrated -- goes into *dGdmu when one
+        // is passed; it is the scalar rows' share of the same right-hand side.
         std::vector<Vector> assembleObjectiveGradient(AdjointProblem &objective, Index gIndex,
-                                                      DGSoln const &state, Time tEval);
+                                                      DGSoln const &state, Time tEval,
+                                                      Vector *dGdmu = nullptr);
 
         // w = dG/dGamma: how the objective moves with the physics outputs Gamma
         // at each physics node -- the flux sigma_hat the case returns, and its
@@ -1331,6 +1337,18 @@ class SystemSolver
         // is callable separately from computeAdjointGradients().
         void accumulateAdjointGradients(Index gIndex);
 
+        // The transpose of solveTransportJac's bordered elimination. With
+        // J = [[A, -V], [W^T, N]], the Schur complement onto the scalars is
+        //
+        //     ( N^T + V^T A^-T W ) z_mu = G_mu + V^T A^-T G_y
+        //     A^T z                     = G_y - W z_mu
+        //
+        // nScalars + 1 transposed transport solves. W has no trace entries -- a
+        // scalar constraint reads the cells' nodal values and phiBoundary, never
+        // lambda -- so its columns are right-hand sides solveTransportAdjoint
+        // takes as they stand.
+        void solveBorderedAdjoint();
+
         // The transpose of solveCoupledJacExact. The block elimination runs the
         // other way round, so the Schur complement onto psi is
         //
@@ -1438,6 +1456,18 @@ class SystemSolver
         Vector adjoint_lambdas;
         std::vector<Vector> adjoint_squ;
 
+        // The global scalars' share of the adjoint. The forward operator is
+        // bordered by them, [[A, -V], [W^T, N]] in solveTransportJac's terms, so
+        // its transpose carries z_mu beside z: G_mu is dG/dmu for the current
+        // objective (dg's Scalars entry), adjoint_mu is z_mu, and V, W and N are
+        // applyScalarCoupling's blocks at alpha = 0, from the derivatives
+        // assembleAdjointOperator was handed, each column a full-length vector in
+        // the DGSoln layout. Sized zero without scalars.
+        Vector G_mu;
+        Vector adjoint_mu;
+        std::vector<Vector> adjoint_scalarV, adjoint_scalarW;
+        Matrix adjoint_scalarN;
+
         // The right-hand-side-independent half of the transposed HDG solve:
         // M^-T CG^T per cell, and the condensed trace operator factorised.
         //
@@ -1473,9 +1503,8 @@ class SystemSolver
         // the discretisation: AdjointProblem reports dg/du, dg/dq, dg/dsigma and
         // dg/dphi and has no geometry hook, so an objective whose integrand
         // reads State::geom directly loses that term. It cannot be detected from
-        // here -- the same standing limit AdjointVectors.cpp records for the
-        // absent dgFn_dscalars -- so it is named here and in TODO rather than
-        // left as an unremarked zero.
+        // here, so it is named here and in TODO rather than left as an
+        // unremarked zero.
         Vector adjoint_field;
         Vector G_field;
 
@@ -1782,6 +1811,9 @@ class SystemSolver
         // handed one set of cell points per level, never two.
         PhysicsNodes physicsNodesAt(DGSoln const &Y, Time tEval);
 
+        // How many of those nodes each cell has.
+        Index physicsNodesPerCell() const { return superconvergent ? k + 2 : k + 1; }
+
         // ( X, phi_i )_K for a physics value X sampled on the cell's physics
         // nodes: A9 times the star-node values with the superconvergent scheme,
         // the interpolatory mass-matrix form of arXiv:1811.09667 otherwise.
@@ -1804,6 +1836,17 @@ class SystemSolver
             std::vector<Matrix> A1;
         };
 
+        // The global scalars' coupling as the case reports it, before alpha is
+        // applied: per cell the projected dSources_dScalars, and ScalarGPrime's
+        // dG_s/d(state) and dG_s/d(state_dot). v does not depend on alpha; w
+        // and N do, through dGdot, which is why the forward Jacobian and the
+        // adjoint (at alpha = 0) apply one evaluation differently.
+        struct ScalarCouplingDerivatives
+        {
+            std::vector<Matrix> v;
+            GlobalStateMatrix dG{0}, dGdot{0};
+        };
+
         // The physics derivatives at one state and time: everything
         // updateMatricesForJacSolve reads from the case, kept so that the
         // adjoint operator -- the same blocks at alpha = 0, transposed -- can be
@@ -1814,11 +1857,14 @@ class SystemSolver
         {
             bool valid = false;
             std::vector<double> state;
-            std::vector<double> stateDot;   // with a field model only: its rows read psi'
+            // With a field model or global scalars only: the field rows read
+            // psi', and ScalarGPrime is handed the state's time derivative.
+            std::vector<double> stateDot;
             Time t = 0.0;
             double alpha = 0.0;   // what the forward build applied; see applyFieldCoupling
             GlobalStateMatrix dSigma{0}, dSource{0}, dAux{0};
             FieldCouplingDerivatives field;
+            ScalarCouplingDerivatives scalar;
 
             bool isAt(DGSoln const &Y, Time tEval) const;
         };
@@ -1957,13 +2003,16 @@ class SystemSolver
 
         // The scalar coupling: v (how the HDG rows depend on the scalars) and w
         // (how the scalar constraints depend on the HDG unknowns), plus the
-        // scalar-scalar matrix N. Written through the caller's storage rather
-        // than into the members, so that a second consumer can assemble its own
-        // copy without disturbing the forward solve's.
-        void assembleScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
-                                    PhysicsNodes const &nodes, Time tEval,
-                                    double alphaValue, std::vector<DGSoln> &v_map,
-                                    std::vector<DGSoln> &w_map, Matrix &N_out);
+        // scalar-scalar matrix N. evaluateScalarCoupling asks the case;
+        // applyScalarCoupling assembles the blocks at a given alpha through the
+        // caller's storage rather than into the members, so that the adjoint can
+        // assemble its own alpha = 0 copy from the same evaluation without
+        // disturbing the forward solve's.
+        ScalarCouplingDerivatives evaluateScalarCoupling(DGSoln const &Y, DGSoln const &Ydot,
+                                                         PhysicsNodes const &nodes, Time tEval);
+        void applyScalarCoupling(ScalarCouplingDerivatives const &d, double alphaValue,
+                                 std::vector<DGSoln> &v_map, std::vector<DGSoln> &w_map,
+                                 Matrix &N_out);
 
         // The three field blocks, from one FieldResidualPrime call.
         //

@@ -937,9 +937,11 @@ and ``AdaptationTarget = "Objective"`` adapts the degree and the mesh to
 Refused, each where it can first be seen: without ``solveAdjoint``, under
 ``SteadyStateSolver = "TimeMarch"``, and an ``Objective*`` key under any other
 test unless ``AdaptationTarget = "Objective"`` reads it, in the configuration; a tolerance list neither one value nor one per
-objective, an objective given neither tolerance, global scalars and
+objective, an objective given neither tolerance, and
 ``tauScaling = "Diffusive"`` — whose :math:`\mathrm{d}\tau/\mathrm{d}y` the
-operator does not carry — when the solve starts.
+operator does not carry — when the solve starts. With global scalars the
+estimate includes their share of the correction, through
+:math:`\partial G/\partial\mu`.
 
 Output from a steady solve
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1540,9 +1542,9 @@ nothing.
    some 320 ``(k+1)`` sites in the core — and the measurements in
    ``MESH-REFINEMENT.md`` say most of the available win does not need them.
 
-   Adaptation is also refused alongside spatial adjoint parameters, for the same
-   reason ``Superconvergent`` already is: those are indexed by node, so changing
-   the degree changes how many parameters there are.
+   Adaptation is also refused alongside spatial adjoint parameters: those are
+   indexed by physics node, so changing the degree changes how many parameters
+   there are.
 
 .. _suppress-algebraic-error:
 

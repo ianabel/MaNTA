@@ -5,7 +5,8 @@ import manta as MaNTA
 from .adjoint_problem import JAXAdjointProblem
 from typing import NamedTuple, Any
 from functools import partial
-from .state import Physics_Decorator, State
+from .state import MaNTA_Decorator, Physics_Decorator, State
+from .scalars import ScalarConstraints
 from abc import abstractmethod
 import equinox as eqx
 
@@ -16,9 +17,12 @@ Enables automatic differentiation of sigma and source terms using JAX.
 
 
 # Base class for JAX-based transport systems
-class VectorizedTransportSystem(MaNTA.TransportSystem):
+class VectorizedTransportSystem(ScalarConstraints, MaNTA.TransportSystem):
     def __init__(self, spec, spatialParameters=False):
         MaNTA.TransportSystem.__init__(self, spec)
+        self._check_scalar_hooks()
+
+        self.dSourcedstate = jax.jit(jax.grad(self.source, argnums=1))
 
         self.dAuxdvars = jax.jit(jax.grad(self.aux, argnums=1))
 
@@ -151,30 +155,20 @@ class VectorizedTransportSystem(MaNTA.TransportSystem):
             in_axes=(self.vmap_axes),
         )(states, positions, self.params)
 
-    @abstractmethod
-    def ScalarG(self, i, states, states_dot, abscissae, weights, phi_boundary, t):
-        raise NotImplementedError("Scalar G function not implemented in derived class")
+    @MaNTA_Decorator
+    def dSources_dScalars(self, index, state, x, t):
+        """dS_index/dmu, the Scalars component of `source`'s state gradient.
 
-    @abstractmethod
-    def ScalarGPrime(self, states, states_dot, abscissae, weights, phi_boundary, t):
-        """d G_s / d state and d G_s / d state_dot, for every scalar.
-
-        Returns a pair of lists, each of nScalars GlobalState dicts: the first is
-        the derivative with respect to the state, the second with respect to its
-        time derivative (identically zero for an algebraic scalar).
-
-        `weights` is one quadrature weight per node, length nCells*(k+1), so an
-        integral over the domain is `weights @ u`. `phi_boundary` is (k+1, 2), the
-        basis functions evaluated at the two ends of the domain.
-
-        The signature here previously declared an extra `phis` parameter before
-        `phi_boundaries`. PyTransportSystem::ScalarGPrimeExtended passes five
-        arguments, not six, so any subclass that followed this declaration would
-        have failed with a TypeError on the first Jacobian evaluation. Nothing
-        caught it because the abstract method only ever raised, and there was no
-        Python test with a scalar -- see python/Tests/test_scalars.py.
+        The solver asks for this pointwise, at each physics node. With spatial
+        parameters the node's own values are taken by position from the plan's
+        residual points, which are the points the parameters are defined on.
         """
-        raise NotImplementedError("ScalarGPrime not implemented in derived class")
+        params = self.params
+        if self.vmap_axes[2] == 0:
+            points = np.asarray(self.evaluationPlan.points(MaNTA.EvaluationKind.Residual))
+            j = int(np.argmin(np.abs(points - float(x))))
+            params = jax.tree_util.tree_map(lambda a: a[j], params)
+        return self.dSourcedstate(index, state, x, t, params).Scalars
 
     """
     Sigma and source, and auxiliary functions to be overloaded in derived classes

@@ -156,6 +156,36 @@ PYBIND11_MODULE(_manta, m) {
   m.def("getNodes",
         py::overload_cast<Position, Position, Index, unsigned int>(&getNodes),
         py::return_value_policy::reference, "Get the points of a grid");
+  m.def("getPhysicsNodes",
+        py::overload_cast<const std::vector<double> &, unsigned int, bool>(
+            &getPhysicsNodes),
+        py::arg("cellBoundaries"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "The points the physics is evaluated at, and a spatial adjoint "
+        "parameter defined: the k+1 basis nodes per cell, or the k+2 star "
+        "nodes with the superconvergent scheme");
+  m.def("getPhysicsNodes",
+        py::overload_cast<Position, Position, Index, unsigned int, bool>(
+            &getPhysicsNodes),
+        py::arg("x_l"), py::arg("x_u"), py::arg("nCells"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "The points the physics is evaluated at, and a spatial adjoint "
+        "parameter defined: the k+1 basis nodes per cell, or the k+2 star "
+        "nodes with the superconvergent scheme");
+  m.def("getPhysicsWeights",
+        py::overload_cast<const std::vector<double> &, unsigned int, bool>(
+            &getPhysicsWeights),
+        py::arg("cellBoundaries"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "One quadrature weight per point getPhysicsNodes returns: weights . g "
+        "is the objective MaNTA reports for g sampled there");
+  m.def("getPhysicsWeights",
+        py::overload_cast<Position, Position, Index, unsigned int, bool>(
+            &getPhysicsWeights),
+        py::arg("x_l"), py::arg("x_u"), py::arg("nCells"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "One quadrature weight per point getPhysicsNodes returns: weights . g "
+        "is the objective MaNTA reports for g sampled there");
 
   // A physics case describes itself as data, in Python exactly as in C++. This
   // replaces setting self.nVars / self.isUpperDirichlet after construction,
@@ -554,6 +584,7 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSources", &AdjointProblem::dSources)
       .def("dAux", &AdjointProblem::dAux)
       .def("dAux_dp", &AdjointProblem::dAux_dp)
+      .def("dScalarG_dp", &AdjointProblem::dScalarG_dp)
       .def("computeUpperBoundarySensitivity",
            &AdjointProblem::computeUpperBoundarySensitivity)
       .def("computeLowerBoundarySensitivity",
