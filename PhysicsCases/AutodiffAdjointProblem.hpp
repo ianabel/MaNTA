@@ -29,6 +29,7 @@ public:
 
     virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x) override;
     virtual void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x) override;
+    virtual void dAux_dp(Index i, Index pIndex, Value &, const State &, Position x) override;
 
     virtual bool computeUpperBoundarySensitivity(Index i, Index pIndex) override;
     virtual bool computeLowerBoundarySensitivity(Index i, Index pIndex) override;

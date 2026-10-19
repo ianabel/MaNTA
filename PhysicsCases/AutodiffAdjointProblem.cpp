@@ -159,6 +159,11 @@ void AutodiffAdjointProblem::dSources_dp(Index i, Index pIndex, Value &grad, con
     return PhysicsProblem->dSources_dp(i, pIndex, grad, s, x, 0.0);
 }
 
+void AutodiffAdjointProblem::dAux_dp(Index i, Index pIndex, Value &grad, const State &s, Position x)
+{
+    return PhysicsProblem->dAuxG_dp(i, pIndex, grad, s, x, 0.0);
+}
+
 bool AutodiffAdjointProblem::computeUpperBoundarySensitivity(Index var, Index pIndex)
 {
     auto it = upperBoundarySensitivities.find({var, pIndex});
