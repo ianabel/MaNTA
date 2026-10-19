@@ -695,9 +695,26 @@ class SystemSolver
         // derivative of the objective GFn reports. With global scalars, dG/dmu
         // -- dg's Scalars entry, already integrated -- goes into *dGdmu when one
         // is passed; it is the scalar rows' share of the same right-hand side.
+        //
+        // With a field model, dG/dpsi goes into *dGdpsi when one is passed: dg's
+        // geometry rows contracted with the weights G is summed with and the
+        // model's dGeometry_dpsi at the same nodes. It is the field rows' share
+        // of the adjoint right-hand side, G_field. Empty without a field model.
         std::vector<Vector> assembleObjectiveGradient(AdjointProblem &objective, Index gIndex,
                                                       DGSoln const &state, Time tEval,
-                                                      Vector *dGdmu = nullptr);
+                                                      Vector *dGdmu = nullptr,
+                                                      Vector *dGdpsi = nullptr);
+
+        // G for objective gIndex at `state`, as the run reports it. With a field
+        // model attached, on the physics nodes physicsNodesAt fills with geometry,
+        // since only the solver can; otherwise through the case's own GFn, u*-based
+        // under the superconvergent scheme. Either way the functional dg
+        // differentiates.
+        double objectiveValue(AdjointProblem &objective, Index gIndex, DGSoln &state, Time tEval);
+
+        // One weight per physics node: the star weights b1 under the
+        // superconvergent scheme, the interpolatory basis weights otherwise.
+        Vector objectiveWeights(DGSoln const &state) const;
 
         // w = dG/dGamma: how the objective moves with the physics outputs Gamma
         // at each physics node -- the flux sigma_hat the case returns, and its
@@ -1499,12 +1516,9 @@ class SystemSolver
         // The field block of the adjoint state, z_psi, and of the adjoint
         // right-hand side, dG/dpsi.
         //
-        // G_field is identically zero and that is a *limit*, not a fact about
-        // the discretisation: AdjointProblem reports dg/du, dg/dq, dg/dsigma and
-        // dg/dphi and has no geometry hook, so an objective whose integrand
-        // reads State::geom directly loses that term. It cannot be detected from
-        // here, so it is named here and in TODO rather than left as an
-        // unremarked zero.
+        // G_field is dG/dpsi: what an objective reading State::geom contributes
+        // through dg's geometry rows (assembleObjectiveGradient), and zero for
+        // one that reads none.
         Vector adjoint_field;
         Vector G_field;
 

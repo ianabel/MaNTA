@@ -135,6 +135,20 @@ RestartFile readRestart(std::string const &stem)
     return f;
 }
 
+/// Objectives that read geometry. 0: the field alone, B(x)(1 + x^2), weighted
+/// so that dg/dB varies across a cell; 1: N V'(x), transport and geometry
+/// together.
+void addGeometricObjectives(AutodiffAdjointProblem &objective)
+{
+    objective.addGWithGeometry(
+        [](Position x, RealVector &, RealVector &, RealVector &, RealVector &, RealVector &geom) -> Real
+        { return geom(ThetaPinchDiffusion::Bfield) * (1.0 + x * x); });
+    objective.addGWithGeometry(
+        [](Position, RealVector &u, RealVector &, RealVector &, RealVector &, RealVector &geom) -> Real
+        { return u(0) * geom(ThetaPinchDiffusion::Vprime); });
+    objective.setNp(2);
+}
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(theta_pinch_run_tests)
@@ -373,6 +387,156 @@ BOOST_AUTO_TEST_CASE(the_coupled_gradient_matches_finite_differences)
         }
     }
     removeOutput("theta_pinch_gradient");
+}
+
+
+// G_field is the derivative of the G the run reports, component by component.
+// Central differences of objectiveValue in each psi component pin both halves
+// at once: the value has to be evaluated on geometry-filled states, and the
+// derivative weighted by diag(w) at the same nodes -- the weights G itself is
+// summed with -- rather than by anything that merely integrates the same thing.
+BOOST_AUTO_TEST_CASE(g_field_is_the_derivative_of_the_reported_objective)
+{
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto run = makeRun({}, "theta_pinch_g_field");
+            run.sys->setSuperconvergent(superconvergent);
+            AutodiffAdjointProblem objective(run.problem.get());
+            addGeometricObjectives(objective);
+            SystemSolver &sys = *run.sys;
+            {
+                CapturedOutput quiet;
+                sys.initialize();
+                sys.integrate(0.25);
+            }
+            const Index nField = sys.getFieldDOF();
+            std::vector<double> base(sys.yJac.data(), sys.yJac.data() + sys.yJac.getDoF());
+            for (Index g = 0; g < 2; ++g)
+            {
+                Vector Gmu, Gpsi;
+                DGSoln state(sys.nVars, *run.grid, sys.k, base.data(), 0, sys.nAux, nField);
+                sys.assembleObjectiveGradient(objective, g, state, sys.jt, &Gmu, &Gpsi);
+                BOOST_REQUIRE_EQUAL(Gpsi.size(), nField);
+                Vector fd(nField);
+                for (Index m = 0; m < nField; ++m)
+                {
+                    std::vector<double> plus(base), minus(base);
+                    DGSoln up(sys.nVars, *run.grid, sys.k, plus.data(), 0, sys.nAux, nField);
+                    DGSoln down(sys.nVars, *run.grid, sys.k, minus.data(), 0, sys.nAux, nField);
+                    const double h = 1e-6 * std::max(1.0, std::abs(up.Field(m)));
+                    up.Field(m) += h;
+                    down.Field(m) -= h;
+                    fd(m) = (sys.objectiveValue(objective, g, up, sys.jt) -
+                             sys.objectiveValue(objective, g, down, sys.jt)) / (2.0 * h);
+                }
+                BOOST_TEST_MESSAGE("objective " << g << ": |G_field - fd| = " << (Gpsi - fd).cwiseAbs().maxCoeff()
+                                                << " against |fd| = " << fd.cwiseAbs().maxCoeff());
+                BOOST_TEST(fd.cwiseAbs().maxCoeff() > 1e-2);
+                BOOST_TEST((Gpsi - fd).cwiseAbs().maxCoeff() < 1e-8 * fd.cwiseAbs().maxCoeff());
+            }
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+    }
+}
+
+// The whole gradient of an objective that reads the field alone. Its dg/du is
+// zero, so G_y is zero and the adjoint is driven by G_field and nothing else:
+// without it G_p would be exactly zero, beside a perfectly good G.
+BOOST_AUTO_TEST_CASE(an_objective_reading_only_the_field_gets_its_gradient)
+{
+    auto solve = [&](Index which, double delta, Vector *gradient)
+    {
+        auto run = makeRun({}, "theta_pinch_field_gradient");
+        run.problem->setPval(which, Real(run.problem->getPval(which).val + delta));
+        AutodiffAdjointProblem objective(run.problem.get());
+        addGeometricObjectives(objective);
+        SystemSolver &sys = *run.sys;
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setSteadyStateTolerance(1e-11);
+        sys.setTolerances({1e-11}, 1e-9);
+        sys.setAdjointProblem(&objective);
+        sys.setSolveAdjoint(gradient != nullptr);
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+            sys.integrate(0.0);
+        }
+        if (gradient)
+            *gradient = sys.G_p.row(0).transpose();
+        const double G = sys.objectiveValue(objective, 0, sys.yJac, sys.jt);
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        return G;
+    };
+
+    Vector gradient;
+    solve(0, 0.0, &gradient);
+    for (Index which : {ThetaPinchDiffusion::pD0, ThetaPinchDiffusion::pTemperature})
+    {
+        const double h = 1e-5;
+        const double fd = (solve(which, +h, nullptr) - solve(which, -h, nullptr)) / (2.0 * h);
+        BOOST_TEST_MESSAGE("parameter " << which << ": adjoint " << gradient(which) << " against " << fd);
+        BOOST_TEST(std::abs(fd) > 1e-3);
+        BOOST_TEST(gradient(which) == fd, boost::test_tools::tolerance(1e-6));
+    }
+    removeOutput("theta_pinch_field_gradient");
+}
+
+// The objective estimate's forward form, (dG/dy) . J^-1 F, is the adjoint's
+// z^T F only if it carries the field's share, G_field . delta psi, as it
+// carries the scalars' through G_mu.
+BOOST_AUTO_TEST_CASE(the_objective_estimate_carries_the_field_share)
+{
+    auto run = makeRun({}, "theta_pinch_estimate");
+    AutodiffAdjointProblem objective(run.problem.get());
+    addGeometricObjectives(objective);
+    SystemSolver &sys = *run.sys;
+    sys.setAdjointProblem(&objective);
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+    // Away from any steady state, so F is not small.
+    const auto e = sys.estimateObjective();
+    BOOST_REQUIRE(e.valid);
+
+    const Index nField = sys.getFieldDOF();
+    DGSoln state(sys.nVars, *run.grid, sys.k, N_VGetArrayPointer(sys.Y), 0, sys.nAux, nField);
+    sys.solveAdjointAt(objective, {0, 1}, state);
+    N_Vector zero = N_VClone(sys.Y), F = N_VClone(sys.Y);
+    N_VConst(0.0, zero);
+    sys.residual(sys.t0, sys.Y, zero, F);
+    DGSoln Fmap(sys.nVars, *run.grid, sys.k, N_VGetArrayPointer(F), 0, sys.nAux, nField);
+    double const *f = N_VGetArrayPointer(F);
+    const Index cellDOF = static_cast<Index>(sys.localDOF);
+    const Index nCells = static_cast<Index>(run.grid->getNCells());
+
+    for (Index g = 0; g < 2; ++g)
+    {
+        auto const *z = sys.adjointSolution(g, state);
+        BOOST_REQUIRE(z != nullptr);
+        double zF = 0.0;
+        for (Index i = 0; i < nCells; ++i)
+            zF += z->squ[i].dot(Eigen::Map<const Vector>(f + i * cellDOF, cellDOF));
+        zF += z->lambda.dot(Eigen::Map<const Vector>(f + nCells * cellDOF, nCells + 1));
+        const double fieldShare = z->field.dot(Vector(Fmap.getField()));
+        zF += fieldShare;
+
+        const double forward = e.value(g) - e.corrected(g);
+        BOOST_TEST_MESSAGE("objective " << g << ": (dG/dy) . J^-1 F = " << forward << ", z^T F = " << zF
+                                        << ", of which the field rows " << fieldShare);
+        BOOST_TEST(std::abs(forward) > 1e-4);
+        BOOST_TEST(std::abs(forward - zF) <= 1e-9 * std::abs(forward));
+    }
+    N_VDestroy(zero);
+    N_VDestroy(F);
+    CapturedOutput quiet;
+    sys.destroySundials();
 }
 
 

@@ -329,9 +329,7 @@ void SystemSolver::WriteAdjoints()
 	for (Index i = 0; i < ng; ++i)
 	{
 		const std::string Gi = "G" + std::to_string(i);
-		nc_output.AddScalarVariable(Gi, "G function", "",
-									superconvergent ? adjointProblem->GFn(i, y, *postprocessor)
-													: adjointProblem->GFn(i, y));
+		nc_output.AddScalarVariable(Gi, "G function", "", objectiveValue(*adjointProblem, i, y, jt));
 		nc_output.AddGroup(Gi + "_p", "Gradients of G using adjoint state method");
 		nc_output.AddGroup(Gi + "_boundary", "Gradients of G on boundary using adjoint state method");
 

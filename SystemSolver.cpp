@@ -3440,16 +3440,42 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
 }
 
 // See the declaration.
+Vector SystemSolver::objectiveWeights(DGSoln const &state) const
+{
+    const Index nPer = physicsNodesPerCell();
+    Vector w(nCells * nPer);
+    for (Index i = 0; i < nCells; ++i)
+        w.segment(i * nPer, nPer) = superconvergent ? Vector(postprocessor->starWeights(i))
+                                                    : Vector(state.getBasis().getIntegrationWeights(grid[i]));
+    return w;
+}
+
+double SystemSolver::objectiveValue(AdjointProblem &objective, Index gIndex, DGSoln &state, Time tEval)
+{
+    if (fieldModel)
+    {
+        PhysicsNodes nodes = physicsNodesAt(state, tEval);
+        return objective.GFnAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(state),
+                                    physicsNodesPerCell());
+    }
+    if (superconvergent)
+    {
+        postprocessor->computeUStar(state);
+        return objective.GFn(gIndex, state, *postprocessor);
+    }
+    return objective.GFn(gIndex, state);
+}
+
 std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &objective,
                                                             Index gIndex, DGSoln const &state,
-                                                            Time tEval, Vector *dGdmu)
+                                                            Time tEval, Vector *dGdmu, Vector *dGdpsi)
 {
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
     // physicsNodesAt builds u*, and fills the geometry an objective's dg may read.
     const Index derivK = superconvergent ? k + 1 : k;
 
-    GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux);
+    GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux, nGeom);
     PhysicsNodes nodes = physicsNodesAt(state, tEval);
     objective.dg(gIndex, dGdvars, nodes.states, nodes.points);
     if (dGdmu != nullptr)
@@ -3458,6 +3484,33 @@ std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &obje
             *dGdmu = dGdvars.Scalars();
         else
             dGdmu->resize(0);
+    }
+
+    // dG/dpsi. psi reaches nothing outside the field rows except through the
+    // geometry slots, so its explicit share of G = sum_j w_j g(geom(psi, x_j))
+    // is sum_j w_j (dg/dgeom)_j . dgeom/dpsi(x_j) -- diag(w), the weights G
+    // itself is summed with, at the nodes dg was evaluated on.
+    if (dGdpsi != nullptr)
+    {
+        if (fieldModel)
+        {
+            const Vector psi = state.getField();
+            const Vector w = objectiveWeights(state);
+            Matrix const &dgdgeom = dGdvars.GeometryMatrix();
+            Matrix dgeom = Matrix::Zero(nGeom, nField);
+            *dGdpsi = Vector::Zero(nField);
+            for (size_t j = 0; j < nodes.points.size(); ++j)
+            {
+                const Vector slope = dgdgeom.col(static_cast<Index>(j));
+                if (slope.squaredNorm() == 0.0)
+                    continue;
+                dgeom.setZero();
+                fieldModel->dGeometry_dpsi(dgeom, psi, nodes.points[j], tEval);
+                *dGdpsi += w(static_cast<Index>(j)) * dgeom.transpose() * slope;
+            }
+        }
+        else
+            dGdpsi->resize(0);
     }
 
     Vector dGdu(nVars * (k + 1));
@@ -3829,11 +3882,7 @@ void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
 void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 {
     assembleAdjointOperator(adjointDerivativesAt(y, dydt, jt));
-    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu);
-    if (fieldModel)
-        G_field = Vector::Zero(nField);
-    else
-        G_field.resize(0);
+    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field);
 
     initialised = true;
 }
@@ -3903,11 +3952,7 @@ void SystemSolver::solveAdjointAt(AdjointProblem &objective, std::vector<Index> 
     assembleAdjointOperator(src);
     for (Index g : objectives)
     {
-        G_y = assembleObjectiveGradient(objective, g, state, src.t, &G_mu);
-        if (fieldModel)
-            G_field = Vector::Zero(nField);
-        else
-            G_field.resize(0);
+        G_y = assembleObjectiveGradient(objective, g, state, src.t, &G_mu, &G_field);
         solveAdjointState();
         storeAdjointSolution(g, state, operatorAtState);
     }
@@ -4370,7 +4415,9 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     // through G_mu just as it sees the cells' part through G_y.
     DGSoln deltaMap(nVars, grid, k, N_VGetArrayPointer(delta), nScalars, nAux, nField);
     const Vector deltaMu = nScalars > 0 ? Vector(deltaMap.Scalars()) : Vector();
-    double deltaNorm = deltaMu.squaredNorm();
+    // ...and the field's, which an objective reading geometry sees through G_field.
+    const Vector deltaPsi = nField > 0 ? Vector(deltaMap.getField()) : Vector();
+    double deltaNorm = deltaMu.squaredNorm() + deltaPsi.squaredNorm();
     for (Index i = 0; i < static_cast<Index>(nCells); ++i)
         for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
         {
@@ -4384,19 +4431,20 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
         // y, not yJac: y maps Y, the state the solve is actually in. yJac does not
         // catch up until the end of integrate(), so reading it here would report
         // the objective at the initial condition.
-        if (superconvergent)
-            postprocessor->computeUStar(y);
-        out.value(g) = superconvergent
-                           ? adjointProblem->GFn(g, y, *postprocessor)
-                           : adjointProblem->GFn(g, y);
+        out.value(g) = objectiveValue(*adjointProblem, g, y, jt);
 
         // dG/dy for this objective, from its dg alone: the Jacobian built above
         // is the only one this needs, and it is not transposed.
-        Vector Gmu;
-        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt, &Gmu);
+        Vector Gmu, Gpsi;
+        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt, &Gmu, &Gpsi);
 
         double dot = nScalars > 0 ? Gmu.dot(deltaMu) : 0.0;
         double dGdyNorm = nScalars > 0 ? Gmu.squaredNorm() : 0.0;
+        if (nField > 0)
+        {
+            dot += Gpsi.dot(deltaPsi);
+            dGdyNorm += Gpsi.squaredNorm();
+        }
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
             {
@@ -4475,11 +4523,7 @@ void SystemSolver::computeAdjointGradients()
     initialised = true;
     for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
     {
-        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu);
-        if (fieldModel)
-            G_field = Vector::Zero(nField);
-        else
-            G_field.resize(0);
+        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field);
         solveAdjointState();
         storeAdjointSolution(gIndex, y, true);
         accumulateAdjointGradients(gIndex);
@@ -4541,8 +4585,19 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
     const bool spatial = adjointProblem->areParametersSpatial();
     const Index nPhys = physicsNodesPerCell();
     const Index nPoints = nCells * nPhys;
-    const Matrix dGdp = superconvergent ? adjointProblem->dGFndp(gIndex, y, *postprocessor)
-                                        : adjointProblem->dGFndp(gIndex, y);
+    // With a field model, on the solver's own geometry-filled states: the
+    // y-based forms evaluate the objective on states with no geometry rows, and
+    // one that reads geometry would read past them.
+    Matrix dGdp;
+    if (fieldModel)
+    {
+        PhysicsNodes nodes = physicsNodesAt(y, jt);
+        dGdp = adjointProblem->dGFndpAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(y), nPhys, y,
+                                             superconvergent ? postprocessor.get() : nullptr);
+    }
+    else
+        dGdp = superconvergent ? adjointProblem->dGFndp(gIndex, y, *postprocessor)
+                               : adjointProblem->dGFndp(gIndex, y);
     if (spatial)
         checkShapeAndSet(G_p.block(gIndex * nPoints, 0, nPoints, adjointProblem->getNp()), dGdp,
                          "dGdp in SystemSolver");
