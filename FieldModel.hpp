@@ -50,6 +50,14 @@ public:
                                GlobalState const &states, std::vector<Position> const &points,
                                Vector const &weights, Time t) = 0;
 
+    /// d/dt of the rows above with every other argument held fixed: their
+    /// explicit time dependence -- a coil current programmed in time, say.
+    /// `out` arrives zeroed, and zero is the default.
+    virtual void dFieldResidual_dt(VectorRef, Vector const &, Vector const &, GlobalState const &,
+                                   std::vector<Position> const &, Vector const &, Time)
+    {
+    }
+
     // ---- Geometry -------------------------------------------------------
 
     /// The metric at one point. `out` is length nGeometry and arrives zeroed.

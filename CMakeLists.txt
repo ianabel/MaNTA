@@ -28,7 +28,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(MaNTA
-        VERSION 0.9.1
+        VERSION 0.9.2
         DESCRIPTION "Maryland Nonlinear Transport Analyzer"
         HOMEPAGE_URL "https://manta-docs.readthedocs.io"
         LANGUAGES CXX)
