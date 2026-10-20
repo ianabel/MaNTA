@@ -1,5 +1,6 @@
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective
+from objective import make_objective, ObjectiveFromUserWithParams
+from itg_wrapper import make_itg_builder, itg_at, with_itg
 from yancc_wrapper import yancc_data
 import yancc
 import jax.numpy as jnp
@@ -38,27 +39,27 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 def make_config(fac):
     return {
         "ParticleSourceCenter": 0.0,
-        "ParticleSourceHeight": 0.02,
+        "ParticleSourceHeight": 0.005,
         "ParticleSourceWidth": 0.6,
         "NBICenter": 0.0,
-        "NBIPower": fac * 2.0,
+        "NBIPower": fac * 1.0,
         "NBIWidth": 0.15,
         "ECHCenter": 0.0,
-        "ECHPower": fac * 8.76e-2,
-        "ECHWidth": 0.15,
-        "EdgeTemperature": 0.4,
+        "ECHPower": fac * 0.0e-2,
         "EdgeDensity": 0.3,
         "ADCoefficient": 0.0,
         "n0": 0.5,
         "T0": 1.0,
         "FusionFactor": 0.01,
         "evolveDensity": True,
+        "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+        "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
         "useBatching": True,
         "nchunks": 3,
     }
 
 
-eq_name = "precise_QH"
+eq_name = "reactor_QA"
 
 rho_upper = 1.0
 rtol = 1e-2
@@ -70,16 +71,18 @@ degree = 4
 # tau = 0.5
 #
 base = 1.8
-tau = 0.5
+tau = 0.2
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
 # nodes = np.concatenate(
 #     ([0, 0.1], nodes, [rho_upper])
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
+# nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
 
-nodes = np.concatenate(([0, 0.1, 0.2], nodes, [rho_upper]))
+# nodes = np.concatenate(([0, 0.05, 0.2], nodes, [rho_upper]))
+
+nodes = np.linspace(0, 1, npoints + 1)
 
 # nodes = np
 print(nodes)
@@ -98,14 +101,14 @@ solver_config = {
     "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 5e-5,
-    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
+    # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
-    "tauScaling": "Diffusive",
-    "tauUpdate": "ContinuationStep",
+    # "tauScaling": "Diffusive",
+    # "tauUpdate": "ContinuationStep",
     "SteadyStateSolver": "PseudoTransient",
     "NewtonJacobianReuse": 4,
     "SteadyStateDiagnostics": True,
@@ -143,7 +146,7 @@ eq = desc.examples.get(eq_name)
 # # eq = desc.examples.get("W7-X")
 # # # # Reduce the number of modes (not sure if this is a good thing to do)
 # # #
-eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 4.0))
 # # #
 # #
 # # eq = desc.examples.get("reactor_QA")
@@ -173,7 +176,10 @@ yancc_wrapper = yancc_data.from_eq(
 
 # with jax.log_compiles(True):
 
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+st = StellaratorTransport(
+    config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
+)
 st.run()
 # for fac in jnp.linspace(0.01, 1.0, 5):
 #
@@ -293,8 +299,11 @@ config = {
 manta_objective = make_objective(config, yancc_res=yancc_res)
 
 
-def objective_from_user_fun(grid, data):
-    # note: don't change the signature to this function
+def objective_from_user_fun(grid, data, params=None):
+    # keep (grid, data) first: ObjectiveFromUser calls fun(grid, data);
+    # ObjectiveFromUserWithParams also passes params, which the ITG term
+    # needs. The data keys must stay written out here: DESC reads them
+    # from this function's source
     yancc_dat = {
         "B_sup_t": data["B^theta"],
         "B_sup_z": data["B^zeta"],
@@ -328,7 +337,9 @@ def objective_from_user_fun(grid, data):
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
-    stored_energy, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
+    stored_energy, manta_pressure = manta_objective(
+        with_itg((fields, Vp, Vpp), itg_builder, params), grid
+    )
     print("------------ STORED ENERGY ----------------")
     print(stored_energy)
     print("-------------------------------------------")
@@ -373,7 +384,7 @@ stored_energy_weight = 1.0
 objective_from_user_weight = stored_energy_weight
 
 objectives = [
-    ObjectiveFromUser(
+    (ObjectiveFromUserWithParams if itg_builder is not None else ObjectiveFromUser)(
         objective_from_user_fun,
         eq,
         target=0,
@@ -398,7 +409,7 @@ o1.build(use_jit=False)
 obj = ProximalProjection(o1, ObjectiveFunction(constraints), eq)
 obj.build()
 N = 2
-M = 2
+M = 1
 # Get the index of a mode
 idx = eq.surface.R_basis.get_idx(L=0, N=N, M=M)
 v0 = eq.Rb_lmn[idx]
@@ -421,19 +432,24 @@ df = sweep[1] - sweep[0]
 eq_init = eq.copy()
 x_init = obj.x(eq_init)
 
+# ProximalProjection's state is params[arg] for arg in obj._args, concatenated
+# (ProximalProjection.x), so Rb_lmn[idx] sits after every argument ahead of
+# Rb_lmn. That order includes c_l: the old len(p_l) + len(i_l) + 1 offset was
+# right only for an iota-profile equilibrium, and for a current-profile one
+# swept the coefficient len(c_l) entries before the one on the plot's axis.
+j = sum(eq.dimensions[arg] for arg in obj._args[: obj._args.index("Rb_lmn")]) + idx
+assert jnp.isclose(x_init[j], eq.Rb_lmn[idx]), (j, x_init[j], eq.Rb_lmn[idx])
+
 
 for i in range(0, len(sweep)):
     print(f"--------------------------\n Iteration {i} \n--------------------------\n")
-    lp = len(eq.p_l)
-    lc = len(eq.i_l)
     # t = jax.flatten_util.ravel_pytree(make_tangent(eq.params_dict, idx))[0]
     eq_ = eq.copy()
     eqs.append(eq_)
-    # ProximalProjection removes most of the fields so the index into the Rb_lmn field is this (I think?)
-    x_in = x_init.at[lp + lc + 1 + idx].set(sweep[i])
+    x_in = x_init.at[j].set(sweep[i])
     # Set the tangent to 1 at the same index
     t = jnp.zeros(obj.dim_x)
-    t1 = t.at[lp + lc + 1 + idx].set(1.0)
+    t1 = t.at[j].set(1.0)
 
     # Compute value of objective
     # Compute gradient
@@ -449,12 +465,12 @@ fd_grad = jnp.gradient(jnp.array(G)) / df
 
 ax[1].plot(sweep, fd_grad, "ro", label="FD")
 ax[1].plot(sweep, grads, "bx", label="Adjoints")
-ax[1].set_xlabel(rf"$R_{{0, {M}, {N}}}$")
-ax[1].set_ylabel(rf"$dG/dR_{{0, {M}, {N}}}$")
+ax[1].set_xlabel(rf"$R^b_{{{M}, {N}}}$")
+ax[1].set_ylabel(rf"$dG/dR^b_{{{M}, {N}}}$")
 ax[1].axvline(v0, color="k", linestyle="--")
 ax[1].legend()
 ax[0].plot(sweep, G, marker="o", color="red")
-ax[0].set_xlabel(rf"$R_{{0, {M}, {N}}}$")
+ax[0].set_xlabel(rf"$R^b_{{{M}, {N}}}$")
 ax[0].set_ylabel("G")
 ax[0].axvline(v0, color="k", linestyle="--")
 

@@ -139,3 +139,46 @@ names would produce something that runs and does not mean what it says.
 pays for every steady solve it asks for. `TODO` records what a sound early exit
 would need — a bound on the objective *between steady states*, not a derivative at
 the initial condition.
+
+## The NN ITG heat flux (`itg_wrapper.py`)
+
+`useITGProxy = true` adds the ion heat flux predicted by DESC's `NNITGProxy`
+(Landreman et al. 2025, a CNN ensemble trained on GX) to the neoclassical one.
+It needs DESC's `cj/itg-proxy` branch, `torch` (only to read the `.pth`
+weights) and the itg-proxy demo's `neural_networks/` data (`ITG_MODEL_DIR`).
+
+The proxy is declared and built once; a builder then turns any `params` into
+a flux with `compute_dke_sol`'s signature:
+
+```python
+obj = build_itg_proxy(eq, rho_table, ensemble_dir=..., ensemble_csv=...)  # jitted build
+builder = ITGFluxBuilder(obj)
+itg = builder(params)                         # traceable in params, jitted
+st = StellaratorTransport(config, yancc_wrapper, itg=itg)
+```
+
+The network's geometry inputs depend only on `(eq, rho)` and are tabulated on
+`rho_table`; the gradients `a/LT`, `a/Ln` enter at the last layers, so the
+per-node evaluation is cheap. The transported flux is normalised as
+`compute_dke_sol` normalises yancc's, with gyro-Bohm at `PlasmaConstants`'
+`B0` and `a`, which makes it `ITGScale * Q * n T^(5/2) / sqrt(2) * V'` --
+large, hence `ITGScale` (default 1; the driver uses 1e-2).
+
+In `objective.py` the `ITGFlux` is passed as a fourth element of `tree_in`,
+and `StellaratorAdjointProblem` carries each node's geometry signals as spatial
+adjoint parameters, so the DESC gradient includes the ITG geometry
+sensitivity. `ObjectiveFromUserWithParams` is `ObjectiveFromUser` with `params`
+passed to the function as a third argument, which the builder needs; the
+driver switches to it when `useITGProxy` is set.
+
+Checks, all under `TEST_STELLARATOR=true`:
+
+| | what it checks |
+|---|---|
+| `itg_check.py` | the bare ensemble on the table reproduces `NNITGProxy.compute`; interpolation between table points; units; the `compute_dke_sol` signature through `vmap_batched`; Jacobians; floor; no retrace on a new equilibrium; `d/d(params)` through the builder |
+| `fd_check_itg.py --mode params` | the ITG adjoint columns: fields fixed, builder `params` perturbed, JVP against central differences |
+| `fd_check_itg.py --mode proximal` | the same objective inside `ProximalProjection` over `ForceBalance`, as `scan_eq_ambipolar.py` uses it |
+
+The network is piecewise smooth in its geometry inputs (max pooling), so
+finite differences there need relative steps of 1e-5 or below to agree with the
+gradient; it is smooth in the gradients, which is what the state Jacobian uses.

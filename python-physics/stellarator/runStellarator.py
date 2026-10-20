@@ -3,6 +3,7 @@ import os
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
+from itg_wrapper import make_itg_builder, itg_at
 from objective import make_objective
 
 # os.environ.pop("TEST_STELLARATOR", None)
@@ -40,6 +41,8 @@ st_config = {
     "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
+    "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+    "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
     "useBatching": True,
     "adaptiveGrid": False,
     "nchunks": 3,
@@ -150,5 +153,6 @@ yancc_wrapper = yancc_data.from_eq(
     yancc_rho, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+itg_builder = make_itg_builder(st_config, eq, rho_upper)
+st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict))
 st.run()

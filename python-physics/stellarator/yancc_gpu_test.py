@@ -15,6 +15,7 @@ from typing import NamedTuple
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 import matplotlib.pyplot as plt
 from stellarator_multichannel import StellaratorTransport
+from itg_wrapper import make_itg_builder, itg_at
 from netCDF4 import Dataset
 from interpax import Akima1DInterpolator
 from desc.equilibrium import Equilibrium
@@ -175,7 +176,8 @@ def run_yancc_at_res(st_config, nt, nz, na, nx):
     yancc_res = {"na": na, "nx": nx}
     yancc_wrapper = yancc_data.from_eq(points, eq=eq, nt=nt, nz=nz, **yancc_res)
 
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    itg = itg_at(make_itg_builder(st_config, eq, rho_upper), eq.params_dict)
+    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg)
     states = make_state_from_output(points, "stellarator_opt_amb")
     return st.ComputePhysics(states, points, 0.0)
 
@@ -203,6 +205,8 @@ def test_yancc_res():
         "T0": 1.0,
         "FusionFactor": 0.01,
         "evolveDensity": True,
+        "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+        "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
         "useBatching": True,
     }
 

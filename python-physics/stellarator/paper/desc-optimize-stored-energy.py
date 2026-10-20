@@ -5,7 +5,8 @@ sys.path.append("..")
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective
+from objective import make_objective, ObjectiveFromUserWithParams
+from itg_wrapper import make_itg_builder, itg_at, with_itg
 from config import rescale_config, field_norm_from_eq
 
 # os.environ.pop("TEST_STELLARATOR", None)
@@ -42,7 +43,7 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-eq_name = "eq3"
+eq_name = "eq_itg"
 fname = "stellarator_opt" + eq_name
 
 #
@@ -68,21 +69,23 @@ fname = "stellarator_opt" + eq_name
 fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 0.01,
-    "ParticleSourceWidth": 0.4,
+    "ParticleSourceHeight": fac * 0.02,
+    "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 1.0,
+    "NBIPower": fac * 8.0,
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
-    "ECHPower": fac * 8.0,
-    "ECHWidth": 0.05,
+    "ECHPower": fac * 0.0,
+    "ECHWidth": 0.1,
     "EdgeTemperature": 0.5,
-    "EdgeDensity": 0.2,
+    "EdgeDensity": 0.4,
     "ADCoefficient": 0.0,
     "n0": 0.5,
     "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
+    "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+    "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
     "useBatching": True,
     "nchunks": 3,
 }
@@ -97,12 +100,12 @@ rho_upper = 1.0
 rtol = 1e-2
 atol = 1e-10
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
-npoints = 8
-degree = 5
+npoints = 9
+degree = 4
 # base = 1.5
 # tau = 0.5
 #
-base = 1.8
+base = 1.9
 tau = 0.2
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
@@ -110,9 +113,9 @@ tau = 0.2
 # nodes = np.concatenate(
 #     ([0, 0.1], nodes, [rho_upper])
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 
-nodes = np.concatenate(([0, 0.05, 0.2], nodes, [rho_upper]))
+nodes = np.concatenate(([0, 0.05, 0.15, 0.3], nodes, [rho_upper]))
 
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
@@ -189,9 +192,9 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # eq = desc.compat.rescale(
 #     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
 # )
-# #
-# # # # # #
-# # # # eq.pressure = desc_pressure
+# # #
+# # # # # # #
+# # # # # eq.pressure = desc_pressure
 # eq = eq.solve(x_scale="ess")[0]
 # eqs = EquilibriaFamily(eq)
 # # desc_pressure = eq.get_profile('p')
@@ -219,7 +222,7 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq = eqs[-1].copy()
-eq.pressure = desc_pressure
+# eq.pressure = desc_pressure
 
 eq_init = eq.copy()
 
@@ -257,7 +260,10 @@ config = normalized(config)
 # # # %%
 # with jax.log_compiles(True):
 #
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+st = StellaratorTransport(
+    config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
+)
 st.run()
 #
 # # %%
@@ -306,13 +312,13 @@ solver_config = {
     "initialTimestep": 1e-2,
     "MinStepSize": 1e-10,
     "WriteDatFile": True,
-    "NewtonJacobianReuse": 4,
-    "NewtonMaxIterations": 15,
+    "NewtonJacobianReuse": 5,
+    "NewtonMaxIterations": 20,
     "restart": True,
     "zeroFlux": True,
     # "tauScaling": "Constant",
     # "tauUpdate": "ContinuationStep",
-    "SteadyStateTolerance": 1e-4,
+    "SteadyStateTolerance": 2e-4,
     # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
@@ -329,44 +335,46 @@ config = normalized(
 )
 
 
-eq2 = eq.copy()
-fam2 = EquilibriaFamily(eq2)
-niters = 2
-for k in range(niters):
-    eq2 = eq2.copy()
-
-    fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
-
-    yancc_wrapper = yancc_data.from_eq(
-        points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-    )
-    pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-    st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-    st.run()
-
-    pi = st.getPressure()
-    pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-    ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-    eq2.pressure = SplineProfile(pi_manta, pressure_rho)
-    # fit the current profile to a power series, with c_0=c_1=0
-    # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-    # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-    # re-solve the equilibrium
-    eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
-    fam2.append(eq2)
-    eqs.append(eq2)
-eq_self_consistent = eq2.copy()
+# eq2 = eq.copy()
+# fam2 = EquilibriaFamily(eq2)
+# niters = 3
+# for k in range(niters):
+#     eq2 = eq2.copy()
 #
-ax.legend()
-# fig.savefig("initial_self_consistent_pressure.png")
-# # # %%
+#     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
+#
+#     yancc_wrapper = yancc_data.from_eq(
+#         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+#     )
+#     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
+#     st = StellaratorTransport(
+#         config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq2.params_dict)
+#     )
+#     st.run()
+#
+#     pi = st.getPressure()
+#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+#     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+#     eq2.pressure = SplineProfile(pi_manta, pressure_rho)
+#     # fit the current profile to a power series, with c_0=c_1=0
+#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
+#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+#     # re-solve the equilibrium
+#     eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
+#     fam2.append(eq2)
+#     eqs.append(eq2)
+# eq_self_consistent = eq2.copy()
+# # #
+# ax.legend()
+# # fig.savefig("initial_self_consistent_pressure.png")
+# # # # %%
+# # #
+# # plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
 # #
-# plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
-#
-# plt.show()
-eq = eq2.copy()
-#
-# %%
+# # plt.show()
+# eq = eq2.copy()
+# #
+# # %%
 
 
 manta_objective = make_objective(
@@ -380,8 +388,11 @@ manta_objective = make_objective(
 #     return stored_energy, pressure
 
 
-def objective_from_user_fun(grid, data):
-    # note: don't change the signature to this function
+def objective_from_user_fun(grid, data, params=None):
+    # keep (grid, data) first: ObjectiveFromUser calls fun(grid, data);
+    # ObjectiveFromUserWithParams also passes params, which the ITG term
+    # needs. The data keys must stay written out here: DESC reads them
+    # from this function's source
     yancc_dat = {
         "B_sup_t": data["B^theta"],
         "B_sup_z": data["B^zeta"],
@@ -415,7 +426,9 @@ def objective_from_user_fun(grid, data):
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
-    g, manta_pressure = manta_objective((fields, Vp, Vpp), grid)
+    g, manta_pressure = manta_objective(
+        with_itg((fields, Vp, Vpp), itg_builder, params), grid
+    )
 
     print("------------ STORED ENERGY ----------------")
     print(g)
@@ -486,7 +499,7 @@ obj_mirror_ratio = ObjectiveFromUser(
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-5)
 
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 2e-6)
-stored_energy_weight = 10.0
+stored_energy_weight = 50.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
@@ -504,7 +517,7 @@ objectives = [
     obj_mirror_ratio,
     Volume(eq=eq, target=V0, weight=100.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
-    ObjectiveFromUser(
+    (ObjectiveFromUserWithParams if itg_builder is not None else ObjectiveFromUser)(
         objective_from_user_fun,
         eqfam[-1],
         target=0.0,
@@ -559,10 +572,10 @@ eq, info_out = eq.optimize(
     x_scale="ess",
     maxiter=max_it,
     ftol=1e-4,  # stopping tolerance on the function value
-    xtol=1e-4,  # stopping tolerance on the step size
+    xtol=1e-5,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
     # options={
-    #     "initial_trust_radius": 0.05,
+    #     "initial_trust_radius": 0.1,
     #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
     #     #     # "solve_options": {
     #     #     #     "ftol": 5e-3,
