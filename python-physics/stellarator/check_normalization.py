@@ -127,7 +127,6 @@ def worker(args):
     from netCDF4 import Dataset
 
     from config import (
-        DEFAULT_NORMALIZATION,
         rescale_config,
         plasma_constants,
         field_norm_from_eq,
@@ -141,9 +140,10 @@ def worker(args):
     eq = desc.examples.get(args.eq)
     wrapper = yancc_data.from_eq(np.asarray(points), eq=eq, nt=9, nz=9, nx=3, na=9)
 
-    normalization = {**DEFAULT_NORMALIZATION, **CASES[args.worker]}
     if args.worker == "field":
-        normalization.update(field_norm_from_eq(eq))
+        normalization = field_norm_from_eq(eq)
+    else:
+        normalization = dict(CASES[args.worker])
     print("normalisation:", normalization)
     config = rescale_config(base, normalization)
     solver = config["Solver"]

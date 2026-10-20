@@ -6,7 +6,7 @@ sys.path.append("..")
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective
-from config import DEFAULT_NORMALIZATION, rescale_config, field_norm_from_eq
+from config import rescale_config, field_norm_from_eq
 
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
@@ -240,7 +240,7 @@ yancc_wrapper = yancc_data.from_eq(
 
 # Normalise lengths and fields to the initial equilibrium's a and <|B|>_rms,
 # fixed from here on: every run below, and the objective, use these numbers
-normalization = {**DEFAULT_NORMALIZATION, **field_norm_from_eq(eq_init)}
+normalization = field_norm_from_eq(eq_init)
 print(f"Normalization from the initial equilibrium: {normalization}")
 
 
