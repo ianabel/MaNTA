@@ -688,6 +688,17 @@ public:
     return;
   }
 
+  // What the solver calls: initialiseDiagnostics with the state the run starts
+  // from available, through initialDiagnosticState(), for a diagnostic whose t0
+  // slice is a function of it as every later slice writeDiagnostics writes is.
+  // Not a second virtual: a case overriding the one above keeps being called.
+  void initialiseDiagnosticsAt(DGSoln const &y, DGSoln const &dydt, double t, NetCDFIO &nc)
+  {
+    m_initialDiagnosticState = {&y, &dydt, t};
+    initialiseDiagnostics(nc);
+    m_initialDiagnosticState = {};
+  }
+
   virtual void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, double t, NetCDFIO &nc, size_t tIndex)
   {
     writeDiagnostics(y, t, nc, tIndex);
@@ -735,6 +746,21 @@ private:
   }
 
 protected:
+  struct InitialDiagnosticState
+  {
+    DGSoln const *y = nullptr;
+    DGSoln const *dydt = nullptr;
+    double t = 0.0;
+  };
+  /// The state initialiseDiagnosticsAt was called with, while it runs; empty
+  /// otherwise (a direct initialiseDiagnostics call has no state to offer).
+  InitialDiagnosticState const &initialDiagnosticState() const { return m_initialDiagnosticState; }
+
+private:
+  InitialDiagnosticState m_initialDiagnosticState;
+
+protected:
+
   bool restarting = false;
   std::vector<double> restart_Y_data;
   std::vector<double> restart_dYdt_data;
