@@ -508,6 +508,13 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
       .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
       .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
+      // The explicit time derivatives, zero unless a case overrides them; see
+      // TransportSystem.hpp.
+      .def("dSigmaFn_dt", &TransportSystem::dSigmaFn_dt)
+      .def("dSources_dt", &TransportSystem::dSources_dt)
+      .def("dAuxG_dt", &TransportSystem::dAuxG_dt)
+      .def("dLowerBoundary_dt", &TransportSystem::dLowerBoundary_dt)
+      .def("dUpperBoundary_dt", &TransportSystem::dUpperBoundary_dt)
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)

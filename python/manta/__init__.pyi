@@ -143,6 +143,8 @@ class TransportSystem(_TransportSystem):
     def aFn(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def LowerBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def UpperBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
+    def dLowerBoundary_dt(self, i: int, t: float) -> float: ...  # type: ignore[override]
+    def dUpperBoundary_dt(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def InitialValue(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def InitialDerivative(self, i: int, x: float) -> float: ...  # type: ignore[override]
 
@@ -154,6 +156,11 @@ class TransportSystem(_TransportSystem):
     def dSources_dPhi(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSigma_dPhi(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dAuxG_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+    # Explicit time dependence: d/dt with every other argument held fixed. Zero
+    # when absent.
+    def dSigmaFn_dt(self, i: int, state: State, x: float, t: float) -> float: ...  # type: ignore[override]
+    def dSources_dt(self, i: int, state: State, x: float, t: float) -> float: ...  # type: ignore[override]
+    def dAuxG_dt(self, i: int, state: State, x: float, t: float) -> float: ...  # type: ignore[override]
 
     # Global scalars. These take the solution sampled on the element nodes, as
     # dicts of (nPoints, nVars) arrays, plus the quadrature data.
