@@ -288,8 +288,9 @@ physical fluxes out, through the same `_normalized_fluxes` as the real solve.
 A result that moves with the normalisation under it is therefore a leak in the
 normalisation, not in the mock.
 
-Diffusive in each species, D ~ T^(3/2) / (n B^2) with B the flux-surface
-average of |B| from the field, and with the neoclassical form of the particle
+Diffusive in each species, D ~ T^(7/2) / (n B^2) -- the 1/nu scaling, and so
+the stiff case -- with B the flux-surface average of |B| from the field, and
+with the neoclassical form of the particle
 flux,
 
     Gamma = -D n (n'/n - Z Er/T + (D2/D1 - 3/2) T'/T),
@@ -305,6 +306,8 @@ _MOCK_D_ELECTRON = 0.015
 _MOCK_T_REF = 1000.0  # [eV]
 _MOCK_N_REF = 1e20  # [m^-3]
 _MOCK_B_REF = 5.0  # [T]
+_MOCK_T_EXPONENT = 3.5
+_MOCK_N_EXPONENT = -1.0
 _MOCK_D2_OVER_D1 = 3.5
 _ELEMENTARY_CHARGE = 1.60217663e-19
 
@@ -319,8 +322,8 @@ def physical_test_moments(species, Erho, field, pitchgrid, speedgrid, evolveDens
         Z = s.species.charge / _ELEMENTARY_CHARGE
         D = (
             D_ref
-            * (T / _MOCK_T_REF) ** 1.5
-            * (_MOCK_N_REF / n)
+            * (T / _MOCK_T_REF) ** _MOCK_T_EXPONENT
+            * (n / _MOCK_N_REF) ** _MOCK_N_EXPONENT
             * (_MOCK_B_REF / B) ** 2
         )
         gamma = -D * (
