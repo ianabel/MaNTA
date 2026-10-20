@@ -435,7 +435,8 @@ def make_itg_flux(eq, rho, floor="subtract", floor_width=0.1, **proxy_kwargs):
 
 # --- what the drivers call ---------------------------------------------------
 
-DEFAULT_ITG_MODEL_DIR = os.environ["ITG_NN_DIR"]
+# read when the ITG term is built, so a run without it needs no models
+DEFAULT_ITG_MODEL_DIR = os.environ.get("ITG_NN_DIR")
 
 
 def make_itg_builder(
@@ -461,6 +462,11 @@ def make_itg_builder(
     import os
 
     model_dir = model_dir or os.environ.get("ITG_MODEL_DIR", DEFAULT_ITG_MODEL_DIR)
+    if model_dir is None:
+        raise ValueError(
+            "useITGProxy is set but no ITG model directory was given: pass "
+            "model_dir, or set ITG_NN_DIR or ITG_MODEL_DIR"
+        )
     proxy = build_itg_proxy(
         eq,
         np.linspace(0.1, rho_upper, n_rho),
