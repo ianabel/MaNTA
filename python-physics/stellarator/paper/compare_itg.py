@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from netCDF4 import Dataset
 import desc.io
 import matplotlib.pyplot as plt
-from config import StellaratorParams, StellaratorConfig
+from config import StellaratorParams, StellaratorConfig, field_norm_from_eq, normalization_args
 from yancc_wrapper import yancc_data
 from stellarator_multichannel import vmap_axes_wfield
 import jax
@@ -20,6 +20,7 @@ from manta.jax import State
 
 eq_name = "eq_itg"
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
+eq_initial, eq_final = eqs[0], eqs[-1]
 
 
 def make_state_from_output(rho, fname="stellarator_opt" + eq_name):
@@ -77,13 +78,20 @@ st_config = {
     "FusionFactor": 0.01,
     "evolveDensity": True,
     "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
-    "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
+    # must match the run's: MaNTA transported ITGScale times the prediction,
+    # and that is what is plotted
+    "ITGScale": 1.0,
     "useBatching": True,
     "nchunks": 3,
 }
 
 config = StellaratorConfig(rhoUpper=1.0, **st_config)
-params = StellaratorParams(config, _B0=5.0, _a=1.0)
+# The run's normalisation. The ITG flux takes its gyro-Bohm value at the
+# normalisation's a and B0, so this sets the flux itself, not just its units.
+# paper/desc-optimize-stored-energy.py normalises to its initial equilibrium;
+# a run made before that (2ce3f82) used the defaults, i.e. {}.
+normalization = field_norm_from_eq(eq_initial)
+params = StellaratorParams(config, **normalization_args(normalization))
 
 yancc_ntheta = 17
 yancc_nzeta = 25
@@ -93,7 +101,7 @@ yancc_res = {"na": 45, "nx": 7}
 
 rho = jnp.linspace(0.01, 0.9, 50)
 
-_eqs = [eqs[0], eqs[-1]]
+_eqs = [eq_initial, eq_final]
 
 plt.rcParams.update({"font.family": "serif", "font.size": 10})
 
@@ -102,11 +110,14 @@ colors = ["r", "b"]
 fig, ax = plt.subplots()
 
 state = make_state_from_output(rho)
+# Built once, on the initial equilibrium, as the driver builds it: the builder
+# fixes the flux tubes' toroidal extent there, and MaNTA evaluated the final
+# equilibrium with that extent, not one re-solved on it.
+itg_builder = make_itg_builder(st_config, eq_initial, solve_length_at_compute=False)
 for eq, name, color in zip(_eqs, names, colors):
     yancc_wrapper = yancc_data.from_eq(
         rho, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
     )
-    itg_builder = make_itg_builder(st_config, eq, solve_length_at_compute=False)
     itg_wrapper = itg_at(itg_builder, eq.params_dict)
     fields, vp, vpp = yancc_wrapper.get_fields()
     Qi = jax.vmap(itg_wrapper, in_axes=vmap_axes_wfield)(
@@ -121,13 +132,15 @@ for eq, name, color in zip(_eqs, names, colors):
         params,
         True,
     )[0][1]
+    # Qi is MaNTA's normalised flux, -V' <q . grad rho> / HeatNorm; times
+    # HeatNorm that is V' <q . grad rho> in W/m^3, and times a it is
+    # V' <q . grad r> in W/m^2, r = a rho with the a the gyro-Bohm value used
     ax.plot(
         rho,
         -jnp.array(Qi)
-        / params.config.ITGScale
-        * 1e-6
         * params.constants.HeatEquationNormalization()
-        / params.constants.a,
+        * params.constants.a
+        * 1e-6,
         color,
         label=name,
     )
