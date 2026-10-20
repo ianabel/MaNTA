@@ -99,12 +99,7 @@ from stellarator_state import (
     StellaratorDecorator,
     Channel,
 )
-from config import (
-    StellaratorParams,
-    StellaratorConfig,
-    normalization_args,
-    resolve_normalization,
-)
+from config import StellaratorParams, StellaratorConfig, normalization_args
 from desc.backend import tree_unstack
 import interpax
 from jax.sharding import PartitionSpec, NamedSharding
@@ -265,11 +260,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def __init__(self, config, yancc_wrapper: yancc_data):
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
-        # "a" and "B0" may name field quantities, read off the outermost
-        # surface; see config.resolve_normalization
-        self.normalization = resolve_normalization(
-            config.get("Normalization", {}), yancc_wrapper.fields_unstacked[-1]
-        )
+        normalization = config.get("Normalization", {})
 
         # Built and passed rather than assigned: see buildSpec. params is a
         # local until the base class exists, because until then there is no
@@ -285,7 +276,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # normalised entries of config["Stellarator"] mean, so a physically
         # identical run needs config.rescale_config as well.
         self.params = StellaratorParams(
-            config, **normalization_args(self.normalization)
+            config, **normalization_args(normalization)
         )
         # if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
         #     raise RuntimeError(

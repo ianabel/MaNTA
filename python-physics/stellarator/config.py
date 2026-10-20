@@ -1,4 +1,3 @@
-import jax
 import equinox as eqx
 from constants import PlasmaConstants
 import ion_species
@@ -107,40 +106,17 @@ class StellaratorParams(eqx.Module):
 DEFAULT_NORMALIZATION = {"n0": 1e20, "T0": 1000.0, "a": 1.0, "B0": 5.0}
 
 
-# Entries that may name a property of the equilibrium instead of giving a
-# number: "a": "a_minor", "B0": "Bmag_fsa" (the flux-surface average of |B|).
-FIELD_NORMALIZATION = {"a": "a_minor", "B0": "Bmag_fsa"}
+def field_norm_from_eq(eq):
+    """Length and field normalisations from a DESC equilibrium: its minor
+    radius "a" and its volume-rms field "<|B|>_rms", as "a" and "B0".
 
-
-def resolve_normalization(normalization, field):
-    """`normalization` with any field-derived entries replaced by their values.
-
-    `field` is one surface's yancc Field; StellaratorTransport passes the
-    outermost one its yancc_data holds. The values have to be concrete. Under
-    a trace (DESC's objective) they would tie the normalising time to the
-    geometry being optimised, and with the inputs fixed in normalised units the
-    physical sources would then move with it, through a path the adjoint
-    gradient does not carry. So resolve once, at the initial equilibrium, and
-    hand the numbers on.
+    Merge the result into a "Normalization" table. For an optimisation, take it
+    once from the initial equilibrium and keep it fixed: a normalisation that
+    followed the geometry would move the physical sources with it, through a
+    path the adjoint gradient does not carry.
     """
-    out = dict(normalization)
-    for key, attr in FIELD_NORMALIZATION.items():
-        if not isinstance(out.get(key), str):
-            continue
-        if out[key] != attr:
-            raise ValueError(
-                f'Normalization "{key}" = "{out[key]}": the only field quantity '
-                f'it can take is "{attr}"'
-            )
-        value = getattr(field, attr)
-        if isinstance(value, jax.core.Tracer):
-            raise ValueError(
-                f'Normalization "{key}" = "{attr}" cannot be read off a traced '
-                "field; resolve it with resolve_normalization at a concrete "
-                "equilibrium and pass the number"
-            )
-        out[key] = float(value)
-    return out
+    data = eq.compute(["a", "<|B|>_rms"])
+    return {"a": float(data["a"]), "B0": float(data["<|B|>_rms"])}
 
 
 def normalization_args(normalization):
@@ -150,12 +126,6 @@ def normalization_args(normalization):
         raise ValueError(
             f"unknown Normalization keys {sorted(unknown)}; "
             f"expected some of {sorted(DEFAULT_NORMALIZATION)}"
-        )
-    unresolved = [k for k, v in normalization.items() if isinstance(v, str)]
-    if unresolved:
-        raise ValueError(
-            f"Normalization {unresolved} name field quantities; "
-            "resolve_normalization them first"
         )
     values = {**DEFAULT_NORMALIZATION, **normalization}
     return {"_" + k: v for k, v in values.items()}
@@ -220,8 +190,7 @@ def rescale_config(config, new_normalization):
     `config` is a full {"Stellarator", "Solver", "Normalization"} config, and
     the result is a copy with "Normalization" replaced and every normalised
     entry converted to it, so the two describe identical physics and their
-    solutions should agree once unnormalised. Both normalisations must be
-    numbers; see resolve_normalization for field-derived ones.
+    solutions should agree once unnormalised.
     """
     old = plasma_constants(config.get("Normalization", {}))
     new = plasma_constants(new_normalization)

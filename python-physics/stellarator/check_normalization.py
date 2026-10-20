@@ -50,8 +50,9 @@ CASES = {
     "a": {"a": 1.7},
     "B0": {"B0": 2.5},
     "all": {"n0": 0.5e20, "T0": 400.0, "a": 0.6, "B0": 8.0},
-    # read off the equilibrium; see config.resolve_normalization
-    "field": {"a": "a_minor", "B0": "Bmag_fsa"},
+    # a and B0 from the equilibrium (config.field_norm_from_eq); filled in by
+    # the worker, which has the equilibrium
+    "field": {},
 }
 
 
@@ -129,7 +130,7 @@ def worker(args):
         DEFAULT_NORMALIZATION,
         rescale_config,
         plasma_constants,
-        resolve_normalization,
+        field_norm_from_eq,
     )
     from stellarator_multichannel import StellaratorTransport
     from yancc_wrapper import yancc_data
@@ -140,10 +141,9 @@ def worker(args):
     eq = desc.examples.get(args.eq)
     wrapper = yancc_data.from_eq(np.asarray(points), eq=eq, nt=9, nz=9, nx=3, na=9)
 
-    # the surface StellaratorTransport reads field-derived entries from
-    normalization = resolve_normalization(
-        {**DEFAULT_NORMALIZATION, **CASES[args.worker]}, wrapper.fields_unstacked[-1]
-    )
+    normalization = {**DEFAULT_NORMALIZATION, **CASES[args.worker]}
+    if args.worker == "field":
+        normalization.update(field_norm_from_eq(eq))
     print("normalisation:", normalization)
     config = rescale_config(base, normalization)
     solver = config["Solver"]

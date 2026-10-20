@@ -33,21 +33,13 @@ def abstract_eval(yin):
 def make_objective(config, yancc_res=None, normalization=None):
     """Make an external (python) function work with JAX.
 
-    `normalization` replaces config["Normalization"] if given. Either way it
-    must be numbers: the objective is traced, and a field-derived entry
-    ("a_minor", "Bmag_fsa") would tie the time unit to the geometry being
-    optimised. Resolve those once at the initial equilibrium with
-    config.resolve_normalization and pass the result.
+    `normalization` replaces config["Normalization"] if given. Keep it fixed
+    over the optimisation (config.field_norm_from_eq at the initial
+    equilibrium, say): one that followed the geometry would move the physical
+    sources with it, through a path the gradient does not carry.
     """
     if normalization is None:
         normalization = config.get("Normalization", {})
-    unresolved = [k for k, v in normalization.items() if isinstance(v, str)]
-    if unresolved:
-        raise ValueError(
-            f"make_objective: Normalization {unresolved} name field quantities; "
-            "resolve them at the initial equilibrium with "
-            "config.resolve_normalization and pass the numbers"
-        )
     # the primal, the time-march fallback and the gradient solve all carry it,
     # since the gradient solve restarts from the primal's restart file
     config = {**config, "Normalization": dict(normalization)}

@@ -6,7 +6,7 @@ sys.path.append("..")
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective
-from config import DEFAULT_NORMALIZATION, rescale_config, resolve_normalization
+from config import DEFAULT_NORMALIZATION, rescale_config, field_norm_from_eq
 
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
@@ -87,11 +87,6 @@ st_config = {
     "nchunks": 3,
 }
 
-# Reference values to normalise to. "a" and "B0" may name the equilibrium's
-# a_minor and <|B|>: they are read once off eq_init below and then held fixed
-# for the whole optimisation, since a normalisation that followed the geometry
-# would move the sources with it (see config.resolve_normalization).
-normalization_request = {"a": "a_minor", "B0": "Bmag_fsa"}
 # st_config and the solver settings are written in the default normalisation.
 # True converts them (rescale_config) so only the units change, not the physics;
 # False reads them as numbers in the new units.
@@ -243,11 +238,9 @@ yancc_wrapper = yancc_data.from_eq(
     yancc_rho, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 
+# Normalise lengths and fields to the initial equilibrium's a and <|B|>_rms,
 # fixed from here on: every run below, and the objective, use these numbers
-normalization = resolve_normalization(
-    {**DEFAULT_NORMALIZATION, **normalization_request},
-    yancc_wrapper.fields_unstacked[-1],
-)
+normalization = {**DEFAULT_NORMALIZATION, **field_norm_from_eq(eq_init)}
 print(f"Normalization from the initial equilibrium: {normalization}")
 
 
