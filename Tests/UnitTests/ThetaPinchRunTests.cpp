@@ -210,10 +210,13 @@ BOOST_AUTO_TEST_CASE(a_restart_onto_another_degree_carries_psi)
     BOOST_REQUIRE_GT((psiFile.head(file.nField - 1).array() - M_PI).abs().maxCoeff(), 1e-2);
 
     Grid restartGrid(file.cellBoundaries);
-    // A small cadence, for the reason psi_round_trips_through_a_restart records:
-    // a restart takes the cadence as IDA's first step, and at T_RESTART / 5 that
-    // step fails the error test ten times over -- on this case uncoupled, too,
-    // so the trap is the restart's and not the field's.
+    // A small cadence. A restart takes the cadence as IDA's first step, and
+    // this one changes degree, so it is projected: the copy path resumes the
+    // file's y', but here the algebraic components of y' start at zero and
+    // IDACalcIC's IDA_YA_YDP_INIT holds them there. The first step's error
+    // estimate then falls far more slowly than h (35049, 18835, 11123 per
+    // fourfold cut), and at T_RESTART / 5 it fails the error test ten times
+    // over.
     auto restarted = makeRun({.k = 4, .cadence = T_RESTART / 50.0, .t0 = T_RESTART}, stem + "_resumed",
                              [&](ThetaPinchDiffusion &p, Grid const &)
                              { p.setRestartValues(file.Y, file.dYdt, restartGrid, file.order, file.nField); });

@@ -500,10 +500,9 @@ check_restart_round_trip( "AuxVarTest", 0.6, rtol = 1.0e-6, atol = 1.0e-8 )
 # psi is algebraic here, so it is recomputed against the resumed transport
 # rather than read off the file -- the round trip pins the coupled state, and
 # SolverLifecycleTests' differential psi pins the field block of the file. Its
-# first step after the restart fails the error test 8 times of the 10 IDA
-# allows, the same as AuxVarTest's: the error estimate is linear in h there, an
-# inconsistent y' on the copy path, and the two cases with aux variables are
-# the two that show it.
+# first step after the restart fails the error test 4 times of the 10 IDA
+# allows, as AuxVarTest's does, with the error estimate falling like h^2 -- the
+# cadence is a long first step, and a consistent y' makes cutting it cheap.
 check_restart_round_trip( "ThetaPinch", 0.5, rtol = 1.0e-6, atol = 1.0e-8 )
 
 
