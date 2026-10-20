@@ -262,13 +262,14 @@ solution and a time derivative that did not belong together.
 
 .. warning::
 
-   **Keep** ``delta_t`` **at a size the resumed run could actually take as its
-   first step.** On a restart, ``IDASetInitStep`` is given ``delta_t`` as the
-   **first step**, on the reading that a resumed run should continue at the same
-   step it left off with. A cadence chosen for output frequency rather than for
-   stability can therefore hand IDA a first step approaching the whole remaining
-   integration, and the error test then fails repeatedly until it gives up with
-   ``IDA_ERR_FAIL`` (-3). Setting ``dt0`` overrides it.
+   **On a restart,** ``delta_t`` **is IDA's first step.** It is a guess, not the
+   step the previous run left off with -- the file records none -- and a
+   first-order step at a cadence chosen for output usually fails the error test
+   a few times before IDA has cut it to size. That is cheap: a copied restart
+   resumes the file's own ``y'``, which is consistent for every component, so
+   the error estimate falls like :math:`h^2`, a factor of 16 per cut. Even so, a
+   ``delta_t`` approaching the whole remaining integration is a misjudgement
+   worth avoiding, and ``dt0`` overrides it.
 
    This warning used to have a second half, about ``t_initial == delta_t``
    failing with ``IDA_ILL_INPUT`` (-22) and ``tout1 too close to t0``. That was

@@ -2253,6 +2253,34 @@ formula, not the operator, if the data cannot tell them apart.
   when it wrote the file, where the rebuilt one is a state that run never had.
   The *projection* path still rebuilds it, because a degree change leaves the
   stored coefficients in the wrong space.
+* **`y'` is loaded on a copy-path restart too, and that one is not a saving but
+  a correctness fix.** `setInitialConditions` builds `dydt` by solving `du/dt`
+  out of the `u` row and leaving every other component at zero. On a cold start
+  or a projected restart `IDACalcIC` runs and IDA picks its own first step, so
+  the zeros are harmless; on the copy path `IDACalcIC` is skipped, and
+  `IDA_YA_YDP_INIT` would hold the algebraic `y'` fixed anyway. IDA's predictor
+  then sees sigma, q, lambda, the aux variables and the field standing still
+  while they move, and the first step's error estimate goes like `h |y'|`
+  instead of `h^2`: measured on `AuxVarTest`, 4.1e4 at the cadence and falling
+  only in proportion to `h`, eight error-test failures of the ten IDA allows. So
+  the copy path takes the file's `dYdt` -- IDA's own derivative when it wrote the
+  file -- and *then* solves `du/dt` over it as before. Not the file's `du/dt`:
+  that is an interpolant at the output time and satisfies the `u` rows only to
+  IDA's tolerance, a weighted residual of 0.3 on the warm `TestDiffusion`
+  restart against 0.0026 with the solve, which
+  `a_warm_start_from_a_restart_file_does_not_run_calcic` holds below 0.01.
+  `psi_round_trips_through_a_restart` compares every other component with the
+  file bit for bit; with the old zeros, 56 of the 58 entries that are not `u`
+  differ.
+
+  The restart then takes the steps a consistent state allows, which at loose
+  tolerances can land it further from an uninterrupted run than the old one did
+  -- the old first step failed down to a tiny `h` and crept forward, accurate by
+  accident. Compare restarts at tight tolerances: on `LinearDiffusion` at
+  1e-6 / 1e-8 the restarted run is 1.8e-7 from a 1e-10 reference against the old
+  2.0e-7, in 36 steps against 48 and with half the error-test failures.
+  `test_a_run_can_be_restarted_from_its_own_output` runs that way for this
+  reason.
 * **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
   `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
   zeroes them; `setInitialConditions` calls `updateBoundaryConditions(t0)` before
