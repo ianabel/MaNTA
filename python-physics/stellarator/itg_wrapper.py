@@ -44,7 +44,7 @@ Conventions, each of which is a choice the training data made for us:
   `<q . grad(a rho)>` in W/m^2 that way, and the heat flow through the surface
   is `dV/drho * Q_SI / a`.
 * What MaNTA transports is normalised exactly as `compute_dke_sol` normalises
-  yancc's `<q . grad rho>` (W/m^3) -- `-<q . grad rho> V' a / HeatNorm` -- times
+  yancc's `<q . grad rho>` (W/m^3) -- `-<q . grad rho> V' / HeatNorm` -- times
   the config's `ITGScale`, but with `Q_gB` taken at `PlasmaConstants`' `B0` and
   `a`. `HeatEquationNormalization` is itself `n0 T0 sqrt(2) v_t rho*^2 / a` at
   those, so the transported flux is `ITGScale * Q * n T^(5/2) / sqrt(2) * V'`:
@@ -214,7 +214,7 @@ class ITGFlux(eqx.Module):
         adjoint calls it directly, to differentiate with respect to `geometry`.
 
         Normalised exactly as `compute_dke_sol` normalises yancc's flux,
-        `-<q . grad rho> V' (a / HeatEquationNormalization)`, times the
+        `-<q . grad rho> V' / HeatEquationNormalization`, times the
         config's `ITGScale`; with the gyro-Bohm flux taken at the normalisation's
         own B0 and a (`params.constants`), not the equilibrium's. That makes
         the result `ITGScale * Q * n T^(5/2) / sqrt(2) * V'` -- the heat
@@ -230,11 +230,7 @@ class ITGFlux(eqx.Module):
         # <q . grad rho> = q_ref / a, then compute_dke_sol's normalisation; the
         # sign follows it too (yancc's flux enters negated)
         heat_flux = (
-            -params.config.ITGScale
-            * q_ref
-            / c.a
-            * vp
-            * (c.a / c.HeatEquationNormalization())
+            -params.config.ITGScale * q_ref / c.a * vp / c.HeatEquationNormalization()
         )
 
         if evolveDensity:
