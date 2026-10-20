@@ -86,6 +86,7 @@ import interpax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import os
 from jaxtyping import Array, Float
 
 from stellarator_state import StellaratorState
@@ -159,9 +160,7 @@ class ITGFlux(eqx.Module):
 
         a_over_LT = jnp.clip(a_over_LT, *A_OVER_LT_RANGE)
         a_over_Ln = jnp.clip(a_over_Ln, *A_OVER_LN_RANGE)
-        scalars = jnp.broadcast_to(
-            jnp.stack([a_over_LT, a_over_Ln]), (sig.shape[0], 2)
-        )
+        scalars = jnp.broadcast_to(jnp.stack([a_over_LT, a_over_Ln]), (sig.shape[0], 2))
 
         # NNITGProxy: mean of log Q over the ensemble, exp, then mean over alpha.
         # Inputs are left in the working precision rather than cast to float32
@@ -263,7 +262,9 @@ class ITGFlux(eqx.Module):
         `field`, `pitchgrid` and `speedgrid` are accepted and ignored: the
         geometry this model needs is on the module.
         """
-        return self.local(self.signals_at(x), _state, x, t, vp, vpp, params, evolveDensity)
+        return self.local(
+            self.signals_at(x), _state, x, t, vp, vpp, params, evolveDensity
+        )
 
 
 class SumFlux(eqx.Module):
@@ -430,17 +431,26 @@ class ITGFluxBuilder:
 
 def make_itg_flux(eq, rho, floor="subtract", floor_width=0.1, **proxy_kwargs):
     """One-shot: build the proxy and evaluate it at `eq`'s own parameters."""
-    builder = ITGFluxBuilder(build_itg_proxy(eq, rho, **proxy_kwargs), floor, floor_width)
+    builder = ITGFluxBuilder(
+        build_itg_proxy(eq, rho, **proxy_kwargs), floor, floor_width
+    )
     return builder(eq.params_dict)
 
 
 # --- what the drivers call ---------------------------------------------------
 
-DEFAULT_ITG_MODEL_DIR = "/home/eatocco/projects/itg-proxy/demo/neural_networks"
+DEFAULT_ITG_MODEL_DIR = os.environ["ITG_NN_DIR"]
 
 
-def make_itg_builder(st_config, eq, rho_upper=1.0, model_dir=None, n_rho=12,
-                     n_ensemble=10, **proxy_kwargs):
+def make_itg_builder(
+    st_config,
+    eq,
+    rho_upper=1.0,
+    model_dir=None,
+    n_rho=12,
+    n_ensemble=10,
+    **proxy_kwargs,
+):
     """The ITGFluxBuilder a driver needs, or None when `useITGProxy` is unset.
 
     Builds the proxy once, on `eq` -- a driver's initial equilibrium; the

@@ -39,15 +39,13 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 def make_config(fac):
     return {
         "ParticleSourceCenter": 0.0,
-        "ParticleSourceHeight": 0.02,
+        "ParticleSourceHeight": 0.005,
         "ParticleSourceWidth": 0.6,
         "NBICenter": 0.0,
-        "NBIPower": fac * 2.0,
+        "NBIPower": fac * 1.0,
         "NBIWidth": 0.15,
         "ECHCenter": 0.0,
-        "ECHPower": fac * 8.76e-2,
-        "ECHWidth": 0.15,
-        "EdgeTemperature": 0.4,
+        "ECHPower": fac * 0.0e-2,
         "EdgeDensity": 0.3,
         "ADCoefficient": 0.0,
         "n0": 0.5,
@@ -61,7 +59,7 @@ def make_config(fac):
     }
 
 
-eq_name = "precise_QH"
+eq_name = "reactor_QA"
 
 rho_upper = 1.0
 rtol = 1e-2
@@ -73,16 +71,18 @@ degree = 4
 # tau = 0.5
 #
 base = 1.8
-tau = 0.5
+tau = 0.2
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
 # nodes = np.concatenate(
 #     ([0, 0.1], nodes, [rho_upper])
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
+# nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 3)
 
-nodes = np.concatenate(([0, 0.1, 0.2], nodes, [rho_upper]))
+# nodes = np.concatenate(([0, 0.05, 0.2], nodes, [rho_upper]))
+
+nodes = np.linspace(0, 1, npoints + 1)
 
 # nodes = np
 print(nodes)
@@ -101,14 +101,14 @@ solver_config = {
     "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 5e-5,
-    "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
+    # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "AggressiveTimesteps": False,
     "WriteDatFile": True,
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
-    "tauScaling": "Diffusive",
-    "tauUpdate": "ContinuationStep",
+    # "tauScaling": "Diffusive",
+    # "tauUpdate": "ContinuationStep",
     "SteadyStateSolver": "PseudoTransient",
     "NewtonJacobianReuse": 4,
     "SteadyStateDiagnostics": True,
@@ -146,7 +146,7 @@ eq = desc.examples.get(eq_name)
 # # eq = desc.examples.get("W7-X")
 # # # # Reduce the number of modes (not sure if this is a good thing to do)
 # # #
-eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 5.0))
+# eq = desc.compat.rescale(eq, L=("R0", 10), B=("B0", 4.0))
 # # #
 # #
 # # eq = desc.examples.get("reactor_QA")
@@ -177,7 +177,9 @@ yancc_wrapper = yancc_data.from_eq(
 # with jax.log_compiles(True):
 
 itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict))
+st = StellaratorTransport(
+    config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
+)
 st.run()
 # for fac in jnp.linspace(0.01, 1.0, 5):
 #
@@ -335,7 +337,9 @@ def objective_from_user_fun(grid, data, params=None):
 
     desc_pressure = grid.compress(data["p"], surface_label="rho")
 
-    stored_energy, manta_pressure = manta_objective(with_itg((fields, Vp, Vpp), itg_builder, params), grid)
+    stored_energy, manta_pressure = manta_objective(
+        with_itg((fields, Vp, Vpp), itg_builder, params), grid
+    )
     print("------------ STORED ENERGY ----------------")
     print(stored_energy)
     print("-------------------------------------------")
@@ -405,7 +409,7 @@ o1.build(use_jit=False)
 obj = ProximalProjection(o1, ObjectiveFunction(constraints), eq)
 obj.build()
 N = 2
-M = 2
+M = 1
 # Get the index of a mode
 idx = eq.surface.R_basis.get_idx(L=0, N=N, M=M)
 v0 = eq.Rb_lmn[idx]
@@ -461,12 +465,12 @@ fd_grad = jnp.gradient(jnp.array(G)) / df
 
 ax[1].plot(sweep, fd_grad, "ro", label="FD")
 ax[1].plot(sweep, grads, "bx", label="Adjoints")
-ax[1].set_xlabel(rf"$R_{{0, {M}, {N}}}$")
-ax[1].set_ylabel(rf"$dG/dR_{{0, {M}, {N}}}$")
+ax[1].set_xlabel(rf"$R^b_{{{M}, {N}}}$")
+ax[1].set_ylabel(rf"$dG/dR^b_{{{M}, {N}}}$")
 ax[1].axvline(v0, color="k", linestyle="--")
 ax[1].legend()
 ax[0].plot(sweep, G, marker="o", color="red")
-ax[0].set_xlabel(rf"$R_{{0, {M}, {N}}}$")
+ax[0].set_xlabel(rf"$R^b_{{{M}, {N}}}$")
 ax[0].set_ylabel("G")
 ax[0].axvline(v0, color="k", linestyle="--")
 

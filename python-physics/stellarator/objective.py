@@ -2,6 +2,7 @@ from datetime import time
 
 from stellarator_multichannel import StellaratorTransport
 from desc.backend import tree_unstack
+
 # what ObjectiveFromUser.compute calls; the subclass below has to match it
 from desc.compute.utils import _compute as compute_fun
 from desc.objectives import ObjectiveFromUser
@@ -156,6 +157,7 @@ def make_objective(config, yancc_res=None):
 
         # compute
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
+
         # runs MaNTA and returns the adjoints + pressure profile
         G, G_p, pi, st = StellaratorFun(grad_config, yancc_wrapper, itg)
 
