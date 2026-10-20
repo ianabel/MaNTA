@@ -30,8 +30,27 @@ def abstract_eval(yin):
     )
 
 
-def make_objective(config, yancc_res=None):
-    """Make an external (python) function work with JAX."""
+def make_objective(config, yancc_res=None, normalization=None):
+    """Make an external (python) function work with JAX.
+
+    `normalization` replaces config["Normalization"] if given. Either way it
+    must be numbers: the objective is traced, and a field-derived entry
+    ("a_minor", "Bmag_fsa") would tie the time unit to the geometry being
+    optimised. Resolve those once at the initial equilibrium with
+    config.resolve_normalization and pass the result.
+    """
+    if normalization is None:
+        normalization = config.get("Normalization", {})
+    unresolved = [k for k, v in normalization.items() if isinstance(v, str)]
+    if unresolved:
+        raise ValueError(
+            f"make_objective: Normalization {unresolved} name field quantities; "
+            "resolve them at the initial equilibrium with "
+            "config.resolve_normalization and pass the numbers"
+        )
+    # the primal, the time-march fallback and the gradient solve all carry it,
+    # since the gradient solve restarts from the primal's restart file
+    config = {**config, "Normalization": dict(normalization)}
 
     def StellaratorFun(config, yin):
         st = StellaratorTransport(config, yancc_wrapper=yin)
@@ -55,12 +74,9 @@ def make_objective(config, yancc_res=None):
     grad_solver_config["SteadyStateTest"] = "Residual"
     grad_solver_config["SteadyStateTolerance"] = 1.0
 
-    grad_config = {"Stellarator": config["Stellarator"], "Solver": grad_solver_config}
+    grad_config = {**config, "Solver": grad_solver_config}
 
-    time_march_config = {
-        "Stellarator": config["Stellarator"],
-        "Solver": time_march_solver_config,
-    }
+    time_march_config = {**config, "Solver": time_march_solver_config}
 
     @eqx.filter_custom_jvp
     def _objective_base(tree_in, grid):

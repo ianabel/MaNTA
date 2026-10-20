@@ -48,8 +48,16 @@ class PlasmaConstants(eqx.Module):
         )
         print(f"Normalizing heat rate: {self.HeatEquationNormalization()} W/m^3")
 
+    @staticmethod
+    def CoulombLogarithm_ei(n_cgs, T_eV):
+        # NRL formulary, electron-ion, T_e > 10 eV. The one formula both the
+        # reference collision time and its local correction use: were they
+        # different, their ratio at the reference point would be left in tau_e
+        # and the answer would move with n0 and T0.
+        return 24.0 - jnp.log(n_cgs) / 2.0 + jnp.log(T_eV)
+
     def ReferenceElectronCollisionTime(self):
-        LogLambdaRef = 24.0 - jnp.log(self.n0cgs) / 2.0 + jnp.log(self.T0eV)
+        LogLambdaRef = self.CoulombLogarithm_ei(self.n0cgs, self.T0eV)
         return (
             12.0
             * jnp.pow(jnp.pi, 1.5)
@@ -110,16 +118,9 @@ class PlasmaConstants(eqx.Module):
         return LogLambda / LogLambdaRef  #  really needs to know Ti as well
 
     def LogLambda_ei(self, ne, Te):
-        LogLambdaRef = (
-            23.0 - jnp.log(2.0) - jnp.log(self.n0cgs) / 2.0 + jnp.log(self.T0eV) * 1.5
-        )
-        LogLambda = (
-            23.0
-            - jnp.log(2.0)
-            - jnp.log(ne * self.n0cgs) / 2.0
-            + jnp.log(Te * self.T0eV) * 1.5
-        )
-        return LogLambda / LogLambdaRef  # really needs to know Ti as well
+        LogLambdaRef = self.CoulombLogarithm_ei(self.n0cgs, self.T0eV)
+        LogLambda = self.CoulombLogarithm_ei(ne * self.n0cgs, Te * self.T0eV)
+        return LogLambda / LogLambdaRef
 
     # Return tau_ei (Helander & Sigmar notation ) normalised to tau_ei( n0, 0 )
     # This is equal to tau_e as used in Braginskii
@@ -156,5 +157,5 @@ class PlasmaConstants(eqx.Module):
         return self.IonSpecies.FusionRate(n * self.n0cgs, Ti * self.T0eV / 1000.0) * 1e6
 
     def AlphaHeating(self, n, Ti):
-        Factor = 3.5e6 * self.T0
+        Factor = 3.5e6 * self.ElementaryCharge  # 3.5 MeV per reaction, in J
         return Factor * self.FusionRate(n, Ti)

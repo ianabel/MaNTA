@@ -77,9 +77,16 @@ from manta.jax import FFIRunner
 from yancc_wrapper import yancc_data
 
 # import a simple flux model for testing purposes
+# STELLARATOR_TEST_FLUX=physical swaps in a mock written in SI units instead,
+# which goes through the same normalisation as the real solve; see
+# check_normalization.py.
 if "TEST_STELLARATOR" in os.environ:
-    from dke_sol import test_flux as compute_dke_sol
-    from dke_sol import test_flux_field_jac as dke_field_jac
+    if os.environ.get("STELLARATOR_TEST_FLUX") == "physical":
+        from dke_sol import physical_test_flux as compute_dke_sol
+        from dke_sol import physical_test_flux_field_jac as dke_field_jac
+    else:
+        from dke_sol import test_flux as compute_dke_sol
+        from dke_sol import test_flux_field_jac as dke_field_jac
 
     print("Running stellarator model in test context")
 else:
@@ -92,7 +99,12 @@ from stellarator_state import (
     StellaratorDecorator,
     Channel,
 )
-from config import StellaratorParams, StellaratorConfig
+from config import (
+    StellaratorParams,
+    StellaratorConfig,
+    normalization_args,
+    resolve_normalization,
+)
 from desc.backend import tree_unstack
 import interpax
 from jax.sharding import PartitionSpec, NamedSharding
@@ -253,6 +265,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def __init__(self, config, yancc_wrapper: yancc_data):
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
+        # "a" and "B0" may name field quantities, read off the outermost
+        # surface; see config.resolve_normalization
+        self.normalization = resolve_normalization(
+            config.get("Normalization", {}), yancc_wrapper.fields_unstacked[-1]
+        )
 
         # Built and passed rather than assigned: see buildSpec. params is a
         # local until the base class exists, because until then there is no
@@ -263,7 +280,13 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         config = StellaratorConfig(rhoUpper=self.xR, **st_config)
 
-        self.params = StellaratorParams(config, _B0=5.0, _a=1.0)
+        # The reference values everything is normalised to; see
+        # config.DEFAULT_NORMALIZATION. Changing one changes what the
+        # normalised entries of config["Stellarator"] mean, so a physically
+        # identical run needs config.rescale_config as well.
+        self.params = StellaratorParams(
+            config, **normalization_args(self.normalization)
+        )
         # if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
         #     raise RuntimeError(
         #         "Superconvergent is not compatible with this physics case"

@@ -6,6 +6,7 @@ sys.path.append("..")
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective
+from config import DEFAULT_NORMALIZATION, rescale_config, resolve_normalization
 
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
@@ -85,6 +86,16 @@ st_config = {
     "useBatching": True,
     "nchunks": 3,
 }
+
+# Reference values to normalise to. "a" and "B0" may name the equilibrium's
+# a_minor and <|B|>: they are read once off eq_init below and then held fixed
+# for the whole optimisation, since a normalisation that followed the geometry
+# would move the sources with it (see config.resolve_normalization).
+normalization_request = {"a": "a_minor", "B0": "Bmag_fsa"}
+# st_config and the solver settings are written in the default normalisation.
+# True converts them (rescale_config) so only the units change, not the physics;
+# False reads them as numbers in the new units.
+keep_physics = True
 
 
 rho_upper = 1.0
@@ -231,6 +242,22 @@ def cheb_nodes(nCells):
 yancc_wrapper = yancc_data.from_eq(
     yancc_rho, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
+
+# fixed from here on: every run below, and the objective, use these numbers
+normalization = resolve_normalization(
+    {**DEFAULT_NORMALIZATION, **normalization_request},
+    yancc_wrapper.fields_unstacked[-1],
+)
+print(f"Normalization from the initial equilibrium: {normalization}")
+
+
+def normalized(config):
+    if keep_physics:
+        return rescale_config(config, normalization)
+    return {**config, "Normalization": normalization}
+
+
+config = normalized(config)
 ## %%
 
 #
@@ -301,10 +328,12 @@ solver_config = {
     # "ObjectiveDecreaseTolerance": 0.01,
     "PseudoTransientSERFloor": 2.0,
 }
-config = {
-    "Stellarator": st_config,
-    "Solver": solver_config,
-}
+config = normalized(
+    {
+        "Stellarator": st_config,
+        "Solver": solver_config,
+    }
+)
 
 
 eq2 = eq.copy()
@@ -347,7 +376,9 @@ eq = eq2.copy()
 # %%
 
 
-manta_objective = make_objective(config, yancc_res=yancc_res)
+manta_objective = make_objective(
+    config, yancc_res=yancc_res, normalization=normalization
+)
 
 # def manta_yancc_fun(fields, grid, Vprime):
 
