@@ -1973,8 +1973,18 @@ void SystemSolver::freezeTauAt(DGSoln const &Y, Time tEval)
 //
 // This API is now in DGSoln
 
-void SystemSolver::updateBoundaryConditions(double t)
+void SystemSolver::updateBoundaryConditions(double t) { assembleBoundaryData(t, false); }
+
+// RF_cellwise and L_global are linear in the boundary data, so with
+// timeDerivative they are assembled from its d/dt instead: what the residual's
+// boundary terms contribute to dF/dt at fixed state.
+void SystemSolver::assembleBoundaryData(double t, bool timeDerivative)
 {
+    auto lower = [&](Index var)
+    { return timeDerivative ? problem->dLowerBoundary_dt(var, t) : problem->LowerBoundary(var, t); };
+    auto upper = [&](Index var)
+    { return timeDerivative ? problem->dUpperBoundary_dt(var, t) : problem->UpperBoundary(var, t); };
+
     L_global.setZero();
     for (unsigned int i = 0; i < nCells; i++)
     {
@@ -1988,9 +1998,9 @@ void SystemSolver::updateBoundaryConditions(double t)
                 for (Eigen::Index j = 0; j < k + 1; j++)
                 {
                     // < g_D , v . n > ~= g_D( x_0 ) * phi_j( x_0 ) * ( n_x = -1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_l) * (-1) * problem->LowerBoundary(var, t);
+                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_l) * (-1) * lower(var);
                     // < ( tau ) g_D, w >
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tauRes(var, 2 * i) * problem->LowerBoundary(var, t);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_l) * tauRes(var, 2 * i) * lower(var);
                 }
             }
 
@@ -1999,15 +2009,15 @@ void SystemSolver::updateBoundaryConditions(double t)
                 for (Eigen::Index j = 0; j < k + 1; j++)
                 {
                     // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
-                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_u) * (+1) * problem->UpperBoundary(var, t);
-                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tauRes(var, 2 * i + 1) * problem->UpperBoundary(var, t);
+                    RF_cellwise[i](j + var * (k + 1)) += -y.getBasis().Evaluate(I, j, I.x_u) * (+1) * upper(var);
+                    RF_cellwise[i](nVars * (k + 1) + j + var * (k + 1)) += y.getBasis().Evaluate(I, j, I.x_u) * tauRes(var, 2 * i + 1) * upper(var);
                 }
             }
 
             if (I.x_l == grid.lowerBoundary() && /* is b.d. Neumann at lower boundary */ !problem->isLowerBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i) += -problem->LowerBoundary(var, t);
+                L_global(var * (nCells + 1) + i) += -lower(var);
             if (I.x_u == grid.upperBoundary() && /* is b.d. Neumann at upper boundary */ !problem->isUpperBoundaryDirichlet(var))
-                L_global(var * (nCells + 1) + i + 1) += problem->UpperBoundary(var, t);
+                L_global(var * (nCells + 1) + i + 1) += upper(var);
         }
     }
 }
@@ -3379,6 +3389,47 @@ void SystemSolver::assembleTransportResidual(DGSoln const &Y_h, DGSoln const &dY
         }
     }
 
+}
+
+void SystemSolver::explicitTimeDerivative(DGSoln const &Y_h, DGSoln const &dYdt_h, Time tEval, DGSoln &out)
+{
+    // The residual is a state-linear operator, plus the projected physics
+    // outputs, plus boundary terms linear in the boundary data. So its d/dt at
+    // fixed state is the same assembly on a zero state, with the physics
+    // replaced by its explicit time derivative and the boundary data by its
+    // d/dt -- which also keeps the projection, and the superconvergent star
+    // nodes, exactly the residual's.
+    assembleBoundaryData(tEval, true);
+    PhysicsNodes nodes = physicsNodesAt(Y_h, tEval);
+    nodes.states.setVariableDot(variableTimeDerivatives(dYdt_h));
+    auto values = problem->ComputePhysicsTimeDerivatives(nodes.states, nodes.points, tEval);
+
+    std::vector<double> zeroMem(Y_h.getDoF(), 0.0);
+    DGSoln zero(nVars, grid, k, zeroMem.data(), nScalars, nAux, nField);
+    // `out` arrives zeroed, as residual()'s does: the trace rows accumulate.
+    assembleTransportResidual(zero, zero, values, out);
+    assembleBoundaryData(tEval, false);
+
+    if (nScalars > 0)
+    {
+        const GlobalState scalarStates = Y_h.evalOnNodes();
+        const GlobalState scalarStates_dt = dYdt_h.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(Y_h.getBasis(), grid);
+        for (Index j = 0; j < nScalars; j++)
+            out.Scalar(j) = problem->dScalarG_dt(j, scalarStates, scalarStates_dt, Y_h.getPoints(), weights,
+                                                 phiBoundary, tEval);
+    }
+
+    if (fieldModel)
+    {
+        const GlobalState fieldStates = Y_h.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
+        Vector dRdt = Vector::Zero(nField);
+        fieldModel->dFieldResidual_dt(dRdt, Vector(Y_h.getField()), Vector(dYdt_h.getField()), fieldStates,
+                                      Y_h.getPoints(), weights, tEval);
+        out.getField() = dRdt;
+    }
 }
 
 bool SystemSolver::PhysicsDerivatives::isAt(DGSoln const &Y, Time tEval) const
