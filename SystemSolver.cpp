@@ -4678,7 +4678,16 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
                             "derivative here: a Neumann or Mixed one enters through L_global in the "
                             "trace row, which F_p does not represent.");
                     for (Eigen::Index j = 0; j < k + 1; j++)
-                        F_p(nVars * (k + 1) + j + var * (k + 1), 0) += y.getBasis().Evaluate(I, j, I.x_l);
+                    {
+                        // The two terms updateBoundaryConditions puts in RF_cellwise,
+                        // which residual subtracts: < g_D , v . n > with n = -1 in the
+                        // q rows, and < tau g_D, w > in the u rows. This used to be
+                        // +phi_j alone -- the q term with the sign of the upper end and
+                        // no tau term -- which python/Tests/test_boundary_sensitivity.py
+                        // measured as dG/dg_L = -1.800151 against 1.8.
+                        F_p(nVars * (k + 1) + j + var * (k + 1), 0) -= y.getBasis().Evaluate(I, j, I.x_l);
+                        F_p(2 * nVars * (k + 1) + j + var * (k + 1), 0) -= y.getBasis().Evaluate(I, j, I.x_l) * tauRes(var, 2 * i);
+                    }
                 }
 
                 if (I.x_u == grid.upperBoundary() && adjointProblem->computeUpperBoundarySensitivity(var, pIndex))
@@ -4690,9 +4699,16 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
                             "', whose upper boundary is not Dirichlet. Only a Dirichlet datum has a "
                             "derivative here: a Neumann or Mixed one enters through L_global in the "
                             "trace row, which F_p does not represent.");
-                    // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
                     for (Eigen::Index j = 0; j < k + 1; j++)
+                    {
+                        // < g_D , v . n > ~= g_D( x_1 ) * phi_j( x_1 ) * ( n_x = +1 )
                         F_p(nVars * (k + 1) + j + var * (k + 1), 0) += y.getBasis().Evaluate(I, j, I.x_u);
+                        // < tau g_D, w >, which updateBoundaryConditions puts in the
+                        // u rows of RF_cellwise and residual subtracts. Without it
+                        // the gradient was out by ~1.4e-3 relative at tau = 0.5;
+                        // python/Tests/test_boundary_sensitivity.py pins both ends.
+                        F_p(2 * nVars * (k + 1) + j + var * (k + 1), 0) -= y.getBasis().Evaluate(I, j, I.x_u) * tauRes(var, 2 * i + 1);
+                    }
                 }
             }
 
