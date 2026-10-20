@@ -848,6 +848,29 @@ class SystemSolver
         // Factorization of these matrices is done here
         void updateMatricesForJacSolve();
 
+        // dF/dt at fixed (Y, Y') and time tEval: the residual's explicit time
+        // dependence, from the case's d/dt hooks (dSigmaFn_dt, dAuxG_dt,
+        // dLowerBoundary_dt, ...), assembled exactly as residual() assembles
+        // the values. Its algebraic rows are the G_t of the differentiated
+        // constraints. `out` must arrive zeroed. Leaves the boundary data at
+        // tEval.
+        void explicitTimeDerivative(DGSoln const &Y_h, DGSoln const &dYdt_h, Time tEval, DGSoln &out);
+        void assembleBoundaryData(double t, bool timeDerivative);
+
+        // The algebraic components of dYdt at a consistent state (Yc, dYdt) at
+        // time tc, solving G_y y' = -G_t exactly; the differential components are
+        // left as they are. See Solver.cpp. Used after IDACalcIC on a projected
+        // restart.
+        void consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, Time tc);
+        // alpha in that solve is consistentDerivativeAlpha / delta_t. It sets how
+        // fast the refinement converges, not what it converges to.
+        double consistentDerivativeAlpha = 1e8;
+        double alphaLarge() const { return consistentDerivativeAlpha / (dt > 0.0 ? dt : 1.0); }
+        // What the last solve took: correction solves, and the final relative
+        // defect of the differential rows, which converged means round-off.
+        int consistentDerivativeRefinements = -1;
+        double consistentDerivativeDefect = -1.0;
+
         // Solves the Jy = g equation. Dispatches on whether a field model is
         // attached: without one this *is* solveTransportJac, bit for bit.
         void solveJacEq(N_Vector g, N_Vector delY);

@@ -2281,6 +2281,24 @@ formula, not the operator, if the data cannot tell them apart.
   2.0e-7, in 36 steps against 48 and with half the error-test failures.
   `test_a_run_can_be_restarted_from_its_own_output` runs that way for this
   reason.
+* **A projected restart solves for its algebraic `y'`, exactly, after
+  `IDACalcIC`.** `IDA_YA_YDP_INIT` makes algebraic *values* and differential
+  *derivatives* consistent and leaves the algebraic derivatives at zero; on a
+  projected restart -- mid-run, first step at the cadence -- that zero failed the
+  error test ten times at a cadence of `t0 / 5`. `consistentAlgebraicDerivatives`
+  (`Solver.cpp`) solves the differentiated constraints `G_z z' = -G_t - G_u u'`
+  with one Jacobian build: `J(alpha) w = [alpha M u' ; -G_t]` pins the
+  differential rows only up to `F_d,y w`, but the defect `u' - w_d` is known
+  exactly and a correction solve `J(alpha) c = [alpha M delta ; 0]` shrinks it
+  while keeping the algebraic rows satisfied, so it is iterated to round-off --
+  two corrections, defect 3e-16, on the fixture. **`alpha` sets the convergence
+  rate, not the answer.** `G_t` is the case's own explicit time derivative
+  (`dSigmaFn_dt`, `dAuxG_dt`, `dLowerBoundary_dt`, ... -- zero by default) through
+  `explicitTimeDerivative`, which assembles `dF/dt` at fixed state with the
+  residual's own code on a zero state. A cold start is deliberately left alone:
+  IDA picks a first step small enough not to need it, and
+  `at_t0_only_the_differential_part_of_dydt_exists` still pins its zeros.
+
 * **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
   `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
   zeroes them; `setInitialConditions` calls `updateBoundaryConditions(t0)` before

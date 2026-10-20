@@ -46,6 +46,7 @@ set(MANTA_TEST_SOURCES
   DegreeAdaptationTests.cpp
   DiscretisationEstimateTests.cpp
   EvaluationPlanTests.cpp
+  ExplicitTimeDerivativeTests.cpp
   FieldAdjointTests.cpp
   FieldDoFLayoutTests.cpp
   FieldJacobianTests.cpp
