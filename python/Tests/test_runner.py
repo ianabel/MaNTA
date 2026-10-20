@@ -531,18 +531,25 @@ def test_a_run_can_be_restarted_from_its_own_output():
 
     Output paths are cwd-relative (see the test above), so the files are named
     uniquely and cleaned up rather than placed under tmp_path.
+
+    At tight tolerances, as TestSolutions.py runs its round trips: a restart
+    re-initialises the integrator, so the two routes take different step
+    sequences, and at the default tolerances they legitimately differ by about
+    the tolerance itself -- which makes the comparison a test of IDA's step
+    choices rather than of the restart.
     """
     ref_name, split_name = "restart_reference", "restart_split"
+    tight = {"Relative_tolerance": 1e-6, "Absolute_tolerance": [1e-8], "MinStepSize": 1e-12}
     try:
         reference_runner = MaNTA.Runner(LinearDiffusion())
         reference_runner.configure(
-            _cwd_config(OutputFilename=ref_name, WriteOutput=True)
+            _cwd_config(OutputFilename=ref_name, WriteOutput=True, **tight)
         )
         reference_runner.run(0.4)
         reference = np.asarray(reference_runner.getSolution(0, XS_RESTART))
 
         first = MaNTA.Runner(LinearDiffusion())
-        first.configure(_cwd_config(OutputFilename=split_name, WriteOutput=True))
+        first.configure(_cwd_config(OutputFilename=split_name, WriteOutput=True, **tight))
         first.run(0.2)
 
         second = MaNTA.Runner(LinearDiffusion())
@@ -553,12 +560,13 @@ def test_a_run_can_be_restarted_from_its_own_output():
                 restart=True,
                 RestartFile=split_name + ".restart.nc",
                 t_initial=0.2,
+                **tight,
             )
         )
         second.run(0.4)
         restarted = np.asarray(second.getSolution(0, XS_RESTART))
 
-        assert np.allclose(restarted, reference, rtol=1e-3, atol=1e-6), (
+        assert np.allclose(restarted, reference, rtol=1e-5, atol=1e-8), (
             f"continuous={reference}\nrestarted={restarted}"
         )
     finally:

@@ -900,6 +900,25 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     if (tauScaling != TauScaling::Constant)
         updateBoundaryConditions(t0);
 
+    // A copied restart resumes the y' the file carries -- IDA's own derivative
+    // at the time it was written -- for everything the solve below does not
+    // set. That solve gives du/dt alone and leaves sigma, q, lambda, the
+    // auxiliary variables and the field at zero: harmless on a cold start or a
+    // projected restart, where IDACalcIC runs and IDA picks its own first step,
+    // but this path skips IDACalcIC, and IDA_YA_YDP_INIT would hold the
+    // algebraic y' where it found it anyway. A zero there tells the predictor
+    // those components are standing still while they move, so the first step's
+    // error estimate is h |y'|: measured on AuxVarTest, 4.1e4 at h = 0.05 and
+    // falling only in proportion to h, eight error-test failures of the ten IDA
+    // allows.
+    //
+    // du/dt is still solved, over the file's: the file's is an interpolant at
+    // the output time and satisfies the u rows only to IDA's tolerance (a
+    // weighted residual of 0.3 on a warm TestDiffusion restart), where the
+    // solve satisfies them exactly.
+    if (problem->isRestarting() && !restartWasProjected)
+        dydt.copy(problem->getRestartdYdt());
+
     // On the residual's own nodes and projected as it projects them, so that the
     // du/dt solved here is the one the u row reads back at t0.
     const Index physicsDoF = superconvergent ? k + 2 : k + 1;
