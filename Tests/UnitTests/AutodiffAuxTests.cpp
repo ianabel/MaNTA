@@ -20,11 +20,18 @@
 #include <boost/test/unit_test.hpp>
 
 #include "../../PhysicsCases/AutodiffTransportSystem.hpp"
+#include "../../PhysicsCases/AuxVarADTest.hpp"
+#include "../../SystemSolver.hpp"
+#include "CapturedOutput.hpp"
 #include "State.hpp"
 #include "Types.hpp"
 #include "gridStructures.hpp"
 
 #include <toml.hpp>
+#include <netcdf>
+
+#include <filesystem>
+#include <vector>
 
 using namespace toml::literals::toml_literals;
 
@@ -250,5 +257,59 @@ BOOST_AUTO_TEST_CASE(aux_g_prime_matches_a_finite_difference_of_g_func)
         BOOST_TEST(got == c.expected, boost::test_tools::tolerance(1e-12));
     }
 }
+
+// The t = 0 slice of the AuxG diagnostic is the auxiliary residual at the
+// initial condition, like every slice after it -- G = a - u^2, evaluated on the
+// output grid from the state the run starts from. It used to be
+// InitialAuxValue, u0(x)^2: the value the auxiliary variable is initialised to,
+// under the name of the residual it should satisfy. So the check is that the
+// slice is exactly a - u^2 from the file's own u and a slices, which the initial
+// value is not.
+BOOST_AUTO_TEST_CASE(the_initial_aux_diagnostic_is_the_residual)
+{
+    const toml::value config = u8R"(
+        [DiffusionProblem]
+        Kappa = 1.0
+    )"_toml;
+    const std::string stem = "aux_diagnostic_t0";
+    Grid grid(-1.0, 1.0, 6);
+    AuxVarADTest problem(config, grid);
+    {
+        SystemSolver sys(grid, 3, &problem);
+        sys.setTau(1.0);
+        sys.resetCoeffs();
+        sys.setInputFile(stem);
+        sys.setOutputCadence(0.1);
+        sys.setNOutput(21);
+        sys.setInitialTime(0.0);
+        sys.setTolerances({1e-6}, 1e-4);
+        sys.setWriteOutput(true);
+        sys.setWriteDatFile(false);
+        CapturedOutput quiet;
+        sys.runSolver(0.1);
+    }
+
+    netCDF::NcFile file(stem + ".nc", netCDF::NcFile::FileMode::read);
+    const size_t nx = file.getDim("x").getSize();
+    std::vector<double> G(nx), u(nx), a(nx);
+    file.getGroup("AuxG").getVar("Aux0").getVar({0, 0}, {1, nx}, G.data());
+    file.getGroup("u").getVar("u").getVar({0, 0}, {1, nx}, u.data());
+    file.getVar("a").getVar({0, 0}, {1, nx}, a.data());
+    file.close();
+
+    double worst = 0.0, initialValueGap = 0.0;
+    for (size_t i = 0; i < nx; ++i)
+    {
+        worst = std::max(worst, std::abs(G[i] - (a[i] - u[i] * u[i])));
+        initialValueGap = std::max(initialValueGap, std::abs(G[i] - a[i]));
+    }
+    BOOST_TEST_MESSAGE("t0 AuxG against a - u^2: " << worst << "; against a: " << initialValueGap);
+    BOOST_TEST(worst < 1e-12);
+    // Not vacuous: the initial value is a different number.
+    BOOST_TEST(initialValueGap > 1e-2);
+    for (const char *ext : {".nc", ".restart.nc"})
+        std::filesystem::remove(stem + ext);
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -219,7 +219,7 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 	// what the rest of this function's state was built at.
 	initialiseFieldOutput(nc_output, t);
 
-	problem->initialiseDiagnostics(nc_output);
+	problem->initialiseDiagnosticsAt(y, dydt, t, nc_output);
 }
 
 // See the declaration. Creates the group and writes its t0 slice; the geometry

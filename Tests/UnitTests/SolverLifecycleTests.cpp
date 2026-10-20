@@ -2770,27 +2770,9 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
     restarted.setTau(1.0);
     restarted.resetCoeffs();
     restarted.setInputFile(stem + "_resumed");
-    // Well below T_RESTART, and the choice is forced. Two places treat the
-    // output cadence as something it is not, and on a restart -- the only run in
-    // this tree that starts at t0 != 0 -- they pull in opposite directions:
-    //
-    //   * IDACalcIC is handed `dt` as its `tout1`, which SUNDIALS documents as
-    //     the first output *time*, not a delta. A delta equals a time only at
-    //     t0 = 0. So cadence == t_initial gives tdist = 0 and IDA_ILL_INPUT
-    //     (-22), "tout1 too close to t0"; cadence < t_initial makes IDA
-    //     conclude it is integrating backwards and sign hh accordingly.
-    //   * `if (problem->isRestarting()) IDASetInitStep(IDA_mem, dt)` makes the
-    //     cadence the *first step*, on the reading that a resumed run should
-    //     "continue at the same delta t".
-    //
-    // So there is no cadence that avoids both: above t_initial escapes the first
-    // and hands IDA an initial step longer than the whole remaining integration,
-    // which here fails the error test ten times over and dies IDA_ERR_FAIL (-3)
-    // at h = 1.1e-6; below it takes the second, harmlessly, and completes. A
-    // small cadence is also what a resumed run really has, so this is the honest
-    // configuration rather than a dodge. Neither trap is about field models --
-    // both reproduce on main with no coupling, from a config with
-    // `restart = true` -- so both are reported rather than fixed here.
+    // Below T_RESTART. A restart takes the output cadence as IDA's first step
+    // (Solver.cpp), and a cadence longer than what is left of the run is a first
+    // step longer than the run.
     restarted.setOutputCadence(T_RESTART / 5.0);
     restarted.setNOutput(11);
     restarted.setInitialTime(T_RESTART);
@@ -2814,6 +2796,32 @@ BOOST_AUTO_TEST_CASE(psi_round_trips_through_a_restart)
     // this ever stops being exact, something is recomputing psi rather than
     // resuming it, and the tolerance is not the thing to adjust.
     BOOST_CHECK_SMALL(std::abs(restarted.getSolution().Field(0) - psiFromFile), 1e-12);
+
+    // ...and y' with it: every component but du/dt, bit for bit. IDACalcIC is
+    // skipped on this path, so whatever dydt holds is what IDA's first step
+    // predicts from. It used to be zero everywhere but du/dt -- psi' included,
+    // though psi is differential here and moving -- and IDA's predictor then saw
+    // a state whose algebraic and field components stood still. The first step's
+    // error estimate went like h |y'| instead of h^2, and on AuxVarTest that was
+    // eight error-test failures of the ten allowed. du/dt itself is solved out
+    // of the u row, so it is checked against that and not against the file.
+    {
+        std::vector<double> resumedCopy(N_VGetArrayPointer(restarted.dYdt),
+                                        N_VGetArrayPointer(restarted.dYdt) + nDOF_file);
+        std::vector<double> fileCopy(dYdt);
+        DGSoln resumedMap(1, restartGrid, order, resumedCopy.data(), 0, 0, nField_file);
+        DGSoln fileMap(1, restartGrid, order, fileCopy.data(), 0, 0, nField_file);
+        // Blank du/dt in both, then compare everything else exactly.
+        resumedMap.u(0).zeroCoeffs();
+        fileMap.u(0).zeroCoeffs();
+        size_t mismatched = 0;
+        for (size_t i = 0; i < nDOF_file; ++i)
+            if (resumedCopy[i] != fileCopy[i])
+                ++mismatched;
+        BOOST_TEST(mismatched == 0u, mismatched << " entries of y' other than du/dt differ from the restart file's");
+        // Not vacuous: the file's y' is not zero where the old path put zeros.
+        BOOST_TEST(std::abs(dYdt[nDOF_file - 1]) > 1e-6, "psi' in the file is " << dYdt[nDOF_file - 1]);
+    }
 
     // ...and the transport state came back with it, so the psi above is the psi
     // of the same solution rather than of some other one.
