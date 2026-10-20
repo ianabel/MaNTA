@@ -596,6 +596,7 @@ void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 				nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-",
 							   [this, i, &initial](double x)
 							   {  State s = initial.y->eval(x);
+								  fillGeometry(s, *initial.y, x, initial.t);
 								  return this->AuxG(i, s, x, initial.t); });
 			else
 				nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-", [this, i](double x)
