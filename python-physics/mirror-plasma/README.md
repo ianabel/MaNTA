@@ -21,7 +21,7 @@ conclusions from a run.
     pip install .[jax]         # from the repository root, once
     pip install optimistix     # not a MaNTA dependency; see "What it needs"
     cd python-physics/mirror-plasma
-    python landremann.py       # once, writes land.pkl
+    python landreman.py       # once, writes land.pkl; --no-plot skips the figure
     python run.py
 
 `run.py` integrates `configs.CMFX` to t = 2 on 32 cells at polynomial degree 5
@@ -34,10 +34,12 @@ what the voltage controller needs.
 ### land.pkl
 
 `mirror_plasma/constants.py` needs the nodes and weights of a quadrature rule
-for the Pastukhov loss integrals, which `landremann.py` computes and pickles.
+for the Pastukhov loss integrals, which `landreman.py` computes and pickles.
 The pickle is generated rather than checked in (`*.pkl` is gitignored), so run
-`landremann.py` once before anything else; `PlasmaConstants` raises a
-`FileNotFoundError` naming the fix if you forget.
+`landreman.py` once before anything else; `PlasmaConstants` raises a
+`FileNotFoundError` naming the fix if you forget. It also plots the orthogonal
+polynomials the rule is built from and waits for the window to close; pass
+`--no-plot` from a script or a shell with no display.
 
 ## What it needs
 
@@ -46,8 +48,8 @@ Beyond `manta[jax]`:
 | Package | Used by | In `requirements.txt`? |
 |---|---|---|
 | `optimistix` | `parallel_physics.py`, solving for the centrifugal potential | no |
-| `matplotlib` | `constants.py`, `landremann.py` | yes |
-| `scipy` | `landremann.py`, `test_mirror.py` | yes |
+| `matplotlib` | `constants.py`, `landreman.py` | yes |
+| `scipy` | `landreman.py`, `test_mirror.py` | yes |
 | `desc` | `test_mirror.py` only, for `tree_unstack` | no |
 
 `optimistix` and `desc` are deliberately not MaNTA dependencies — they belong to

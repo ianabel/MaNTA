@@ -19,10 +19,16 @@ project = "MaNTA"
 copyright = "University of Maryland; see the COPYRIGHT file"
 author = "Myles Kelly, Ian Abel, Eddie Tocco"
 
-# MaNTA does not carry a version number anywhere in the tree -- there is no
-# VERSION file and no version macro -- so there is nothing to read one from.
-# Leave it unset rather than invent a number that would immediately be wrong.
-release = ""
+# The version is project(VERSION) in CMakeLists.txt, which is what libmanta's
+# soname and manta.pc carry; read it from there rather than repeating it.
+import pathlib
+import re
+
+release = re.search(
+    r"project\(MaNTA\s+VERSION\s+([0-9.]+)",
+    (pathlib.Path(__file__).resolve().parent.parent / "CMakeLists.txt").read_text(),
+).group(1)
+version = release
 
 extensions = [
     "sphinx.ext.mathjax",

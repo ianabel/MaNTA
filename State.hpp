@@ -527,6 +527,9 @@ public:
     m_data = std::move(other.m_data);
   }
 
+  GlobalStateMatrix &operator=(const GlobalStateMatrix &other) = default;
+  GlobalStateMatrix &operator=(GlobalStateMatrix &&other) noexcept = default;
+
   void add(Index nCells, Index k, Index nVars, Index nScalars, Index nAux) {
     m_data.emplace_back(nCells, k, nVars, nScalars, nAux);
   }
@@ -577,6 +580,7 @@ public:
     return out;
   }
   GlobalState &operator[](Index var) { return m_data[var]; }
+  GlobalState const &operator[](Index var) const { return m_data[var]; }
 
   const Index size() const { return nVars; }
 

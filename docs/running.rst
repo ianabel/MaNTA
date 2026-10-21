@@ -109,15 +109,12 @@ restart output. A run with no field model writes exactly what it wrote before
 the feature existed — byte for byte, apart from that one ``nField = 0`` in the
 restart file.
 
-With ``solveAdjoint`` set, the file also carries the scalars ``ng``, ``np`` and
-``np_boundary``, one ``G<i>`` value per objective, and the groups ``G<i>_p`` and
-``G<i>_boundary`` holding the gradient with respect to each named parameter.
-
-.. note::
-
-   ``WriteAdjoints()`` is currently commented out in ``Solver.cpp``, so a run
-   does not in fact serialise the adjoint *state*. The gradients themselves are
-   available through ``Runner.getAdjointGradients``; see :doc:`adjoints`.
+With ``WriteAdjoints`` set as well as ``solveAdjoint``, the file also carries
+the scalars ``ng``, ``np`` and ``np_boundary``, one ``G<i>`` value per
+objective, the groups ``G<i>_p`` and ``G<i>_boundary`` holding the gradient with
+respect to each named parameter, and each objective's adjoint state beside the
+solution; :ref:`adjoint-on-demand` and the section after it give the layout.
+Without it the gradients are available through ``Runner.getAdjointGradients``.
 
 Reading the output
 ------------------
@@ -265,13 +262,14 @@ solution and a time derivative that did not belong together.
 
 .. warning::
 
-   **Keep** ``delta_t`` **at a size the resumed run could actually take as its
-   first step.** On a restart, ``IDASetInitStep`` is given ``delta_t`` as the
-   **first step**, on the reading that a resumed run should continue at the same
-   step it left off with. A cadence chosen for output frequency rather than for
-   stability can therefore hand IDA a first step approaching the whole remaining
-   integration, and the error test then fails repeatedly until it gives up with
-   ``IDA_ERR_FAIL`` (-3). Setting ``dt0`` overrides it.
+   **On a restart,** ``delta_t`` **is IDA's first step.** It is a guess, not the
+   step the previous run left off with -- the file records none -- and a
+   first-order step at a cadence chosen for output usually fails the error test
+   a few times before IDA has cut it to size. That is cheap: a copied restart
+   resumes the file's own ``y'``, which is consistent for every component, so
+   the error estimate falls like :math:`h^2`, a factor of 16 per cut. Even so, a
+   ``delta_t`` approaching the whole remaining integration is a misjudgement
+   worth avoiding, and ``dt0`` overrides it.
 
    This warning used to have a second half, about ``t_initial == delta_t``
    failing with ``IDA_ILL_INPUT`` (-22) and ``tout1 too close to t0``. That was
@@ -853,6 +851,99 @@ the two tests on one run; both solves return it as ``correction_norm`` in
 ``steadyStats()``, and a ``NewtonStep`` solve also returns the tested
 :math:`s\|\delta\|` as ``correction_test``.
 
+.. _objective-steady-test:
+
+Stopping on the objective: ``SteadyStateTest = "Objective"``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``NewtonStep`` converges every component of the solution to the run's
+tolerances, and what that leaves in the output a study reports is nowhere
+written down: on Shestakov's problem at its default it leaves the particle
+inventory :math:`6.5\times10^{-4}` to :math:`1.8\times10^{-3}` from the fixed
+point. ``SteadyStateTest = "Objective"`` asks
+for the output instead. It stops when, for every objective :math:`G_g` the
+case's adjoint problem defines,
+
+.. math::
+
+   |z_g^T F| \le \beta_\mathrm{alg}\,
+   \max\left(\epsilon_g\,|G_g|,\ \epsilon^\mathrm{abs}_g\right),
+   \qquad J^T z_g = \frac{\partial G_g}{\partial y},
+
+with :math:`\epsilon_g` = ``ObjectiveTolerance``, :math:`\epsilon^\mathrm{abs}_g` =
+``ObjectiveAbsoluteTolerance`` and :math:`\beta_\mathrm{alg}` the algebraic share
+of ``ObjectiveBudget`` (default one half), :math:`G_g` and :math:`F` taken at the
+iterate. :math:`z^T F` is the dual-weighted estimate of
+:math:`G(y) - G(y^\star)`, how far the objective at the iterate is from its value
+at the discrete fixed point. Each tolerance is one value for every objective or
+an array with one per objective. It needs ``solveAdjoint``, which is what
+attaches the objectives; see :ref:`objective-tolerance-config`.
+
+.. warning::
+
+   **It controls only the named objectives.** It stops when they are converged
+   and says nothing about anything else the run reports, which may be less
+   converged than ``NewtonStep`` would have left it: on the two-temperature
+   problem at a tolerance of :math:`10^{-2}` the stored energies stop
+   :math:`1.3\times10^{-3}` from the fixed point and the temperature profiles,
+   pointwise, :math:`2.7\times10^{-3}`. Name every output that matters as an
+   objective; each is held to its own tolerance.
+
+What it is, against ``NewtonStep``:
+
+* **The same continuation.** Damped steps are ``NewtonStep``'s, step for step;
+  only the undamped solve that ends the run is tested differently.
+* **No adjoint solve, and no physics call.** With :math:`J^T z = \partial
+  G/\partial y`, :math:`z^T F = (\partial G/\partial y)\,J^{-1}F`, which is the
+  change in :math:`G` that the Newton correction the iteration has just solved
+  for makes. So the test costs the objective's ``dg`` and ``GFn`` per undamped
+  iteration and nothing of the case's: an objective solve spends exactly the
+  residuals, builds and solves a ``NewtonStep`` one does over the same
+  iterations.
+* **When the estimate is trusted.** From the second iteration on, once the
+  corrections contract; on the first only when that correction is already
+  within one unit of the error weights — the gauge the continuation uses for a
+  state that has stopped moving. A first-order estimate from far off means
+  little.
+* **What is returned is better than what was tested.** The estimate is made at
+  the iterate the correction starts from, and the correction is then applied, so
+  the state returned is one Newton step past the one judged. On the four
+  benchmarks in ``python-examples/objective-tolerance/`` every stop is inside its
+  share, most by orders of magnitude.
+* **What it saves is the last iteration or two, at a loose tolerance**, and what
+  it buys is the accuracy asked for: on Jardin at :math:`10^{-2}`, four Newton
+  iterations against ``NewtonStep``'s five; on Shestakov at :math:`10^{-3}`, two
+  more than ``NewtonStep`` takes, and the inventory :math:`6.4\times10^{-8}`
+  from the fixed point rather than :math:`6.5\times10^{-4}`. That example's
+  README has the table.
+
+**A tolerance the arithmetic cannot resolve ends** ``Stalled``. If the
+correction reaches round-off in the error weights, or ``NewtonStep``'s own test
+passes and the estimate stops falling, with the objective test still unmet, the
+solve stops there and returns ``SteadyOutcome.Stalled`` — not ``Converged``, and
+not a budget spent iterating to the cap — with the state as converged as the
+iteration can make it. An objective that is zero at the answer with no
+``ObjectiveAbsoluteTolerance`` is the usual way to get one.
+
+``steadyStats()`` reports the verdict at the last undamped iteration:
+``objective_error``, the estimates :math:`|z_g^T F|`; ``objective_tolerance``,
+what each was held to; and ``objective_test``, the larger ratio of the two,
+which is at most 1 on convergence. ``adjoint_solves`` is zero. The estimate is
+of the **algebraic** error only — the solve against its own fixed point; the
+discretisation share of ``ObjectiveBudget`` bounds the error of that fixed point,
+which ``EstimateDiscretisationError`` estimates (:ref:`discretisation-estimate`)
+and ``AdaptationTarget = "Objective"`` adapts the degree and the mesh to
+(:ref:`adaptivity-objective`).
+
+Refused, each where it can first be seen: without ``solveAdjoint``, under
+``SteadyStateSolver = "TimeMarch"``, and an ``Objective*`` key under any other
+test unless ``AdaptationTarget = "Objective"`` reads it, in the configuration; a tolerance list neither one value nor one per
+objective, an objective given neither tolerance, and
+``tauScaling = "Diffusive"`` — whose :math:`\mathrm{d}\tau/\mathrm{d}y` the
+operator does not carry — when the solve starts. With global scalars the
+estimate includes their share of the correction, through
+:math:`\partial G/\partial\mu`.
+
 Output from a steady solve
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -974,7 +1065,8 @@ it and writes nothing. ``runner.configure(...)`` while a loop is live abandons i
 the same way.
 
 ``OutOfSteps`` is *returned*, not raised — a budget, ``MaxContinuationSteps`` or
-``MaxRejectedSteps``, is spent and nothing is wrong. A genuine ``SolverFailed`` raises, having written the last state it
+``MaxRejectedSteps``, is spent and nothing is wrong. So is ``Stalled``, under the
+objective test, which ends the loop. A genuine ``SolverFailed`` raises, having written the last state it
 reached, so a driver tells the two apart without reading a message.
 
 The state between slices is the state reached: each slice refreshes what
@@ -1002,7 +1094,8 @@ that is what the context manager calls.
 
 ``steadyStats()`` and ``objectiveEstimate()`` need no FFI op — they read
 host-side state and touch no device memory, so the inherited ``Runner`` methods
-serve.
+serve. The same holds for ``solve_adjoint()`` and the three reads beside it
+(:ref:`adjoint-on-demand`).
 
 CPU only, like ``Run`` and ``Run_ss``. In eager code a slice returns a
 ``SteadyOutcome``, which forces the sync a Python ``while`` needs. Under a trace
@@ -1371,6 +1464,13 @@ until it is good enough:
 On ``AdjointPoster`` at 6 cells that is four solves — ``k`` = 2, 5, 8, 10 —
 taking the estimated error 2.1e-3, 8.6e-6, 1.6e-8, 2.0e-10.
 
+That is the default target, the solution. ``AdaptationTarget = "Objective"``
+measures each level by the objectives instead — each one's estimated
+discretisation error against its share of ``ObjectiveTolerance`` — and is
+described, with what it costs and whether it meets its tolerance, in
+:ref:`adaptivity-objective`. The estimate below, and the fourth of the points
+after it, are the solution target's; the rest holds for both.
+
 The estimate is the gap between the solution and its own postprocessing,
 :math:`E_K^2 = \|u^* - u_h\|^2_{L^2(K)} / |K|` per cell (Capasso *et al.*
 eq. 15). Every level reports two aggregates:
@@ -1443,9 +1543,9 @@ nothing.
    some 320 ``(k+1)`` sites in the core — and the measurements in
    ``MESH-REFINEMENT.md`` say most of the available win does not need them.
 
-   Adaptation is also refused alongside spatial adjoint parameters, for the same
-   reason ``Superconvergent`` already is: those are indexed by node, so changing
-   the degree changes how many parameters there are.
+   Adaptation is also refused alongside spatial adjoint parameters: those are
+   indexed by physics node, so changing the degree changes how many parameters
+   there are.
 
 .. _suppress-algebraic-error:
 

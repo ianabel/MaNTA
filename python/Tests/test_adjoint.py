@@ -1,18 +1,12 @@
 """End-to-end tests for the adjoint sensitivity path.
 
-This is the least-verified machinery in the project. `WriteAdjoints()` is
-commented out at Solver.cpp:350 (commit 57d2652, "adjoint writing doesn't work
-for spatial adjoints"), so no run emits the gradients and both the regression
-and reference-solution suites skip their adjoint comparison entirely. Until now
-nothing checked that `solveAdjointState` and `computeAdjointGradients` produce a
-correct number -- only that they ran.
-
-`PyRunner::getAdjointGradients` is a way in that does *not* depend on
-WriteAdjoints: it reads `SystemSolver::G_p` directly. That makes the whole chain
-testable from Python --
+No reference file in the regression or reference-solution suites carries
+adjoint output -- it is written only under WriteAdjoints = true -- so neither
+compares gradients. `PyRunner::getAdjointGradients` reads `SystemSolver::G_p`
+directly, which makes the whole chain testable from Python --
 
     PyAdjointProblem (gFn / dg / dgFndp / dSigma / dSources)
-      -> initializeMatricesForAdjointSolve
+      -> assembleAdjointOperator, assembleObjectiveGradient
       -> solveAdjointState
       -> computeAdjointGradients
       -> G_p
@@ -451,12 +445,25 @@ def test_G_returns_the_objective_without_an_adjoint_solve(tmp_path):
     assert adjoint.call_counts["gFn"] > 0
 
 
-def test_G_agrees_with_the_G_from_getAdjointGradients(tmp_path):
-    """Both read the same GFn at the same yJac, so they must agree exactly."""
+@pytest.mark.parametrize(
+    "scheme",
+    [
+        pytest.param({}, id="plain"),
+        # k = 1 cannot hold the quadratic steady state and u* can, so the u_h-
+        # and u*-based objectives differ by far more than round-off here.
+        pytest.param({"Superconvergent": True, "PolynomialDegree": 1}, id="superconvergent"),
+    ],
+)
+def test_G_agrees_with_the_G_from_getAdjointGradients(tmp_path, scheme):
+    """Both read the same objective at the same yJac, so they must agree exactly.
+
+    Under Superconvergent that objective is the u*-based one, which is also the
+    one objectiveEstimate() reports and bounds.
+    """
     p = np.array([KAPPA0, SOURCE0])
     ts = ParametricDiffusion(p)
     runner = MaNTA.Runner(ts)
-    runner.configure(adjoint_config(tmp_path / "gboth"))
+    runner.configure(adjoint_config(tmp_path / "gboth", **scheme))
     runner.run(T_FINAL)
 
     G_full, _ = runner.getAdjointGradients()
@@ -545,24 +552,18 @@ def test_a_subclass_missing_the_vectorised_hooks_is_reported(tmp_path):
 
 # --------------------------------------------------- spatial parameters --
 #
-# `spatialParameters = True` indexes the parameter vector by node: `G_p` becomes
-# `(ng * nCells * (k + 1), np)`, one row per (objective, node) and one column per
-# parameter *field*. Two places in computeAdjointGradients build that matrix and
-# they have to agree on its orientation -- the explicit term assigns `dGFndp`
-# into a `(nPoints, np)` block (SystemSolver.cpp:1675), and the adjoint term
-# writes `G_p(gIndex * nPoints + node, pIndex)` (SystemSolver.cpp:1814).
+# `spatialParameters = True` gives each parameter its own value at every physics
+# node -- the k+1 basis nodes of each cell, or its k+2 star nodes with
+# `Superconvergent = True`, which is what `MaNTA.getPhysicsNodes` returns. `G_p`
+# is then `(ng * nPoints, np)`, one row per (objective, node) and one column per
+# parameter *field*, and each entry is the discrete derivative dG/dp_m.
 #
-# PyAdjointProblem::dGFndp returned `dgFndp` raw in the spatial branch. That is
-# `(np, nPoints)` -- the orientation the non-spatial branch immediately below it
-# indexes as `dgdp(p, ind)` -- so every run with spatial parameters aborted
-# inside Eigen's assignment, with `checkShapeAndSet` reduced to a plain
-# assignment in a release build and so contributing no message of its own.
-#
-# Nothing here covered it: every other adjoint fixture in this file sets
-# `spatialParameters = False`, and python-examples/adjoints/spatial_adjoints.py,
-# the only thing in the tree that sets it True, is collected by no suite. That
-# example could not have caught the *orientation* in any case, only the shape --
-# its `g` ignores its parameters, so its `dgFndp` is identically zero.
+# Two places in accumulateAdjointGradients build that matrix and have to agree
+# on it: the explicit term, w_m dg/dp_m from `dgFndp` -- which the hook reports
+# as `(np, nPoints)`, so it is transposed on the way in -- and the adjoint term,
+# which writes `G_p(gIndex * nPoints + node, pIndex)`. The layout test below
+# pins the first with the second zeroed; the value tests pin the second with the
+# first zeroed; the explicit-field tests pin the first by differencing G.
 
 NP_SPATIAL = 3
 
@@ -660,11 +661,46 @@ def test_a_transposed_dgfndp_is_reported_rather_than_aborting(tmp_path):
     assert "transpose" in message, message
 
 
-def test_spatial_gradients_keep_dgdp_in_the_layout_G_p_uses(tmp_path):
-    """G_p is (nPoints, np), and dGFndp has to arrive that way round."""
+def cell_weights(points, edges):
+    """w with sum_m w_m f(x_m) = int I[f] dx over each cell: the quadrature GFn
+    uses, for whichever nodes the physics is evaluated on.
+
+    From the moments of the monomials on the reference cell, so it is built from
+    the points alone and shares no code with the solver's weights.
+    """
+    nCells = len(edges) - 1
+    n = len(points) // nCells
+    j = np.arange(n)
+    moments = (1.0 + (-1.0) ** j) / (j + 1.0)
+    w = np.empty(len(points))
+    for c in range(nCells):
+        a, b = edges[c], edges[c + 1]
+        s = (2.0 * points[c * n : (c + 1) * n] - (a + b)) / (b - a)
+        w[c * n : (c + 1) * n] = 0.5 * (b - a) * np.linalg.solve(
+            np.vander(s, n, increasing=True).T, moments
+        )
+    return w
+
+
+@pytest.mark.parametrize("superconvergent", [False, True], ids=["basis", "star"])
+def test_spatial_gradients_keep_dgdp_in_the_layout_G_p_uses(tmp_path, superconvergent):
+    """G_p is (nPoints, np), with dGFndp weighted and the right way round.
+
+    F_p is zero here, so G_p is the explicit term alone: w_m dg/dp_m in row m.
+    The weights are the objective's own quadrature over the physics nodes, which
+    is what makes this half of G_p the same derivative as the adjoint half.
+    """
     system = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))
-    cfg = adjoint_config(tmp_path, PolynomialDegree=3, GridSize=4)
-    nPoints = cfg["GridSize"] * (cfg["PolynomialDegree"] + 1)
+    cfg = adjoint_config(
+        tmp_path, PolynomialDegree=3, GridSize=4, Superconvergent=superconvergent
+    )
+    points = np.asarray(
+        MaNTA.getPhysicsNodes(0.0, 1.0, cfg["GridSize"], cfg["PolynomialDegree"],
+                              superconvergent),
+        dtype=float,
+    )
+    nPoints = len(points)
+    assert nPoints == cfg["GridSize"] * (cfg["PolynomialDegree"] + (2 if superconvergent else 1))
 
     adjoint = SpatialObjectiveAdjoint()
     system.createAdjointProblem = lambda: adjoint
@@ -676,42 +712,51 @@ def test_spatial_gradients_keep_dgdp_in_the_layout_G_p_uses(tmp_path):
     G_p = np.asarray(gradients["G_p"])
 
     assert G_p.shape == (nPoints, NP_SPATIAL), G_p.shape
+    w = cell_weights(points, np.linspace(0.0, 1.0, cfg["GridSize"] + 1))
     np.testing.assert_allclose(
-        G_p, spatial_marker(NP_SPATIAL, nPoints).T, rtol=0.0, atol=0.0
+        G_p, (spatial_marker(NP_SPATIAL, nPoints) * w).T, rtol=1e-12, atol=0.0
     )
 
 
-# The value tests. A parameter field the *physics* depends on, so the gradient
-# comes out of the adjoint solve rather than out of dgFndp.
+# The value tests. Parameter fields the *physics* depends on, so the gradient
+# comes out of the adjoint solve rather than out of dgFndp: a diffusivity
+# kappa(x), reaching the residual through the flux, and a source S(x).
 
 SPATIAL_KAPPA = 1.0
 SPATIAL_S0 = 2.0
 SPATIAL_K = 4
 SPATIAL_NCELLS = 6
+F_KAPPA, F_SOURCE = 0, 1
+
+SCHEMES = pytest.mark.parametrize("superconvergent", [False, True], ids=["basis", "star"])
 
 
-class NodalSourceDiffusion(MaNTA.TransportSystem):
-    """-d_x(kappa d_x u) = S, with S given by one value per node.
+class NodalFieldDiffusion(MaNTA.TransportSystem):
+    """-d_x(kappa(x) d_x u) = S(x), with kappa and S given by one value per node.
 
-    The hooks are evaluated at the k+1 nodes of each cell, which is exactly the
-    array `MaNTA.getNodes` returns, so `Sources` can look its value up by
+    The hooks are evaluated at the physics nodes, which is exactly the array
+    `MaNTA.getPhysicsNodes` returns, so the case looks its values up by
     position. `argmin` rather than an equality test because the position makes a
     round trip through C++ as a double.
     """
 
-    def __init__(self, points, source_nodes):
+    def __init__(self, points, kappa_nodes, source_nodes):
         MaNTA.TransportSystem.__init__(self, MaNTA.numbered_spec(1))
         self.points = np.asarray(points, dtype=float)
+        self.kappa_nodes = np.asarray(kappa_nodes, dtype=float)
         self.source_nodes = np.asarray(source_nodes, dtype=float)
 
+    def _node(self, x):
+        return np.argmin(np.abs(self.points - x))
+
     def Sources(self, i, state, x, t):
-        return float(self.source_nodes[np.argmin(np.abs(self.points - x))])
+        return float(self.source_nodes[self._node(x)])
 
     def SigmaFn(self, i, state, x, t):
-        return SPATIAL_KAPPA * state.q[i]
+        return float(self.kappa_nodes[self._node(x)]) * state.q[i]
 
     def dSigmaFn_dq(self, i, state, x, t):
-        return np.full(self.nVars, SPATIAL_KAPPA)
+        return np.full(self.nVars, float(self.kappa_nodes[self._node(x)]))
 
     def dSigmaFn_du(self, i, state, x, t):
         return np.zeros(self.nVars)
@@ -738,21 +783,22 @@ class NodalSourceDiffusion(MaNTA.TransportSystem):
         return 0.0
 
     def createAdjointProblem(self):
-        return NodalSourceAdjoint()
+        return NodalFieldAdjoint()
 
 
-class NodalSourceAdjoint(MaNTA.AdjointProblem):
-    """G = int 0.5 u^2 dx against the one nodal source field.
+class NodalFieldAdjoint(MaNTA.AdjointProblem):
+    """G = int 0.5 u^2 dx against the two nodal fields.
 
-    `np` is 1 -- one *field* -- and its per-node structure is what
-    `spatialParameters` expresses. dS/dp is 1 at every node, because the value
-    at node j is the parameter at node j.
+    `np` is 2 -- two *fields* -- and their per-node structure is what
+    `spatialParameters` expresses. The hooks report the pointwise derivative at
+    every node, d(kappa q)/d kappa = q and dS/dS = 1, and the solver places each
+    one at the node it belongs to.
     """
 
     def __init__(self):
         MaNTA.AdjointProblem.__init__(self)
         self.ng = 1
-        self.np = 1
+        self.np = 2
         self.np_boundary = 0
         self.spatialParameters = True
 
@@ -777,101 +823,310 @@ class NodalSourceAdjoint(MaNTA.AdjointProblem):
         }
 
     def dSigma(self, i, states, positions):
-        return np.zeros((self.np, len(positions)))
+        out = np.zeros((self.np, len(positions)))
+        out[F_KAPPA, :] = np.asarray(states["Derivative"])[:, i]
+        return out
 
     def dSources(self, i, states, positions):
-        return np.ones((self.np, len(positions)))
+        out = np.zeros((self.np, len(positions)))
+        out[F_SOURCE, :] = 1.0
+        return out
 
     def getName(self, pIndex):
-        return "S"
+        return ("kappa", "S")[pIndex]
 
 
-def spatial_points():
+def spatial_points(superconvergent=False):
     return np.asarray(
-        MaNTA.getNodes(0.0, 1.0, SPATIAL_NCELLS, SPATIAL_K), dtype=float
+        MaNTA.getPhysicsNodes(0.0, 1.0, SPATIAL_NCELLS, SPATIAL_K, superconvergent),
+        dtype=float,
     )
 
 
-def spatial_solve(points, source_nodes, tmp_path):
-    system = NodalSourceDiffusion(points, source_nodes)
+def spatial_runner(points, kappa_nodes, source_nodes, tmp_path, superconvergent=False):
+    system = NodalFieldDiffusion(points, kappa_nodes, source_nodes)
     runner = MaNTA.Runner(system)
     runner.configure(
         adjoint_config(
-            tmp_path, PolynomialDegree=SPATIAL_K, GridSize=SPATIAL_NCELLS
+            tmp_path,
+            PolynomialDegree=SPATIAL_K,
+            GridSize=SPATIAL_NCELLS,
+            Superconvergent=superconvergent,
         )
     )
     runner.run(T_FINAL)
+    return runner
+
+
+def spatial_solve(points, kappa_nodes, source_nodes, tmp_path, superconvergent=False):
+    runner = spatial_runner(points, kappa_nodes, source_nodes, tmp_path, superconvergent)
     G, gradients = runner.getAdjointGradients()
     return float(np.asarray(G)[0]), np.asarray(gradients["G_p"])
 
 
-def test_the_spatial_gradient_sums_to_the_closed_form(tmp_path):
-    """Summed over nodes, the spatial gradient is the scalar one.
+def uniform_fields(points):
+    return SPATIAL_KAPPA * np.ones(len(points)), SPATIAL_S0 * np.ones(len(points))
 
-    With the field uniform at S0, perturbing every node together is exactly
-    perturbing the scalar source, and G is quadratic in the parameters, so
-    sum_j dG/dp_j is dG/dS = S / (120 kappa^2) with no discretisation error at
-    all. This holds to machine precision and is the tightest statement
-    available about the spatial path: it pins the total, the node ordering's
-    completeness, and the quadrature weighting inside F_p all at once.
-    """
-    points = spatial_points()
-    _, G_p = spatial_solve(points, SPATIAL_S0 * np.ones(len(points)), tmp_path)
 
-    exact = SPATIAL_S0 / (120.0 * SPATIAL_KAPPA**2)
-    assert G_p.shape == (len(points), 1), G_p.shape
-    assert G_p[:, 0].sum() == pytest.approx(exact, rel=1e-12), (
-        f"sum = {G_p[:, 0].sum()}, expected {exact}"
+def test_physics_nodes_are_where_the_physics_is_evaluated(tmp_path):
+    """getPhysicsNodes is the basis nodes, or the star nodes, cell by cell."""
+    basis = spatial_points(False)
+    star = spatial_points(True)
+    np.testing.assert_array_equal(
+        basis, np.asarray(MaNTA.getNodes(0.0, 1.0, SPATIAL_NCELLS, SPATIAL_K))
     )
+    assert star.shape == (SPATIAL_NCELLS * (SPATIAL_K + 2),)
+    edges = np.linspace(0.0, 1.0, SPATIAL_NCELLS + 1)
+    cells = star.reshape(SPATIAL_NCELLS, SPATIAL_K + 2)
+    assert np.all(cells > edges[:-1, None]) and np.all(cells < edges[1:, None])
+    assert np.all(np.diff(star) > 0)
 
 
-def test_spatial_adjoint_gradient_matches_finite_differences(tmp_path):
+@SCHEMES
+def test_the_spatial_gradient_sums_to_the_closed_form(tmp_path, superconvergent):
+    """Summed over nodes, each spatial gradient is the scalar one.
+
+    With both fields uniform, perturbing every node together is exactly
+    perturbing the scalar parameter, and u = S x(1-x) / (2 kappa) is a quadratic
+    every scheme here represents exactly. So G = S^2 / (240 kappa^2), and
+    sum_j dG/dS_j = S / (120 kappa^2) and sum_j dG/dkappa_j = -S^2 / (120
+    kappa^3), with no discretisation error at all. This holds to machine
+    precision and is the tightest statement available about the spatial path: it
+    pins the total, the node ordering's completeness, and the weighting inside
+    F_p all at once -- over the k+2 star nodes with the superconvergent scheme,
+    where F_p projects through A9 rather than the mass matrix.
+    """
+    points = spatial_points(superconvergent)
+    _, G_p = spatial_solve(points, *uniform_fields(points), tmp_path, superconvergent)
+
+    assert G_p.shape == (len(points), 2), G_p.shape
+    dG_dS = SPATIAL_S0 / (120.0 * SPATIAL_KAPPA**2)
+    dG_dkappa = -(SPATIAL_S0**2) / (120.0 * SPATIAL_KAPPA**3)
+    assert G_p[:, F_SOURCE].sum() == pytest.approx(dG_dS, rel=1e-12)
+    assert G_p[:, F_KAPPA].sum() == pytest.approx(dG_dkappa, rel=1e-12)
+
+
+@SCHEMES
+def test_spatial_adjoint_gradient_matches_finite_differences(tmp_path, superconvergent):
     """dG/dp at a node, from the adjoint, against re-running the solver.
 
-    To machine precision, and the tolerance is the point. This used to be a
-    thousand times looser, because the assembled dG/dZ applied the cell mass
-    matrix to dg/dZ where the objective demands the integration weights: GFn
-    reports sum_m w_m g(Z_m), whose exact derivative in the nodal coefficient
-    Z_i is w_i dg/dZ|_i, and M is not diag(w). Since M 1 = w exactly, the two
-    agree whenever dg/dZ is constant over a cell and differ by
-    (M - diag(w)) dg/dZ otherwise -- an operator that annihilates constants, so
-    the error summed to zero over every cell and left all of `G_p.sum()`, the
-    scalar-parameter path and the closed-form checks intact. It was visible only
-    per node, i.e. only through spatial parameters, as an error set purely by the
-    intra-cell node index and decaying as O(h^4).
+    For the source, to machine precision, and the tolerance is the point. The
+    assembled dG/dZ is diag(w) dg/dZ, the exact derivative of the
+    sum_m w_m g(Z_m) that GFn reports, and the cell mass matrix M differs from
+    diag(w) only by an operator that annihilates constants: an error of that
+    kind sums to zero over every cell, leaves G_p.sum() and the scalar path
+    intact, and is visible only per node, as an error set by the intra-cell node
+    index. So a loose tolerance here does not degrade gracefully -- it stops
+    testing the thing that matters. 1e-10 of the largest entry is ~250x the
+    round-off this achieves on either set of nodes.
 
-    So a loose tolerance here does not degrade gracefully -- it stops testing the
-    thing that was wrong. 1e-10 of the largest entry is ~400x the round-off this
-    actually achieves and ~3e6 times tighter than the defect it replaced.
+    G is quadratic in S, so a central difference in it is exact. It is not
+    quadratic in kappa, and there the reference carries an O(h^2) truncation
+    error -- 3.5e-9 of the largest entry at h = 1e-4, 3.5e-7 at 1e-3 -- which
+    sets that field's tolerance.
 
     Compared against the largest entry rather than each node's own because the
-    gradient spans two orders of magnitude across the domain -- ~1e-5 at the
-    nodes next to the Dirichlet boundaries against ~1.3e-3 mid-domain -- so a
-    per-node relative test would weight the two boundary nodes far above
-    everything else.
+    gradient spans two orders of magnitude across the domain, so a per-node
+    relative test would weight the nodes next to the Dirichlet boundaries far
+    above everything else.
 
     Only a few nodes are differenced -- each costs two steady-state solves --
     chosen either side of a cell boundary, which is where a layout error in the
     per-node loop would show.
     """
-    points = spatial_points()
-    p0 = SPATIAL_S0 * np.ones(len(points))
+    points = spatial_points(superconvergent)
+    kappa0, S0 = uniform_fields(points)
+    perCell = len(points) // SPATIAL_NCELLS
 
-    _, G_p = spatial_solve(points, p0, tmp_path / "base")
-    adjoint_grad = G_p[:, 0]
-    scale = np.abs(adjoint_grad).max()
+    _, G_p = spatial_solve(points, kappa0, S0, tmp_path / "base", superconvergent)
 
-    probe = [0, SPATIAL_K, SPATIAL_K + 1, len(points) // 2, len(points) - 1]
-    h = 0.1 * SPATIAL_S0  # G is quadratic in p, so a central difference is exact
-    for j in probe:
-        plus, minus = p0.copy(), p0.copy()
-        plus[j] += h
-        minus[j] -= h
-        G_plus, _ = spatial_solve(points, plus, tmp_path / f"p{j}")
-        G_minus, _ = spatial_solve(points, minus, tmp_path / f"m{j}")
-        fd = (G_plus - G_minus) / (2.0 * h)
+    probe = [0, perCell - 1, perCell, len(points) // 2, len(points) - 1]
+    for field, base, h, tol in (
+        (F_SOURCE, S0, 0.1 * SPATIAL_S0, 1e-10),
+        (F_KAPPA, kappa0, 1e-4 * SPATIAL_KAPPA, 1e-7),
+    ):
+        adjoint_grad = G_p[:, field]
+        scale = np.abs(adjoint_grad).max()
+        for j in probe:
+            plus, minus = base.copy(), base.copy()
+            plus[j] += h
+            minus[j] -= h
+            fields_plus = (plus, S0) if field == F_KAPPA else (kappa0, plus)
+            fields_minus = (minus, S0) if field == F_KAPPA else (kappa0, minus)
+            G_plus, _ = spatial_solve(points, *fields_plus, tmp_path / f"p{field}{j}", superconvergent)
+            G_minus, _ = spatial_solve(points, *fields_minus, tmp_path / f"m{field}{j}", superconvergent)
+            fd = (G_plus - G_minus) / (2.0 * h)
 
-        assert abs(adjoint_grad[j] - fd) < 1e-10 * scale, (
-            f"node {j} (x = {points[j]:.4f}): adjoint = {adjoint_grad[j]}, "
-            f"finite-difference = {fd}, largest gradient entry = {scale}"
+            assert abs(adjoint_grad[j] - fd) < tol * scale, (
+                f"{('kappa', 'S')[field]}, node {j} (x = {points[j]:.4f}): "
+                f"adjoint = {adjoint_grad[j]}, finite-difference = {fd}, "
+                f"largest gradient entry = {scale}"
+            )
+
+
+# ----------------------------------------- a field in the objective itself --
+#
+# The explicit half of G_p, differenced. A field that enters g and nothing else
+# leaves u untouched, so G(p) can be re-evaluated with Runner.G() on the one
+# converged state rather than by re-running the solver -- and G is linear in p,
+# so the central difference is exact and every node can be checked.
+
+
+class ExplicitFieldAdjoint(MaNTA.AdjointProblem):
+    """G = int (1/2 + p(x)) u^2 dx, with p one value per physics node."""
+
+    def __init__(self, points, p):
+        MaNTA.AdjointProblem.__init__(self)
+        self.ng = 1
+        self.np = 1
+        self.np_boundary = 0
+        self.spatialParameters = True
+        self.points = np.asarray(points, dtype=float)
+        self.p = np.asarray(p, dtype=float).copy()
+
+    def _p(self, positions):
+        x = np.asarray(positions, dtype=float)
+        return self.p[np.argmin(np.abs(self.points[None, :] - x[:, None]), axis=1)]
+
+    def gFn(self, gIndex, states, positions):
+        u = np.asarray(states["Variable"])[:, 0]
+        return (0.5 + self._p(positions)) * u * u
+
+    def dgFndp(self, gIndex, states, positions):
+        u = np.asarray(states["Variable"])[:, 0]
+        return (u * u).reshape(1, -1)
+
+    def dg(self, gIndex, states, positions):
+        V = np.asarray(states["Variable"])
+        zeros = np.zeros_like(V)
+        return {
+            "Variable": (1.0 + 2.0 * self._p(positions)).reshape(-1, 1) * V,
+            "Derivative": zeros,
+            "Flux": zeros,
+            "Aux": np.zeros((len(positions), 0)),
+            "Scalars": np.zeros(0),
+        }
+
+    def dSigma(self, i, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def dSources(self, i, states, positions):
+        return np.zeros((self.np, len(positions)))
+
+    def getName(self, pIndex):
+        return "p"
+
+
+@SCHEMES
+def test_a_spatial_field_in_the_objective_is_weighted_by_the_quadrature(tmp_path, superconvergent):
+    """dG/dp_m = w_m dg/dp_m, at every node, with the scheme's own weights.
+
+    This is the half of G_p the value tests above zero out. Reported without its
+    weight the explicit term is a pointwise derivative beside a discrete one, off
+    by 1/w_m -- a factor of 20 to 100 here, set by the intra-cell node index --
+    and with the superconvergent scheme it has to be taken on the star nodes, at
+    u*, with the star weights b1, or it is the derivative of an objective the
+    run does not report. Runner.G() reports the same u*-based objective as
+    getAdjointGradients(), which is what lets it serve as the reference.
+    """
+    points = spatial_points(superconvergent)
+    adjoint = ExplicitFieldAdjoint(points, 0.3 * (1.0 + 0.5 * np.sin(7.0 * points)))
+    system = NodalFieldDiffusion(points, *uniform_fields(points))
+    system.createAdjointProblem = lambda: adjoint
+
+    runner = MaNTA.Runner(system)
+    runner.configure(
+        adjoint_config(
+            tmp_path,
+            PolynomialDegree=SPATIAL_K,
+            GridSize=SPATIAL_NCELLS,
+            Superconvergent=superconvergent,
         )
+    )
+    runner.run(T_FINAL)
+    G, gradients = runner.getAdjointGradients()
+    G_p = np.asarray(gradients["G_p"])[:, 0]
+    assert float(np.asarray(runner.G())[0]) == float(np.asarray(G)[0])
+
+    h = 0.1
+    fd = np.zeros(len(points))
+    p0 = adjoint.p.copy()
+    for j in range(len(points)):
+        adjoint.p = p0.copy()
+        adjoint.p[j] += h
+        G_plus = float(np.asarray(runner.G())[0])
+        adjoint.p[j] -= 2.0 * h
+        G_minus = float(np.asarray(runner.G())[0])
+        fd[j] = (G_plus - G_minus) / (2.0 * h)
+
+    scale = np.abs(fd).max()
+    np.testing.assert_allclose(G_p, fd, rtol=0.0, atol=1e-10 * scale)
+
+
+class ExplicitScalarAdjoint(DiffusionAdjoint):
+    """DiffusionAdjoint with a third parameter c, entering only g = (1/2 + c) u^2.
+
+    Quadratic in u on purpose. u* has the same cell means as u_h, so a term
+    linear in u integrates identically on either and could not tell whether the
+    explicit derivative was taken at u* or at u_h.
+    """
+
+    def __init__(self, transport_system, c):
+        super().__init__(transport_system)
+        self.np = NP + 1
+        self.c = c
+
+    def gFn(self, gIndex, states, positions):
+        u = np.asarray(states["Variable"])[:, 0]
+        return (0.5 + self.c) * u * u
+
+    def dgFndp(self, gIndex, states, positions):
+        out = np.zeros((self.np, len(positions)))
+        out[NP, :] = np.asarray(states["Variable"])[:, 0] ** 2
+        return out
+
+    def dg(self, gIndex, states, positions):
+        d = super().dg(gIndex, states, positions)
+        d["Variable"] = d["Variable"] * (1.0 + 2.0 * self.c)
+        return d
+
+    def getName(self, pIndex):
+        return ("kappa", "source", "c")[pIndex]
+
+
+def explicit_scalar_gradient(tmp_path, superconvergent):
+    """(adjoint dG/dc, central difference of Runner.G() in c)."""
+    system = ParametricDiffusion(np.array([KAPPA0, SOURCE0]))
+    adjoint = ExplicitScalarAdjoint(system, 0.2)
+    system.createAdjointProblem = lambda: adjoint
+    runner = MaNTA.Runner(system)
+    # k = 1, so u_h is not the quadratic solution and u* differs from it.
+    runner.configure(
+        adjoint_config(tmp_path, PolynomialDegree=1, GridSize=4, Superconvergent=superconvergent)
+    )
+    runner.run(T_FINAL)
+    _, gradients = runner.getAdjointGradients()
+
+    h = 0.1
+    adjoint.c = 0.2 + h
+    G_plus = float(np.asarray(runner.G())[0])
+    adjoint.c = 0.2 - h
+    G_minus = float(np.asarray(runner.G())[0])
+    return float(np.asarray(gradients["G_p"])[0, NP]), (G_plus - G_minus) / (2.0 * h)
+
+
+def test_the_superconvergent_explicit_derivative_is_taken_at_u_star(tmp_path):
+    """A parameter in g is differentiated at u* on the star nodes, as G is.
+
+    The guard is the comparison with the basis-node scheme: the two objectives
+    differ by 2.3% here, so an explicit derivative taken at u_h with the k+1
+    weights would miss by that much rather than by round-off.
+    """
+    sc_adjoint, sc_fd = explicit_scalar_gradient(tmp_path / "star", True)
+    basis_adjoint, basis_fd = explicit_scalar_gradient(tmp_path / "basis", False)
+
+    assert abs(sc_fd - basis_fd) > 1e-2 * abs(sc_fd), (
+        "u* and u_h integrate g alike here, so the check below cannot tell them apart"
+    )
+    assert sc_adjoint == pytest.approx(sc_fd, rel=1e-12)
+    assert basis_adjoint == pytest.approx(basis_fd, rel=1e-12)

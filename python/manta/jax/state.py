@@ -3,7 +3,7 @@ import jax
 from jaxtyping import Array, ArrayLike, Float, Int
 import jax.numpy as jnp
 import numpy as np
-from .integrator import Integrator
+from .integrator import Integrator, scalar_integrator
 
 """
 Wrapper class for MaNTA State
@@ -193,7 +193,7 @@ def ScalarG_Decorator(func):
             State.from_manta(states_dt), lambda x: x.size > 0
         )
 
-        integrator = Integrator(self.k, self.nCells, weights, phi_boundary)
+        integrator = scalar_integrator(self, weights, phi_boundary)
         res = func(self, index, states_, states_dt_, integrator, t)
 
         if isinstance(res, State):
@@ -240,7 +240,7 @@ def ScalarGPrime_Decorator(func):
             State.from_manta(states_dt), lambda x: x.size > 0
         )
 
-        integrator = Integrator(self.k, self.nCells, weights, phi_boundary)
+        integrator = scalar_integrator(self, weights, phi_boundary)
         result = func(self, states_, states_dt_, integrator, t)
 
         for i in range(0, len(result)):

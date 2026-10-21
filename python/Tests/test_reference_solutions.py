@@ -66,14 +66,13 @@ def compare_ref_soln_l2(filename, ref_filename, tolerance):
         g.endswith("_p") for g in nc_root_ref.groups
     )
     if "ng" not in nc_root.variables:
-        # Don't fail: WriteAdjoints() is deliberately disabled at Solver.cpp:350
-        # (commit 57d2652, "adjoint writing doesn't work for spatial adjoints").
+        # Don't fail: adjoint output is written only under WriteAdjoints = true.
         # But say so loudly -- this check silently skipped itself for months.
         if ref_has_adjoints:
             print(
                 "  !! SKIPPING adjoint check: the reference has adjoint output but "
-                "this run produced none. WriteAdjoints() is commented out at "
-                "Solver.cpp:350. Re-enable it to restore this check."
+                "this run produced none. Set WriteAdjoints = true in its "
+                "configuration to restore this check."
             )
     else:
         print("  ... also checking adjoint variables")

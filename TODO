@@ -449,9 +449,9 @@ reason it was not made:
     detectable from the solver: geometry is filled on the states the objective is
     evaluated on (it has to be, or a *physics* hook reads a zero-length vector),
     so a g that reads it gets a correct value and an incomplete derivative. The
-    same standing limit AdjointVectors.cpp records for the absent dgFn_dscalars,
-    and the fix is the same shape: a dg/dgeometry hook with a zero default, plus
-    a Python trampoline for it. Wants an objective that genuinely depends on
+    fix has the shape dG/dmu took for the global scalars, which dg's Scalars
+    entry carries: a dG/dgeometry entry in dg, zero by default, read into
+    G_field. Wants an objective that genuinely depends on
     geometry, checked against a closed form, written first.
 
     d(field residual)/dp. FieldModel has no notion of an adjoint parameter, so
@@ -569,18 +569,22 @@ reason it was not made:
         solver does not currently offer a State.
 
     Both want a Python-attachable field model first, or they are untestable.
-  - The objective estimate has no in-loop consumer yet.
+  - The objective estimate has one in-loop consumer, and not the one this entry
+    was about.
 
-    estimateObjective() is callable at any point and leaves alpha and the
-    factorised blocks as it found them, so a continuation step can ask it. What
-    the loop cannot do is *act* on the answer: solveSteadyState has three ways
-    out and two of them throw, so there is no path for "stop here, this is good
-    enough" or "stop here, this cannot beat the incumbent". SteadyOutcome records
-    which exit was taken and the estimate is filled before either throw, so a
-    caught failure carries a usable partial answer, and MaxContinuationSteps plus
-    continueSteadyState() turn that into a workable slice-and-inspect loop: a
-    solve cut short resumes at the state and the pseudo-time step it reached, at
-    no measured cost in continuation steps. That is enough for a caller willing
+    SteadyStateTest = "Objective" stops the undamped solve when each objective's
+    algebraic error, read off the Newton correction, is within its share of
+    ObjectiveTolerance, and AdaptationTarget = "Objective" drives the degree and
+    the mesh from the end-of-solve discretisation estimate (docs/running.rst,
+    docs/adaptivity.rst). What no criterion yet does is give up: "stop here, this
+    cannot beat the incumbent". estimateObjective() is callable at any point and
+    leaves alpha and the factorised blocks as it found them, so a continuation
+    step can ask it, but solveSteadyState has no exit for that answer.
+    SteadyOutcome records which exit was taken and the estimate is filled before
+    a failure throws, so a caught failure carries a usable partial answer, and
+    MaxContinuationSteps plus continueSteadyState() turn that into a workable
+    slice-and-inspect loop: a solve cut short resumes at the state and the
+    pseudo-time step it reached, at no measured cost in continuation steps. That is enough for a caller willing
     to look between slices. A clean early return from *inside* a step still needs
     adding, along with whatever criterion would drive it.
 
@@ -659,10 +663,6 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     show up in them. SystemSolverMatrixTests.cpp covers the layout with two
     scalars and one aux, and ScalarJacobianTests.cpp with three scalars, but
     neither measures a rate.
-
-  - Spatial adjoint parameters with Superconvergent = true currently throw. They
-    index the parameter vector by node, so the star node set would redefine how
-    many parameters there are.
 
 
 The regression suite compares only `u`, never the `q`, `sigma` and `u_star` that

@@ -1,12 +1,12 @@
 // Tests for AdjointProblem's defaults and for the adjoint derivative vectors
 // SystemSolver builds from them.
 //
-// Context worth knowing before reading: end-to-end adjoint output is currently
-// dead -- WriteAdjoints() is commented out at Solver.cpp:350 (commit 57d2652,
-// "adjoint writing doesn't work for spatial adjoints"), so no run emits the
-// gradients and both the regression and Python suites skip their adjoint
-// comparison. That makes unit coverage the *only* thing standing behind this
-// machinery, and the existing AdjointTests.cpp only ever asserts that
+// Context worth knowing before reading: no reference file in either suite
+// carries adjoint output -- it is written only under WriteAdjoints = true, and
+// no regression configuration sets it -- so both the regression and Python
+// suites skip their adjoint comparison. That makes unit coverage and the Python
+// gradient checks the things standing behind this machinery, and the existing
+// AdjointTests.cpp only ever asserts that
 // dGdq_Vec/dGdsigma_Vec/dGdaux_Vec are zero -- true for AdjointTestProblem,
 // whose integrand genuinely has no q, sigma or phi dependence, but vacuous as
 // a test. The mock here gives all four a nonzero derivative.
@@ -352,6 +352,21 @@ BOOST_AUTO_TEST_CASE(dgfndp_over_a_global_state_is_python_only_and_says_so)
     GlobalState states = makeStates(2, 1, 2, 1);
     const auto pts = makePoints(static_cast<Index>(states.size()));
     BOOST_CHECK_THROW(adj.dgFndp(0, states, pts), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(dscalarg_dp_has_no_default_and_says_so)
+{
+    // A scalar constraint's parameter derivative has no default of zero: the
+    // solver asks for it only when the system has scalars, and an adjoint
+    // problem that has not said how its constraints depend on the parameters
+    // must stop the gradient rather than drop a term from it.
+    MockAdjoint adj;
+    GlobalState states = makeStates(2, 1, 2, 1);
+    const auto pts = makePoints(static_cast<Index>(states.size()));
+    const Values weights = Values::Ones(static_cast<Index>(states.size()));
+    const Matrix phiBoundary = Matrix::Zero(2, 2);
+    BOOST_CHECK_THROW(adj.dScalarG_dp(0, states, states, pts, weights, phiBoundary, 0.0),
+                      std::logic_error);
 }
 
 // -------------------------------------------------------- batched defaults --

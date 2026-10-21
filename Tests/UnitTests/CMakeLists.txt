@@ -32,6 +32,7 @@
 
 set(MANTA_TEST_SOURCES
   AFnTests.cpp
+  AdjointOnDemandTests.cpp
   AdjointProblemTests.cpp
   AdjointTests.cpp
   AutodiffAuxTests.cpp
@@ -43,7 +44,9 @@ set(MANTA_TEST_SOURCES
   DGSolnTests.cpp
   DGTests.cpp
   DegreeAdaptationTests.cpp
+  DiscretisationEstimateTests.cpp
   EvaluationPlanTests.cpp
+  ExplicitTimeDerivativeTests.cpp
   FieldAdjointTests.cpp
   FieldDoFLayoutTests.cpp
   FieldJacobianTests.cpp
@@ -54,6 +57,8 @@ set(MANTA_TEST_SOURCES
   IntegratorTest.cpp
   LocalTauTests.cpp
   MeshAdaptationTests.cpp
+  ObjectiveAdaptationTests.cpp
+  ObjectiveSteadyTests.cpp
   ParallelFillTests.cpp
   MMSAuxScalarTests.cpp
   MMSConvergenceTests.cpp

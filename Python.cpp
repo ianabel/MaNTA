@@ -156,6 +156,36 @@ PYBIND11_MODULE(_manta, m) {
   m.def("getNodes",
         py::overload_cast<Position, Position, Index, unsigned int>(&getNodes),
         py::return_value_policy::reference, "Get the points of a grid");
+  m.def("getPhysicsNodes",
+        py::overload_cast<const std::vector<double> &, unsigned int, bool>(
+            &getPhysicsNodes),
+        py::arg("cellBoundaries"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "The points the physics is evaluated at, and a spatial adjoint "
+        "parameter defined: the k+1 basis nodes per cell, or the k+2 star "
+        "nodes with the superconvergent scheme");
+  m.def("getPhysicsNodes",
+        py::overload_cast<Position, Position, Index, unsigned int, bool>(
+            &getPhysicsNodes),
+        py::arg("x_l"), py::arg("x_u"), py::arg("nCells"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "The points the physics is evaluated at, and a spatial adjoint "
+        "parameter defined: the k+1 basis nodes per cell, or the k+2 star "
+        "nodes with the superconvergent scheme");
+  m.def("getPhysicsWeights",
+        py::overload_cast<const std::vector<double> &, unsigned int, bool>(
+            &getPhysicsWeights),
+        py::arg("cellBoundaries"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "One quadrature weight per point getPhysicsNodes returns: weights . g "
+        "is the objective MaNTA reports for g sampled there");
+  m.def("getPhysicsWeights",
+        py::overload_cast<Position, Position, Index, unsigned int, bool>(
+            &getPhysicsWeights),
+        py::arg("x_l"), py::arg("x_u"), py::arg("nCells"), py::arg("k"),
+        py::arg("superconvergent") = false,
+        "One quadrature weight per point getPhysicsNodes returns: weights . g "
+        "is the objective MaNTA reports for g sampled there");
 
   // A physics case describes itself as data, in Python exactly as in C++. This
   // replaces setting self.nVars / self.isUpperDirichlet after construction,
@@ -354,7 +384,8 @@ PYBIND11_MODULE(_manta, m) {
       .value("FieldCoupling", EvaluationKind::FieldCoupling)
       .value("Adjoint", EvaluationKind::Adjoint)
       .value("InitialProjection", EvaluationKind::InitialProjection)
-      .value("MassMatrix", EvaluationKind::MassMatrix);
+      .value("MassMatrix", EvaluationKind::MassMatrix)
+      .value("DiscretisationEstimate", EvaluationKind::DiscretisationEstimate);
 
   py::enum_<EvaluationEntry>(m, "EvaluationEntry")
       .value("ComputePhysics", EvaluationEntry::ComputePhysics)
@@ -372,7 +403,8 @@ PYBIND11_MODULE(_manta, m) {
       .value("PerContinuationStep", EvaluationCadence::PerContinuationStep)
       .value("PerAdjointSolve", EvaluationCadence::PerAdjointSolve)
       .value("OncePerRun", EvaluationCadence::OncePerRun)
-      .value("OncePerSolver", EvaluationCadence::OncePerSolver);
+      .value("OncePerSolver", EvaluationCadence::OncePerSolver)
+      .value("PerObjectiveEstimate", EvaluationCadence::PerObjectiveEstimate);
 
   auto positions = [](std::vector<Position> const &x) {
     return py::array_t<double>(static_cast<py::ssize_t>(x.size()), x.data());
@@ -476,6 +508,13 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSigmaFn_dGeometry", &TransportSystem::dSigmaFn_dGeometry)
       .def("dSources_dGeometry", &TransportSystem::dSources_dGeometry)
       .def("dAuxG_dGeometry", &TransportSystem::dAuxG_dGeometry)
+      // The explicit time derivatives, zero unless a case overrides them; see
+      // TransportSystem.hpp.
+      .def("dSigmaFn_dt", &TransportSystem::dSigmaFn_dt)
+      .def("dSources_dt", &TransportSystem::dSources_dt)
+      .def("dAuxG_dt", &TransportSystem::dAuxG_dt)
+      .def("dLowerBoundary_dt", &TransportSystem::dLowerBoundary_dt)
+      .def("dUpperBoundary_dt", &TransportSystem::dUpperBoundary_dt)
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -552,6 +591,7 @@ PYBIND11_MODULE(_manta, m) {
       .def("dSources", &AdjointProblem::dSources)
       .def("dAux", &AdjointProblem::dAux)
       .def("dAux_dp", &AdjointProblem::dAux_dp)
+      .def("dScalarG_dp", &AdjointProblem::dScalarG_dp)
       .def("computeUpperBoundarySensitivity",
            &AdjointProblem::computeUpperBoundarySensitivity)
       .def("computeLowerBoundarySensitivity",
@@ -675,7 +715,10 @@ PYBIND11_MODULE(_manta, m) {
       "OutOfSteps: a budget was spent, MaxContinuationSteps or MaxRejectedSteps. "
       "Not a failure: the state reached is the last accepted one, and "
       "continue_steady() resumes from it and the pseudo-time step.\n"
-      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n\n"
+      "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n"
+      "Stalled: SteadyStateTest = Objective only. The Newton correction reached "
+      "round-off with an objective's estimated error still above its tolerance; "
+      "the state is as converged as the solve can make it.\n\n"
       "An IntEnum, so a traced outcome compares with the members under jit: "
       "jnp.equal(outcome, SteadyOutcome.Converged).")
       .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
@@ -688,6 +731,11 @@ PYBIND11_MODULE(_manta, m) {
              "continue_steady() resumes from it and the pseudo-time step.")
       .value("SolverFailed", SystemSolver::SteadyOutcome::SolverFailed,
              "KINSol failed in a way pseudo-transient damping cannot answer.")
+      .value("Stalled", SystemSolver::SteadyOutcome::Stalled,
+             "SteadyStateTest = Objective only: the Newton correction reached round-off "
+             "with an objective's estimated error still above its tolerance. The state "
+             "is as converged as the solve can make it; an objective near zero needs "
+             "ObjectiveAbsoluteTolerance.")
       .finalize();
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
@@ -715,6 +763,22 @@ PYBIND11_MODULE(_manta, m) {
       .def("G", &PyRunner::G)
       .def("getAdjointGradients", &PyRunner::getAdjointGradients)
       .def("objectiveEstimate", &PyRunner::objectiveEstimate)
+      .def("solve_adjoint", &PyRunner::solve_adjoint, py::arg("g") = py::none(),
+           "Solve the adjoint J^T z = dG/dy at the current state for objective "
+           "g, or for every objective when g is None, from the last Jacobian "
+           "build and without calling the physics. Read the answer with "
+           "adjoint_state() and objective_sensitivity().")
+      .def("adjoint_state", &PyRunner::adjoint_state, py::arg("g"),
+           "The adjoint state z of objective g, as nodal arrays per variable, "
+           "the traces and the field DOFs. Needs solve_adjoint() at this state.")
+      .def("objective_gradient", &PyRunner::objective_gradient, py::arg("g"),
+           "dG/dy for objective g at the current state, in adjoint_state()'s "
+           "layout: the right-hand side of the adjoint solve.")
+      .def("objective_sensitivity", &PyRunner::objective_sensitivity,
+           py::arg("g"),
+           "dG/dGamma for objective g: how G moves with the flux and the "
+           "sources the case returns, per physics node and variable. Needs "
+           "solve_adjoint() at this state.")
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)

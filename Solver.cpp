@@ -71,6 +71,16 @@ void SystemSolver::initialize()
 	// Jacobian build.
 	haveJacobianKappa = false;
 
+	// Nor the derivatives the last run's Jacobian builds left for an adjoint
+	// solve to reuse, nor the adjoint states solved from them: a reused solver
+	// may be running a case whose parameters have changed, at a state that
+	// happens to match.
+	jacobianDerivatives.valid = false;
+	adjointDerivatives.valid = false;
+	fieldBlocksHoldAdjoint = false;
+	adjointSolutions.clear();
+	adjointSolutionState.clear();
+
 	// A tau frozen per continuation step is set by the continuation loop, and a
 	// time march has none: tau would stay at the initial condition's for the
 	// whole run.
@@ -109,6 +119,23 @@ void SystemSolver::initialize()
 			"{} cells at k = {} hand the physics batches of {} points on every residual or "
 			"Jacobian build, past MaxPhysicsBatch = {}. Use fewer cells or a lower degree.",
 			nCells, k, plan->largestRecurringBatch(), maxPhysicsBatch));
+	// The discretisation estimate, checked here rather than at the end of the
+	// first solve it would make: what it refuses is fixed by now, and its batch,
+	// once a steady solve rather than every residual, is still a batch the case
+	// was promised it would not get.
+	if (estimateDiscretisation && adjointProblem != nullptr)
+	{
+		if (nScalars > 0 || fieldModel || k < 1 || tauScaling != TauScaling::Constant)
+			throw std::invalid_argument(
+				"EstimateDiscretisationError cannot estimate this run: it needs "
+				"PolynomialDegree >= 1, a constant tau, and no global scalars or field model.");
+		for (auto const &site : plan->sitesOf(EvaluationKind::DiscretisationEstimate))
+			if (maxPhysicsBatch > 0 && site.batchSize() > maxPhysicsBatch)
+				throw std::invalid_argument(std::format(
+					"EstimateDiscretisationError hands the physics a batch of {} points at the "
+					"end of each steady solve, past MaxPhysicsBatch = {}.",
+					site.batchSize(), maxPhysicsBatch));
+	}
 	problem->deliverEvaluationPlan(plan);
 
 	if (!initialised)
@@ -608,6 +635,20 @@ void SystemSolver::initialize()
 		retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
 		if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
 			throw std::runtime_error("Could not retrieve the corrected initial condition");
+
+		// A projected restart resumes mid-run, where the algebraic components are
+		// moving and its first step is the output cadence, so the zero algebraic
+		// y' above costs a run of error-test failures -- ten of them, i.e. the
+		// run, at a cadence of a fifth of the time already elapsed. A copied
+		// restart takes y' from the file instead (setInitialConditions), and a
+		// cold start lets IDA choose a first step small enough not to notice.
+		if (restarting && restartWasProjected)
+		{
+			consistentAlgebraicDerivatives(Y, dYdt, t0);
+			retval = IDAReInit(IDA_mem, t0, Y, dYdt);
+			if (ErrorChecker::check_retval(&retval, "IDAReInit", 1))
+				throw std::runtime_error("Could not hand IDA the consistent algebraic derivatives");
+		}
 	}
 
 	if (writeDatFile)
@@ -644,10 +685,17 @@ void SystemSolver::initialize()
 	tout = t0;
 	tret = t0;
 
-	if (problem->isRestarting()) // If restarting, try to continue at same delta t
-	{
+	// A restart's first step is a guess at the output cadence. It is not a step
+	// the previous run took -- the file records none -- and a first-order step
+	// that long usually fails the error test a few times before IDA has cut it to
+	// size. That is cheap now that a copied restart resumes a consistent y': the
+	// error estimate falls like h^2, a factor of 16 per cut, so even a large
+	// misjudgement is a handful of residuals. Measured against leaving the first
+	// step to IDA, whose own estimate starts far smaller and climbs, this is the
+	// cheaper of the two -- 70 residuals against 78 and 8 Jacobian builds
+	// against 13 on AuxVarTest, 20 against 32 and 4 against 8 on MatTest.
+	if (problem->isRestarting())
 		IDASetInitStep(IDA_mem, dt);
-	}
 	if (dt0 > 0.0)
 		IDASetInitStep(IDA_mem, dt0);
 
@@ -687,6 +735,118 @@ double SystemSolver::weightedResidualNorm(double t, N_Vector Y_in, N_Vector dYdt
 
 	N_VDestroy(wgtLocal);
 	return norm;
+}
+
+// The algebraic components of y' at a consistent state, from differentiating the
+// algebraic rows G(t, y) = 0 along the trajectory: G_y y' = -G_t, i.e.
+// G_z z' = -G_t - G_u u' for the algebraic unknowns z given the differential
+// derivatives u'. IDA_YA_YDP_INIT computes algebraic values and differential
+// derivatives and leaves the algebraic derivatives where it found them, so a
+// state IDACalcIC has just made consistent still has z' = 0 -- which tells IDA's
+// predictor those components are not moving, and makes the first step's error
+// estimate h |z'| rather than h^2.
+//
+// Solved exactly, with the coupled Jacobian solve J(alpha) = F_y + alpha F_y' --
+// whose algebraic rows are exactly G_y, whatever the case couples them to (aux,
+// global scalars, a field model), since F_y' vanishes there -- and iterative
+// refinement on the differential rows:
+//
+//   * J(alpha) w = [alpha M u' ; -G_t], M = F_y' on the differential rows. The
+//     algebraic rows hold exactly; the differential ones pin w_d to u' only up to
+//     the F_d,y w term the right-hand side leaves out.
+//   * That defect, delta = u' - w_d, is known exactly, because the solution
+//     sought has w_d = u'. J(alpha) c = [alpha M delta ; 0] corrects it while
+//     leaving the algebraic rows satisfied, so w + c is again an exact solution of
+//     them with a smaller defect -- by a factor of order 1 / (alpha tau), tau the
+//     fastest differential time scale.
+//
+// Iterated to round-off, so alpha sets only how many corrections it takes, never
+// the answer. M v is F(t, Y, v) - F(t, Y, 0), exact for a residual affine in y'.
+// G_t is the case's own explicit time derivative (explicitTimeDerivative), so
+// it is exact, and identically zero for a case with no explicit time
+// dependence. The cost is one Jacobian build, one solve per refinement, and two
+// residuals plus one per refinement. Only the algebraic components are taken;
+// the differential ones stay as IDACalcIC computed them.
+void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, Time tc)
+{
+	N_Vector ud = N_VClone(Yc), zero = N_VClone(Yc), F0 = N_VClone(Yc), Fv = N_VClone(Yc),
+			 rhs = N_VClone(Yc), w = N_VClone(Yc), c = N_VClone(Yc), delta = N_VClone(Yc);
+
+	double const *isDiff = N_VGetArrayPointer(id);
+	const sunindextype n = N_VGetLength(Yc);
+
+	// u': the differential components of dYdt, the algebraic ones zero.
+	N_VProd(dYdtc, id, ud);
+	N_VConst(0.0, zero);
+	residual(tc, Yc, zero, F0);
+
+	// alpha M v on the differential rows, rhsAlg on the algebraic ones.
+	auto assemble = [&](N_Vector v, N_Vector algebraic)
+	{
+		residual(tc, Yc, v, Fv);
+		N_VLinearSum(1.0, Fv, -1.0, F0, rhs);
+		N_VScale(alphaLarge(), rhs, rhs);
+		double *r = N_VGetArrayPointer(rhs);
+		double const *a = algebraic ? N_VGetArrayPointer(algebraic) : nullptr;
+		for (sunindextype i = 0; i < n; ++i)
+			if (isDiff[i] == 0.0)
+				r[i] = a ? a[i] : 0.0;
+	};
+
+	// -G_t on the algebraic rows, from the case's own d/dt hooks.
+	N_Vector minusGt = N_VClone(Yc);
+	N_VConst(0.0, minusGt);
+	{
+		DGSoln Yh(nVars, grid, k, N_VGetArrayPointer(Yc), nScalars, nAux, nField);
+		DGSoln dYh(nVars, grid, k, N_VGetArrayPointer(ud), nScalars, nAux, nField);
+		DGSoln Gt(nVars, grid, k, N_VGetArrayPointer(minusGt), nScalars, nAux, nField);
+		explicitTimeDerivative(Yh, dYh, tc, Gt);
+	}
+	N_VScale(-1.0, minusGt, minusGt);
+
+	const double alphaOnEntry = alpha;
+	setAlpha(alphaLarge());
+	setJacTime(tc);
+	updateBoundaryConditions(tc);
+	setJacEvalY(Yc, ud);
+	updateMatricesForJacSolve();
+
+	assemble(ud, minusGt);
+	solveJacEq(rhs, w);
+
+	const double scale = std::max(N_VMaxNorm(ud), 1e-300);
+	double defect = 0.0;
+	int refinements = 0;
+	for (;;)
+	{
+		// delta = u' - w_d on the differential components, zero elsewhere.
+		N_VLinearSum(1.0, ud, -1.0, w, delta);
+		N_VProd(delta, id, delta);
+		defect = N_VMaxNorm(delta) / scale;
+		if (defect <= 1e-14 || refinements == 8)
+			break;
+		assemble(delta, nullptr);
+		solveJacEq(rhs, c);
+		N_VLinearSum(1.0, w, 1.0, c, w);
+		++refinements;
+	}
+	setAlpha(alphaOnEntry);
+	consistentDerivativeRefinements = refinements;
+	consistentDerivativeDefect = defect;
+	if (defect > 1e-14)
+		logmsg<LOG_LEVEL::WARNING>(
+			"The algebraic derivatives at the restart were refined {} times and the differential "
+			"rows still miss u' by {:g} relative; the algebraic y' handed to IDA carries that error.",
+			refinements, defect);
+
+	double *dy = N_VGetArrayPointer(dYdtc);
+	double const *wv = N_VGetArrayPointer(w);
+	for (sunindextype i = 0; i < n; ++i)
+		if (isDiff[i] == 0.0)
+			dy[i] = wv[i];
+
+	for (N_Vector v : {ud, zero, F0, Fv, rhs, w, c, delta, minusGt})
+		N_VDestroy(v);
 }
 
 void SystemSolver::integrate(double tFinal)
@@ -951,7 +1111,8 @@ void SystemSolver::finishRun()
 		try
 		{
 			runAdjointSolve();
-			// WriteAdjoints();
+			if (writeAdjoints && writeOutput)
+				WriteAdjoints();
 		}
 		catch (std::exception const &e)
 		{
@@ -1104,10 +1265,10 @@ void SystemSolver::runAdjointSolve()
 	// This used to refuse a field model outright, because the adjoint matrices
 	// carried neither geometry nor a transpose of the coupling and so would have
 	// returned a silently wrong gradient beside a perfectly good G. Both are now
-	// here: initializeMatricesForAdjointSolve fills geometry before it evaluates
-	// anything and stores A1^T and A2^T beside M^T, and solveAdjointState
-	// eliminates them exactly (FieldSolve = exact) or sweeps to a checked
-	// backward error that *throws* if it is not reached.
+	// here: the adjoint fills geometry before it evaluates anything
+	// (physicsNodesAt), assembleAdjointOperator stores A1^T and A2^T beside M^T,
+	// and solveAdjointState eliminates them exactly (FieldSolve = exact) or
+	// sweeps to a checked backward error that *throws* if it is not reached.
 	//
 	// Two limits survive the lifting and are deliberate rather than overlooked.
 	// An objective whose integrand reads State::geom directly loses its dG/dpsi

@@ -273,6 +273,13 @@ public:
   virtual Value LowerBoundary(Index i, Time t) const { return boundaryFallback(uL, i, "LowerBoundary", "uL"); };
   virtual Value UpperBoundary(Index i, Time t) const { return boundaryFallback(uR, i, "UpperBoundary", "uR"); };
 
+  // d/dt of the two above. Zero by default, which is right for boundary data
+  // that does not depend on time; a case whose data does reports the
+  // derivative here, as it reports every other derivative. See the explicit
+  // time derivatives of the physics below for what reads it.
+  virtual Value dLowerBoundary_dt(Index, Time) const { return 0.0; }
+  virtual Value dUpperBoundary_dt(Index, Time) const { return 0.0; }
+
   // Not virtual: the boundary *kind* is part of what a case is, and lives in the
   // spec. Only the boundary *values* above depend on t and stay overridable.
   // This is also what retired the pair of uninitialised bools these used to
@@ -351,6 +358,50 @@ public:
     return m_spec.anySourceReadsTimeDerivatives();
   }
 
+
+  /*
+      The explicit time dependence of the flux, the sources and the auxiliary
+      functions: their d/dt with every argument but t held fixed. Zero by
+      default, which is right for a case whose formulas do not depend on time
+      explicitly -- most of them. A case whose do reports the derivative here,
+      as it reports d/du, d/dq and the rest.
+
+      What reads them is the solver's dF/dt at fixed state
+      (SystemSolver::explicitTimeDerivative), whose algebraic rows are the G_t
+      in G_z z' = -G_t - G_u u': the equation for the algebraic components of
+      y' at a consistent state, solved on a projected restart. Leaving one zero
+      that is not makes those derivatives inexact, which costs the first step
+      error-test failures and nothing else.
+  */
+  virtual Value dSigmaFn_dt(Index, const State &, Position, Time) { return 0.0; }
+  virtual Value dSources_dt(Index, const State &, Position, Time) { return 0.0; }
+  virtual Value dAuxG_dt(Index, const State &, Position, Time) { return 0.0; }
+
+  // The batched form, in ComputePhysics' layout. Serial over the pointwise
+  // hooks above, for the reason the batched wrappers below are.
+  virtual PhysicsOutput ComputePhysicsTimeDerivatives(GlobalState const &states,
+                                                      std::vector<Position> const &abscissae, Time time)
+  {
+    PhysicsOutput out;
+    out[0].resize(nVars);
+    out[1].resize(nVars);
+    out[2].resize(nAux);
+    for (auto &p : out)
+      for (auto &v : p)
+        v.setZero(states.size());
+    for (size_t j = 0; j < states.size(); ++j)
+    {
+      const State s = states[j];
+      for (Index i = 0; i < nVars; ++i)
+      {
+        out[0][i](j) = dSigmaFn_dt(i, s, abscissae[j], time);
+        out[1][i](j) = dSources_dt(i, s, abscissae[j], time);
+      }
+      for (Index i = 0; i < nAux; ++i)
+        out[2][i](j) = dAuxG_dt(i, s, abscissae[j], time);
+    }
+    return out;
+  }
 
  /*
  * Compute all fluxes and sources 
@@ -555,6 +606,14 @@ public:
     return 0.0;
   }
 
+  // d/dt of ScalarG with every other argument held fixed: its explicit time
+  // dependence, zero by default. See dSigmaFn_dt.
+  virtual Value dScalarG_dt(Index, GlobalState const &, GlobalState const &, std::vector<Position> const &,
+                            Values const &, Matrix const &, Time)
+  {
+    return 0.0;
+  }
+
   /*
       dG_s/d(state) and dG_s/d(state_dot), for every s at once.
 
@@ -688,6 +747,17 @@ public:
     return;
   }
 
+  // What the solver calls: initialiseDiagnostics with the state the run starts
+  // from available, through initialDiagnosticState(), for a diagnostic whose t0
+  // slice is a function of it as every later slice writeDiagnostics writes is.
+  // Not a second virtual: a case overriding the one above keeps being called.
+  void initialiseDiagnosticsAt(DGSoln const &y, DGSoln const &dydt, double t, NetCDFIO &nc)
+  {
+    m_initialDiagnosticState = {&y, &dydt, t};
+    initialiseDiagnostics(nc);
+    m_initialDiagnosticState = {};
+  }
+
   virtual void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, double t, NetCDFIO &nc, size_t tIndex)
   {
     writeDiagnostics(y, t, nc, tIndex);
@@ -735,6 +805,21 @@ private:
   }
 
 protected:
+  struct InitialDiagnosticState
+  {
+    DGSoln const *y = nullptr;
+    DGSoln const *dydt = nullptr;
+    double t = 0.0;
+  };
+  /// The state initialiseDiagnosticsAt was called with, while it runs; empty
+  /// otherwise (a direct initialiseDiagnostics call has no state to offer).
+  InitialDiagnosticState const &initialDiagnosticState() const { return m_initialDiagnosticState; }
+
+private:
+  InitialDiagnosticState m_initialDiagnosticState;
+
+protected:
+
   bool restarting = false;
   std::vector<double> restart_Y_data;
   std::vector<double> restart_dYdt_data;

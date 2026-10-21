@@ -25,10 +25,11 @@
 constexpr std::array<std::string_view, 2> required_method_names = {"SigmaFn", "Sources"};
 
 // Looked up, used when present, and silently zero when not.
-constexpr std::array<std::string_view, 9> optional_derivative_names = {
+constexpr std::array<std::string_view, 12> optional_derivative_names = {
     "dSigmaFn_du",        "dSigmaFn_dq",        "dSources_du",
     "dSources_dq",        "dSources_dsigma",    "dSources_dudot",
-    "dSigmaFn_dGeometry", "dSources_dGeometry", "dAuxG_dGeometry"};
+    "dSigmaFn_dGeometry", "dSources_dGeometry", "dAuxG_dGeometry",
+    "dSigmaFn_dt",        "dSources_dt",        "dAuxG_dt"};
 
 constexpr std::array<std::string_view, 2> required_method_names_vectorized = {
     "ComputePhysics", "ComputePhysicsDerivatives"};
@@ -235,6 +236,38 @@ public:
   Value UpperBoundary(Index i, Time t) const override {
     PYBIND11_OVERRIDE(Value, TransportSystem, UpperBoundary, i, t);
   };
+  // Optional, zero when absent, like the base.
+  Value dLowerBoundary_dt(Index i, Time t) const override {
+    PYBIND11_OVERRIDE(Value, TransportSystem, dLowerBoundary_dt, i, t);
+  };
+  Value dUpperBoundary_dt(Index i, Time t) const override {
+    PYBIND11_OVERRIDE(Value, TransportSystem, dUpperBoundary_dt, i, t);
+  };
+
+  // The explicit time derivatives of the pointwise hooks. Absent means
+  // identically zero, which is the base's answer too.
+  Value timeDerivative(std::string_view name, Index i, const State &s, Position x, Time t) {
+    if (!initialized)
+      initializeOverrides();
+    try {
+      py::gil_scoped_acquire gil;
+      if (auto *f = optional_override(name))
+        return (*f)(i, view(s), x, t).cast<Value>();
+      return 0.0;
+    } catch (const std::exception &e) {
+      throw std::runtime_error("Error occurred when trying to calculate " + std::string(name) + ": " +
+                               e.what());
+    }
+  }
+  Value dSigmaFn_dt(Index i, const State &s, Position x, Time t) override {
+    return timeDerivative("dSigmaFn_dt", i, s, x, t);
+  }
+  Value dSources_dt(Index i, const State &s, Position x, Time t) override {
+    return timeDerivative("dSources_dt", i, s, x, t);
+  }
+  Value dAuxG_dt(Index i, const State &s, Position x, Time t) override {
+    return timeDerivative("dAuxG_dt", i, s, x, t);
+  }
 
   PhysicsOutput ComputePhysics(GlobalState const &states,
                                std::vector<Position> const &abscissae,

@@ -20,7 +20,7 @@
 # on purpose, and a clean target has no business deleting those. Same reason .h5
 # is not in the pattern list -- the DESC equilibria under
 # python-physics/stellarator/ are expensive -- and .pkl is not either:
-# python-physics/mirror-plasma/land.pkl is generated once by landremann.py, not
+# python-physics/mirror-plasma/land.pkl is generated once by landreman.py, not
 # by a run.
 
 set(_dirs

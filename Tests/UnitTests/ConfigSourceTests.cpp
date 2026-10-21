@@ -319,6 +319,220 @@ BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_field_solve_settings_throug
     BOOST_TEST(sys.getFieldSolveMaxAdjointSweeps() == 9);
 }
 
+BOOST_AUTO_TEST_CASE(write_adjoints_reaches_the_solver_and_needs_solve_adjoint)
+{
+    // The adjoint states WriteAdjoints writes are the ones the end-of-run adjoint
+    // solve leaves, so without solveAdjoint there is nothing to write -- refused
+    // rather than writing an empty group.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+    BOOST_TEST(!load(minimal).WriteAdjoints);
+    BOOST_TEST(!sys.getWriteAdjoints());
+
+    applySolverConfig(load(minimal + "solveAdjoint = true\nWriteAdjoints = true\n"), sys);
+    BOOST_TEST(sys.getWriteAdjoints());
+
+    SystemSolver other(grid, 1, &problem);
+    BOOST_CHECK_THROW(applySolverConfig(load(minimal + "WriteAdjoints = true\n"), other),
+                      std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(estimate_discretisation_error_reaches_the_solver_and_what_it_needs)
+{
+    // It is made alongside the objective estimate at the end of a steady solve,
+    // for the adjoint problem solveAdjoint attaches, so each of those missing is
+    // refused rather than silently estimating nothing.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+    BOOST_TEST(!load(minimal).EstimateDiscretisationError);
+    BOOST_TEST(!sys.getEstimateDiscretisationError());
+
+    applySolverConfig(load(minimal + "solveAdjoint = true\nEstimateDiscretisationError = true\n"),
+                      sys);
+    BOOST_TEST(sys.getEstimateDiscretisationError());
+
+    for (std::string const &extra :
+         {std::string("EstimateDiscretisationError = true\n"),
+          std::string("solveAdjoint = true\nEstimateDiscretisationError = true\n"
+                      "EstimateObjectiveOnFinish = false\n"),
+          std::string("solveAdjoint = true\nEstimateDiscretisationError = true\n"
+                      "SteadyStateSolver = \"TimeMarch\"\n")})
+    {
+        SystemSolver other(grid, 1, &problem);
+        BOOST_CHECK_THROW(applySolverConfig(load(minimal + extra), other), std::invalid_argument);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_objective_tolerances_reach_the_solver_from_either_source)
+{
+    // One value for every objective or one each, on both readers, and the
+    // budget as its [discretisation, algebraic] pair.
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    SystemSolver sys(grid, 1, &problem);
+    applySolverConfig(load(minimal + "solveAdjoint = true\nSteadyStateTest = \"Objective\"\n"
+                                     "ObjectiveTolerance = [1e-2, 1e-4]\n"
+                                     "ObjectiveAbsoluteTolerance = 1e-9\n"
+                                     "ObjectiveBudget = [0.25, 0.75]\n"),
+                      sys);
+    BOOST_TEST((sys.getSteadyTest() == SystemSolver::SteadyTest::Objective));
+    BOOST_TEST(sys.getObjectiveTolerance() == (std::vector<double>{1e-2, 1e-4}),
+               boost::test_tools::per_element());
+    BOOST_TEST(sys.getObjectiveAbsoluteTolerance() == (std::vector<double>{1e-9}),
+               boost::test_tools::per_element());
+    BOOST_TEST(sys.getObjectiveBudget().first == 0.25);
+    BOOST_TEST(sys.getObjectiveBudget().second == 0.75);
+
+    MapConfigSource map_src;
+    map_src.values = {
+        {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
+        {"LowerBoundary", 0.0}, {"UpperBoundary", 1.0},
+        {"OutputFilename", std::string("objective")},
+        {"solveAdjoint", true}, {"SteadyStateTest", std::string("Objective")},
+        {"ObjectiveTolerance", std::vector<double>{1e-2, 1e-4}},
+        {"ObjectiveAbsoluteTolerance", std::vector<double>{1e-9}},
+        {"ObjectiveBudget", std::vector<double>{0.25, 0.75}},
+    };
+    const auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
+    BOOST_TEST(fromMap.ObjectiveTolerance == (std::vector<double>{1e-2, 1e-4}),
+               boost::test_tools::per_element());
+    BOOST_TEST(fromMap.ObjectiveAbsoluteTolerance == (std::vector<double>{1e-9}),
+               boost::test_tools::per_element());
+    BOOST_TEST(fromMap.ObjectiveBudget == (std::vector<double>{0.25, 0.75}),
+               boost::test_tools::per_element());
+
+    // The defaults: 1e-3 relative, no floor, half and half.
+    SystemSolver other(grid, 1, &problem);
+    applySolverConfig(load(minimal), other);
+    BOOST_TEST(other.getObjectiveTolerance() == (std::vector<double>{1e-3}),
+               boost::test_tools::per_element());
+    BOOST_TEST(other.getObjectiveAbsoluteTolerance() == (std::vector<double>{0.0}),
+               boost::test_tools::per_element());
+    BOOST_TEST(other.getObjectiveBudget().second == 0.5);
+}
+
+BOOST_AUTO_TEST_CASE(the_objective_test_refuses_what_cannot_work)
+{
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    auto refused = [&](std::string const &body, std::string const &needle)
+    {
+        SystemSolver sys(grid, 1, &problem);
+        try
+        {
+            applySolverConfig(load(minimal + body), sys);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            BOOST_TEST_MESSAGE(e.what());
+            return std::string(e.what()).find(needle) != std::string::npos;
+        }
+        return false;
+    };
+
+    // No objective to stop on.
+    BOOST_TEST(refused("SteadyStateTest = \"Objective\"\n", "solveAdjoint"));
+    // Tolerances that nothing reads.
+    BOOST_TEST(refused("ObjectiveTolerance = 1e-2\n", "ObjectiveTolerance"));
+    BOOST_TEST(refused("solveAdjoint = true\nObjectiveAbsoluteTolerance = 1e-6\n",
+                       "ObjectiveAbsoluteTolerance"));
+    BOOST_TEST(refused("SteadyStateTest = \"Residual\"\nObjectiveBudget = [0.5, 0.5]\n",
+                       "ObjectiveBudget"));
+    // A time march stops on dy/dt.
+    BOOST_TEST(refused("solveAdjoint = true\nSteadyStateTest = \"Objective\"\n"
+                       "SteadyStateSolver = \"TimeMarch\"\n",
+                       "time march"));
+    // A budget that is not two shares of one.
+    const std::string objective = "solveAdjoint = true\nSteadyStateTest = \"Objective\"\n";
+    BOOST_TEST(refused(objective + "ObjectiveBudget = [1.0]\n", "ObjectiveBudget"));
+    BOOST_TEST(refused(objective + "ObjectiveBudget = [0.5, 0.6]\n", "ObjectiveBudget"));
+    BOOST_TEST(refused(objective + "ObjectiveBudget = [-0.5, 1.5]\n", "ObjectiveBudget"));
+    // Negative tolerances, and two lists of different lengths.
+    BOOST_TEST(refused(objective + "ObjectiveTolerance = -1e-3\n", "ObjectiveTolerance"));
+    BOOST_TEST(refused(objective + "ObjectiveTolerance = [1e-3, 1e-3]\n"
+                                   "ObjectiveAbsoluteTolerance = [0.0, 0.0, 0.0]\n",
+                       "agree"));
+}
+
+BOOST_AUTO_TEST_CASE(the_objective_adaptation_target_takes_what_it_needs_and_refuses_the_rest)
+{
+    const std::string steady = "SteadyStateSolve = true\n";
+    const std::string target = steady + "DegreeAdaptation = true\nsolveAdjoint = true\n"
+                                        "AdaptationTarget = \"Objective\"\n";
+
+    // The default is the solution target, and it reads nothing new.
+    const SolverConfig plain = load(minimal + steady + "DegreeAdaptation = true\n");
+    BOOST_TEST(plain.AdaptationTarget == "Solution");
+    BOOST_TEST(!plain.EstimateDiscretisationError);
+    BOOST_TEST(plain.SteadyStateTest == "NewtonStep");
+
+    // The objective target turns the estimate on and makes the Objective steady
+    // test the default; a test that is named is kept, and the objective
+    // tolerances are read whichever it is.
+    const SolverConfig c = load(minimal + target + "ObjectiveTolerance = 1e-4\n");
+    BOOST_TEST(c.AdaptationTarget == "Objective");
+    BOOST_TEST(c.EstimateDiscretisationError);
+    BOOST_TEST(c.SteadyStateTest == "Objective");
+    BOOST_TEST(c.ObjectiveTolerance == (std::vector<double>{1e-4}), boost::test_tools::per_element());
+    const SolverConfig named =
+        load(minimal + target + "SteadyStateTest = \"NewtonStep\"\nObjectiveBudget = [0.8, 0.2]\n");
+    BOOST_TEST(named.SteadyStateTest == "NewtonStep");
+    BOOST_TEST(named.ObjectiveBudget == (std::vector<double>{0.8, 0.2}), boost::test_tools::per_element());
+
+    // And through the other reader, as Runner.configure gives it.
+    MapConfigSource map_src;
+    map_src.values = {
+        {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
+        {"LowerBoundary", 0.0}, {"UpperBoundary", 1.0},
+        {"OutputFilename", std::string("objective")},
+        {"DegreeAdaptation", true}, {"solveAdjoint", true},
+        {"AdaptationTarget", std::string("Objective")},
+        {"ObjectiveTolerance", std::vector<double>{1e-4}},
+    };
+    const auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
+    BOOST_TEST(fromMap.AdaptationTarget == "Objective");
+    BOOST_TEST(fromMap.EstimateDiscretisationError);
+    BOOST_TEST(fromMap.SteadyStateTest == "Objective");
+
+    auto refused = [&](std::string const &body, std::string const &needle)
+    {
+        try
+        {
+            load(minimal + body);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            BOOST_TEST_MESSAGE(e.what());
+            return std::string(e.what()).find(needle) != std::string::npos;
+        }
+        return false;
+    };
+    // Read by the drivers only.
+    BOOST_TEST(refused(steady + "AdaptationTarget = \"Objective\"\n", "neither DegreeAdaptation"));
+    BOOST_TEST(refused(steady + "AdaptationTarget = \"Solution\"\n", "neither DegreeAdaptation"));
+    BOOST_TEST(refused(steady + "DegreeAdaptation = true\nAdaptationTarget = \"Output\"\n",
+                       "\"Solution\" or \"Objective\""));
+    // The objectives are the adjoint problem's, measured at the end of each solve.
+    BOOST_TEST(refused(steady + "DegreeAdaptation = true\nAdaptationTarget = \"Objective\"\n",
+                       "solveAdjoint"));
+    BOOST_TEST(refused(target + "EstimateObjectiveOnFinish = false\n", "EstimateObjectiveOnFinish"));
+    BOOST_TEST(refused(target + "EstimateDiscretisationError = false\n",
+                       "EstimateDiscretisationError = false"));
+    // The solution target's tolerance, which would change nothing. The decay
+    // keys are read by both targets' mesh decision.
+    BOOST_TEST(refused(target + "DegreeTolerance = 1e-6\n", "DegreeTolerance"));
+    BOOST_CHECK_NO_THROW(load(minimal + target + "MeshAdaptationThreshold = 3.0\n"));
+    // A budget with no discretisation share leaves nothing to adapt to.
+    BOOST_TEST(refused(target + "ObjectiveBudget = [0.0, 1.0]\n", "discretisation share"));
+    BOOST_TEST(refused(target + "ObjectiveBudget = [1.0]\n", "ObjectiveBudget"));
+    // And without the objective target the objective tolerances are still refused
+    // under a test that does not read them.
+    BOOST_TEST(refused(steady + "DegreeAdaptation = true\nObjectiveTolerance = 1e-4\n",
+                       "ObjectiveTolerance"));
+}
+
 BOOST_AUTO_TEST_CASE(an_unrecognised_field_solve_is_rejected_rather_than_defaulted)
 {
     // As for SteadyStateSolver: a typo would otherwise silently pick a

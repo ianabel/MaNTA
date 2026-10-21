@@ -190,6 +190,22 @@ GradingDecision gradingDecision(DGSoln const &Y, Index var, double threshold,
                            neighbourMargin);
 }
 
+GradingDecision objectiveGradingDecision(GradingDecision const &decay, double ratio)
+{
+    GradingDecision d = decay;
+    d.objectiveRatio = ratio;
+    if (ratio > 1.0)
+        return d;
+
+    // Met: nothing to grade for. An end the decay could not judge is still
+    // reported so, since that is about the mesh rather than the run.
+    d.verdict = GradingVerdict::Uniform;
+    for (EndDecision *e : {&d.lowerEnd, &d.upperEnd})
+        if (e->reading == EndReading::Rough)
+            e->reading = EndReading::Smooth;
+    return d;
+}
+
 std::vector<Grid::Position> gradedMeshFor(GradingDecision const &decision,
                                           Grid const &uniform,
                                           Grid::Index gradedCells,
@@ -371,11 +387,22 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
     sample->runSolver(tFinal);
 
     // --- h: decide, and regrade ------------------------------------------------
+    //
+    // From the sample's modal decay -- and under the objective target only if the
+    // sample does not already meet its tolerance, which the discretisation
+    // estimate its steady solve made on the way out says at no further cost.
+    const bool toObjective = config.AdaptationTarget == "Objective";
     result.decision = gradingDecision(sample->solution(), var,
                                       config.MeshAdaptationThreshold,
                                       config.MeshAdaptationNeighbourMargin);
+    if (toObjective)
+        result.decision = objectiveGradingDecision(result.decision, objectiveAccuracy(*sample).ratio);
     auto const &d = result.decision;
 
+    if (toObjective)
+        std::println("  objectives: discretisation error {:.3g}x its share of ObjectiveTolerance{}",
+                     d.objectiveRatio,
+                     d.objectiveRatio > 1.0 ? "; reading the decay" : " -- met, so nothing is graded");
     std::println("  decay rate: lower end {:.3g}, interior median {:.3g}, upper end "
                  "{:.3g}; measurable up to {:.3g}",
                  d.lowerRate, d.interiorMedian, d.upperRate, d.rateCeiling);
@@ -436,10 +463,20 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
         // planned by the sample's own configuration; see layerFor below for
         // where they go.
         const Grid::Index sampleCells = uniform.getNCells();
-        const Grid::Index gradedCount = filledCellCount(
+        Grid::Index gradedCount = filledCellCount(
             [&](Grid const &g, unsigned int kk) { return sample->evaluationPlanFor(g, kk); },
             uniform, k0, std::numeric_limits<Grid::Index>::max(), config.PhysicsParallelism,
             config.MaxPhysicsBatch);
+        // The objective target estimates at every level, and that batch is not
+        // a recurring one the fill counts; see discretisationEstimateFits.
+        if (toObjective)
+            while (gradedCount > sampleCells &&
+                   !discretisationEstimateFits(
+                       sample->evaluationPlanFor(Grid(uniform.lowerBoundary(),
+                                                      uniform.upperBoundary(), gradedCount),
+                                                 k0),
+                       config.MaxPhysicsBatch))
+                --gradedCount;
         const Grid filledUniform(uniform.lowerBoundary(), uniform.upperBoundary(), gradedCount);
 
         // The layer the filled mesh grades at a given ratio. Its boundaries sit

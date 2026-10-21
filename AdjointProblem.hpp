@@ -11,7 +11,28 @@ class AdjointProblem {
 public:
   virtual ~AdjointProblem() = default;
 
-  virtual Value GFn(Index gIndex, DGSoln &y) const = 0;
+  // G = int I_h[g] dx: g evaluated at the k+1 basis nodes and its P_k
+  // interpolant integrated exactly, i.e. the interpolatory weights w of each
+  // cell dotted with g there. That is the functional dg differentiates --
+  // assembleObjectiveGradient weights the nodal dg/dZ by diag(w) -- so this
+  // and G_y are exactly a function and its derivative. An override that
+  // integrates g some other way, such as the exact integral of g(u_h), reports
+  // a different objective from the one the adjoint differentiates.
+  //
+  // Uses the batched gFn hook, whose default calls the pointwise one.
+  virtual Value GFn(Index gIndex, DGSoln &y) const {
+    const auto states = y.evalOnNodes();
+    const auto points = y.getPoints();
+    const Values g = gFn(gIndex, states, points);
+    const Index nNodes = y.getBasis().Order() + 1;
+
+    Value total = 0.0;
+    for (size_t i = 0; i < y.getGrid().getNCells(); ++i) {
+      const Vector weights = y.getBasis().getIntegrationWeights(y.getGrid()[i]);
+      total += g.segment(i * nNodes, nNodes).dot(weights);
+    }
+    return total;
+  }
 
   // The objective with the superconvergent scheme, where u* is the solution the
   // method actually delivers, so G is a functional of u* rather than of u_h.
@@ -19,7 +40,7 @@ public:
   // G = int I_h[g] dx, with g evaluated at the k+2 star nodes (u -> u*) and its
   // P_{k+1} interpolant integrated exactly: that is b1 . g, where b1 holds the
   // star basis's integration weights. The same quadrature is what
-  // SystemSolver::initializeMatricesForAdjointSolve differentiates to build G_y,
+  // SystemSolver::assembleObjectiveGradient differentiates to build G_y,
   // so the reported objective and the reported gradient are exactly a function and
   // its derivative -- which is what makes the finite-difference check in
   // python/Tests/test_adjoint.py meaningful rather than merely close.
@@ -45,6 +66,18 @@ public:
     }
     // cast to a row vector
     return static_cast<Eigen::Matrix<double, 1, Eigen::Dynamic>>(out);
+  }
+
+  // dG/dp|explicit with the superconvergent scheme: the derivative of the
+  // objective GFn(gIndex, y, pp) reports, b1 . g over the star nodes with u*.
+  //
+  // The default is the form above, because a C++ case reports dG/dp through
+  // dGFndp(gIndex, pIndex, y), which integrates for itself and leaves the
+  // solver no nodal values to weight: such a case differentiates the u*-based
+  // objective by overriding this. PyAdjointProblem has the batched dgFndp and
+  // overrides it with the exact derivative.
+  virtual Matrix dGFndp(Index gIndex, DGSoln &y, Postprocessor const &) const {
+    return dGFndp(gIndex, y);
   }
 
   virtual void ComputePhysicsDerivatives(
@@ -86,6 +119,11 @@ public:
   virtual void dgFn_dphi(Index gIndex, VectorRef, const State &s,
                          Position x) = 0;
 
+  // dg/d(state) at every node, for G_y. The one entry that is not pointwise is
+  // out.Scalars(): it is dG/dmu, the derivative of the objective itself with
+  // respect to each global scalar, already integrated -- for g = mu u that is
+  // int u dx, taken with the quadrature G is. It arrives zeroed, which is right
+  // for an objective that does not read the scalars.
   virtual void dg(Index gIndex, GlobalState &out, GlobalState const &states,
                   std::vector<Position> const &abscissae) {
     for (size_t j = 0; j < states.size(); ++j) {
@@ -143,6 +181,30 @@ public:
     // trampoline does.
     throw std::logic_error("nAux > 0 but no G derivative provided");
   };
+
+  // dG_s/dp for the global scalar constraint s: the parameter derivative of
+  // TransportSystem::ScalarG, taking exactly its arguments -- the state on the
+  // k+1 basis nodes, one quadrature weight per node, and phiBoundary.
+  //
+  // (np, 1) when each parameter is one number. With spatialParameters it is
+  // (np, nPoints), column m holding dG_s/d(p at physics node m), the nodes
+  // getPhysicsNodes returns: the same discrete derivative as the rest of G_p,
+  // so whatever weights G_s integrates the parameter with belong in it. A
+  // boundary parameter is one number either way and reports in column 0.
+  //
+  // Required whenever the transport system has global scalars. A constraint
+  // that does not depend on the parameters says so by returning zeros; the
+  // default throws rather than assume it, because a missing term here is a
+  // plausible wrong gradient beside a correct G.
+  virtual Matrix dScalarG_dp(Index s, GlobalState const &y, GlobalState const &ydot,
+                             std::vector<Position> const &abscissae,
+                             Values const &weights, Matrix const &phiBoundary,
+                             Time t) {
+    throw std::logic_error(
+        "The transport system has global scalars, so its adjoint problem must "
+        "provide dScalarG_dp: the derivative of each scalar constraint with "
+        "respect to the parameters (zeros if they do not enter it).");
+  }
 
   virtual std::string getName(Index pIndex) const {
     return "p" + std::to_string(pIndex);

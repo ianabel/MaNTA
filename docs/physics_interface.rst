@@ -531,6 +531,51 @@ wrappers below, loop over ``GlobalStateMatrix``'s ``Variable``/``Derivative``/
 ``Flux``/``Aux`` slices and there is no ``Geometry`` slice; the coupling
 assembly calls the pointwise hooks directly instead.
 
+Explicit time dependence
+------------------------
+
+A case whose formulas depend on :math:`t` explicitly -- a time-varying
+coefficient, boundary data programmed in time -- reports that derivative the
+way it reports every other one: :math:`\partial/\partial t` with every other
+argument held fixed.
+
+.. code-block:: cpp
+
+   Value dSigmaFn_dt(Index i, const State &s, Position x, Time t);
+   Value dSources_dt(Index i, const State &s, Position x, Time t);
+   Value dAuxG_dt   (Index i, const State &s, Position x, Time t);
+   Value dLowerBoundary_dt(Index i, Time t) const;
+   Value dUpperBoundary_dt(Index i, Time t) const;
+   Value dScalarG_dt(Index s, GlobalState const &y, GlobalState const &ydot,
+                     std::vector<Position> const &x, Values const &w,
+                     Matrix const &phiBoundary, Time t);
+
+**All of them are zero by default**, which is right for a case whose formulas
+do not depend on time, and that is most of them. ``ComputePhysicsTimeDerivatives``
+is the batched form, in ``ComputePhysics``'s layout, and loops over the
+pointwise hooks unless a case overrides it. A field model's counterpart is
+``FieldModel::dFieldResidual_dt``. A Python case defines any of the pointwise
+ones and the boundary pair as methods of the same names; absent, they are zero.
+
+What reads them is the solver's :math:`\partial F/\partial t` at fixed state,
+assembled exactly as the residual is. Its algebraic rows are the :math:`G_t` in
+the differentiated constraints
+
+.. math::
+
+   G_z \, z' = -G_t - G_u \, u'
+
+which a projected restart -- one onto a different polynomial degree -- solves
+for the algebraic components :math:`z'` of :math:`y'`. ``IDACalcIC`` makes the
+algebraic *values* consistent there but leaves their derivatives at zero, and a
+zero tells IDA's first step that they are not moving. Leaving a hook zero that
+is not makes :math:`z'` inexact, which costs that first step error-test
+failures and nothing else.
+
+``AutodiffTransportSystem`` cannot supply them for itself, because ``Flux`` and
+``Source`` take ``t`` as a plain ``Time`` rather than a differentiable value; a
+case built on it overrides the pointwise hooks above.
+
 Pointwise and batched
 ---------------------
 
@@ -641,9 +686,16 @@ The kinds, for :math:`N` cells at degree :math:`k`:
      - as ``Residual``
      - per Jacobian build
    * - ``Adjoint``
-     - ``ComputePhysicsDerivatives``, one call per objective
+     - ``ComputePhysicsDerivatives``
      - as ``Residual``
-     - per adjoint solve, including the objective estimate a steady solve makes
+     - at most once, for the adjoint at the end of a run, when the last Jacobian
+       build was not at the final state
+   * - ``DiscretisationEstimate``
+     - ``ComputePhysics`` and ``ComputePhysicsDerivatives``
+     - :math:`N(k+3)`, or :math:`N(k+4)` superconvergent: the nodes of the basis
+       two degrees beyond the physics interpolation
+     - only with ``EstimateDiscretisationError``: once per objective estimate,
+       at the end of each steady solve or slice
    * - ``InitialProjection``
      - pointwise ``InitialValue``, ``InitialDerivative``, ``InitialAuxValue``
      - :math:`30N` Gauss points
@@ -655,8 +707,9 @@ The kinds, for :math:`N` cells at degree :math:`k`:
 
 Five cells at :math:`k = 4` therefore hand ``ComputePhysics`` batches of 25
 points, and ``ComputePhysicsDerivatives`` batches of 25 — plus 10 with a Diffusive
-tau. With ``Superconvergent`` the residual, Jacobian and adjoint batches become 30
-while the initial condition stays at 25. ``plan.batchSizes(entry)`` lists the
+tau, and 35 for the discretisation estimate. With ``Superconvergent`` every
+batch at the cells' physics nodes becomes 30, the initial condition's included,
+since it samples where the residual does, and the estimate's 40. ``plan.batchSizes(entry)`` lists the
 distinct shapes of an entry; ``plan.points(kind)`` the abscissae of a kind.
 
 **A cadence is not a count.** How many residuals or Jacobian builds a run takes is

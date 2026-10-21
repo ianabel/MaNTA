@@ -28,7 +28,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(MaNTA
-        VERSION 0.1.0
+        VERSION 0.9.3
         DESCRIPTION "Maryland Nonlinear Transport Analyzer"
         HOMEPAGE_URL "https://manta-docs.readthedocs.io"
         LANGUAGES CXX)
@@ -65,6 +65,7 @@ set(MANTA_CORE_SOURCES
   Config.cpp
   ConfigSchema.cpp
   DGStatic.cpp
+  DiscretisationEstimate.cpp
   DegreeAdaptation.cpp
   ErrorChecker.cpp
   FieldModel.cpp

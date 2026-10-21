@@ -298,6 +298,31 @@ void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, co
 	clearGradients();
 }
 
+// The same again for the auxiliary equations, on the geometry-aware GFunc.
+// AdjointProblem::ComputePhysicsDerivatives asks for dAux_dp for every aux
+// variable whatever it reads, so without this an autodiff case with any
+// auxiliary variable could not compute a gradient at all.
+void AutodiffTransportSystem::dAuxG_dp(Index i, Index pIndex, Value &grad, const State &s, Position x, Time t)
+{
+	RealVector u(s.u());
+	RealVector q(s.q());
+	RealVector sigma(s.sigma());
+	RealVector phi(s.phi());
+	RealVector geom(s.geom());
+
+	Real p = getPval(pIndex);
+
+	grad = autodiff::derivative(
+		[this, i, pIndex](Real p, RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
+		{
+			setPval(pIndex, p);
+			return GFunc(i, uD, qD, sD, phiD, geomD, X, T);
+		},
+		wrt(p), at(p, u, q, sigma, phi, geom, x, t));
+
+	clearGradients();
+}
+
 Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
@@ -553,29 +578,56 @@ Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 	return MMS;
 }
 
+// The t0 slice of each diagnostic is the same function of the state as every
+// slice writeDiagnostics appends: the auxiliary and scalar residuals at the
+// initial condition, not the initial values of the variables they constrain.
+// Called without a state -- directly, not through initialiseDiagnosticsAt --
+// there is no residual to take, and the initial values are what is left.
 void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 {
+	InitialDiagnosticState const &initial = initialDiagnosticState();
+
 	if (nAux > 0)
 	{
 		nc.AddGroup("AuxG", "Auxiliary functions");
 		for (Index i = 0; i < nAux; ++i)
-			nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-", [this, i](double x)
-						   { return this->InitialAuxValue(i, x); });
+		{
+			if (initial.y)
+				nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-",
+							   [this, i, &initial](double x)
+							   {  State s = initial.y->eval(x);
+								  return this->AuxG(i, s, x, initial.t); });
+			else
+				nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-", [this, i](double x)
+							   { return this->InitialAuxValue(i, x); });
+		}
 	}
 
 	if (nScalars > 0)
 	{
 		nc.AddGroup("ScalarG", "Scalar functions");
 		for (Index i = 0; i < nScalars; ++i)
-			nc.AddTimeSeries("ScalarG", "ScalarG" + std::to_string(i), "Scalar function", "-", InitialScalarValue(i));
+		{
+			double value = InitialScalarValue(i);
+			if (initial.y)
+			{
+				const GlobalState states = initial.y->evalOnNodes();
+				const GlobalState states_dt = initial.dydt->evalOnNodes();
+				const Grid &grid = initial.y->getGrid();
+				const Vector &weights = m_integrator.integrationWeights(initial.y->getBasis(), grid);
+				const Matrix &phiBoundary = m_integrator.phiBoundary(initial.y->getBasis(), grid);
+				value = ScalarG(i, states, states_dt, initial.y->getPoints(), weights, phiBoundary, initial.t);
+			}
+			nc.AddTimeSeries("ScalarG", "ScalarG" + std::to_string(i), "Scalar function", "-", value);
+		}
 	}
 
 	if (useMMS)
 	{
 		nc.AddGroup("MMSSource", "MMS sources");
 		for (Index i = 0; i < nVars; ++i)
-			nc.AddVariable("MMSSource", "Var" + std::to_string(i), "MMS source", "-", [this, i](double x)
-						   { return this->MMS_Source(i, x, 0.0); });
+			nc.AddVariable("MMSSource", "Var" + std::to_string(i), "MMS source", "-", [this, i, &initial](double x)
+						   { return this->MMS_Source(i, x, initial.t); });
 	}
 }
 

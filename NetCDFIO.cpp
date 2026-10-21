@@ -70,6 +70,18 @@ void NetCDFIO::AddTextVariable(std::string name, std::string description, std::s
 	newvar.putVar(&pStr);
 }
 
+void NetCDFIO::AddArray(std::string const &groupName, std::string const &name, std::string const &description,
+						std::string const &dimName, std::vector<double> const &values)
+{
+	NcGroup group = groupName.empty() ? NcGroup(data_file) : data_file.getGroup(groupName);
+	NcDim dim = group.getDim(dimName, NcGroup::Current);
+	if (dim.isNull())
+		dim = group.addDim(dimName, values.size());
+	NcVar newvar = group.addVar(name, netCDF::NcDouble(), dim);
+	newvar.putAtt("description", description);
+	newvar.putVar(values.data());
+}
+
 void NetCDFIO::AddTimeSeries(std::string name, std::string description, std::string units, double InitialValue)
 {
 	NcVar newvar = data_file.addVar(name, netCDF::NcDouble(), TimeDim);
@@ -207,7 +219,7 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 	// what the rest of this function's state was built at.
 	initialiseFieldOutput(nc_output, t);
 
-	problem->initialiseDiagnostics(nc_output);
+	problem->initialiseDiagnosticsAt(y, dydt, t, nc_output);
 }
 
 // See the declaration. Creates the group and writes its t0 slice; the geometry
@@ -294,31 +306,101 @@ void SystemSolver::WriteTimeslice(double tNew)
 	problem->writeDiagnostics(y, dydt, tNew, nc_output, tIndex);
 }
 
+// The objectives, their gradients and their adjoint states, at the end of a run
+// that solved the adjoint. See WriteAdjoints in docs/adjoints.rst for the layout.
 void SystemSolver::WriteAdjoints()
 {
+	const Index ng = adjointProblem->getNg();
+	const Index np = adjointProblem->getNp();
+	const Index npInternal = adjointProblem->getNpInternal();
+	const bool spatial = adjointProblem->areParametersSpatial();
+	const Index nPoints = static_cast<Index>(nCells * (k + 1));
 
-	nc_output.AddScalarVariable("ng", "", "", adjointProblem->getNg());
-	nc_output.AddScalarVariable("np", "", "", adjointProblem->getNp());
+	nc_output.AddScalarVariable("ng", "", "", ng);
+	nc_output.AddScalarVariable("np", "", "", np);
 	nc_output.AddScalarVariable("np_boundary", "", "", adjointProblem->getNpBoundary());
-	for (Index i = 0; i < adjointProblem->getNg(); ++i)
+
+	// The objective G_p differentiates, which under the superconvergent scheme is
+	// the u*-based one.
+	if (superconvergent)
+		postprocessor->computeUStar(y);
+
+	const std::vector<Position> nodes = y.getPoints();
+	for (Index i = 0; i < ng; ++i)
 	{
-		nc_output.AddScalarVariable("G" + std::to_string(i), "G function", "", adjointProblem->GFn(i, y));
-		nc_output.AddGroup("G" + std::to_string(i) + "_p", "Gradients of G using adjoint state method");
-		nc_output.AddGroup("G" + std::to_string(i) + "_boundary", "Gradients of G on boundary using adjoint state method");
-		for (Index j = 0; j < adjointProblem->getNpInternal(); ++j)
+		const std::string Gi = "G" + std::to_string(i);
+		nc_output.AddScalarVariable(Gi, "G function", "",
+									superconvergent ? adjointProblem->GFn(i, y, *postprocessor)
+													: adjointProblem->GFn(i, y));
+		nc_output.AddGroup(Gi + "_p", "Gradients of G using adjoint state method");
+		nc_output.AddGroup(Gi + "_boundary", "Gradients of G on boundary using adjoint state method");
+
+		// With spatial parameters a gradient is one value per node, so each
+		// parameter is an array on the nodes rather than a scalar.
+		auto column = [&](Index j)
 		{
-			// if (adjointProblem->areParametersSpatial())
-			// {
-			// 	nc_output.AddVariable("G" + std::to_string(i) + "_p", "p" + std::to_string(j), "Gradient of G with respect to p" + std::to_string(j), "", G_p.block(i * nCells, j, nCells, 1));
-			// }
-			// else
-			// {
-			nc_output.AddScalarVariable("G" + std::to_string(i) + "_p", adjointProblem->getName(j), "", "", G_p(i, j));
-			// }
+			std::vector<double> out(nPoints);
+			for (Index m = 0; m < nPoints; ++m)
+				out[m] = G_p(i * nPoints + m, j);
+			return out;
+		};
+		if (spatial)
+		{
+			nc_output.AddArray(Gi + "_p", "x", "Node positions", "node", nodes);
+			nc_output.AddArray(Gi + "_boundary", "x", "Node positions", "node", nodes);
+		}
+		for (Index j = 0; j < npInternal; ++j)
+		{
+			if (spatial)
+				nc_output.AddArray(Gi + "_p", adjointProblem->getName(j),
+								   "Gradient of G with respect to the parameter at each node", "node",
+								   column(j));
+			else
+				nc_output.AddScalarVariable(Gi + "_p", adjointProblem->getName(j), "", "", G_p(i, j));
 		}
 		for (Index j = 0; j < adjointProblem->getNpBoundary(); ++j)
 		{
-			nc_output.AddScalarVariable("G" + std::to_string(i) + "_boundary", "p" + std::to_string(j), "", "", G_p(i, j + adjointProblem->getNp() - adjointProblem->getNpBoundary()));
+			const std::string name = "p" + std::to_string(j);
+			if (spatial)
+				nc_output.AddArray(Gi + "_boundary", name, "Gradient of G at each node", "node",
+								   column(j + npInternal));
+			else
+				nc_output.AddScalarVariable(Gi + "_boundary", name, "", "", G_p(i, j + npInternal));
+		}
+
+		// The adjoint state, beside the solution it is the adjoint of: in each
+		// variable's group, and beside each auxiliary variable and field DOF.
+		AdjointSolution const *z = adjointSolution(i, y);
+		if (z == nullptr)
+			continue;
+
+		std::vector<double> zMem(y.getDoF(), 0.0);
+		DGSoln zh(nVars, grid, k, zMem.data(), nScalars, nAux, nField);
+		for (Index c = 0; c < static_cast<Index>(nCells); ++c)
+			std::copy(z->squ[c].data(), z->squ[c].data() + localDOF, zMem.data() + c * localDOF);
+		for (Index v = 0; v < nVars; ++v)
+			zh.lambda(v) = z->lambda.segment(v * (nCells + 1), nCells + 1);
+		for (Index f = 0; f < nField; ++f)
+			zh.Field(f) = z->field(f);
+
+		const std::string zi = "z" + std::to_string(i);
+		const std::string about = "Adjoint state of " + Gi + ", ";
+		for (Index v = 0; v < nVars; ++v)
+		{
+			const std::string group = problem->getVariableName(v);
+			nc_output.AddProfile(group, zi + "_u", about + "u row", "", zh.u(v));
+			nc_output.AddProfile(group, zi + "_q", about + "q row", "", zh.q(v));
+			nc_output.AddProfile(group, zi + "_sigma", about + "sigma row", "", zh.sigma(v));
+		}
+		for (Index a = 0; a < nAux; ++a)
+			nc_output.AddProfile("", problem->getAuxVarName(a) + "_" + zi, about + "auxiliary row", "",
+								 zh.Aux(a));
+		if (fieldModel)
+		{
+			FieldModelSpec const &fspec = fieldModel->getSpec();
+			for (Index f = 0; f < nField; ++f)
+				nc_output.AddScalarVariable(fspec.name, fspec.dofs[f].name + "_" + zi,
+											about + "field row", "", z->field(f));
 		}
 	}
 }

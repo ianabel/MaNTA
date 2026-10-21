@@ -55,11 +55,14 @@ class JAXNonlinearDiffusion(VectorizedTransportSystem):
 
         solver_config = config["solver"]
 
-        self.points = MaNTA.getNodes(
+        # One parameter value per physics node: the basis nodes, or the star
+        # nodes if the config turns on the superconvergent scheme.
+        self.points = MaNTA.getPhysicsNodes(
             solver_config["Lower_boundary"],
             solver_config["Upper_boundary"],
             solver_config["Grid_size"],
             solver_config["Polynomial_degree"],
+            solver_config.get("Superconvergent", False),
         )
 
         self.params = NonlinearDiffusionParams.makeSpatial(config["ts"])
@@ -144,11 +147,12 @@ solver_config = {
     "solveAdjoint": True,
 }
 
-points = MaNTA.getNodes(
+points = MaNTA.getPhysicsNodes(
     solver_config["Lower_boundary"],
     solver_config["Upper_boundary"],
     solver_config["Grid_size"],
     solver_config["Polynomial_degree"],
+    solver_config.get("Superconvergent", False),
 )
 
 f = partial(runMaNTA, solver_config=solver_config)
