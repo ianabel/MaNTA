@@ -1,4 +1,8 @@
 import os
+import sys
+
+# the stellarator modules (objective, itg_wrapper, config, ...) are one level up
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ["JAX_ENABLE_PINNED_HOST_TRANSFER"] = "0"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"

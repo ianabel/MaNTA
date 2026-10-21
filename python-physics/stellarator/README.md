@@ -43,7 +43,8 @@ Three specific things to expect:
 | `scan_eq.py` | Scan an equilibrium parameter, solving transport at each point |
 | `scan_eq_ambipolar.py` | The same scan for the multi-channel ambipolar case |
 | `stellarator_example.py` | One multi-channel solve, no scan — the smallest example of that case |
-| `yancc_gpu_test.py` | A `yancc` GPU sharding benchmark; touches no transport case |
+| `diagnostics/yancc_gpu_test.py` | A `yancc` GPU sharding benchmark; touches no transport case |
+| `diagnostics/` | Checks and measurements run by hand, not by any test suite: the finite-difference checks, `itg_check.py`, the GPU benchmark, and `measure_jvp_memory.py` / `measure_rev_jacobian.py` (peak memory of the objective's derivative, forward against reverse mode). Each puts this directory's parent on `sys.path`, so they run from anywhere |
 | `stellarator_state.py` | Named accessors for a multi-channel state, and that case's parameters |
 
 The notebook lives here rather than in a notebooks directory of its own because
@@ -64,7 +65,7 @@ from the imports:
 
 | | how close |
 |---|---|
-| `yancc_gpu_test.py` | Closest. Uses `manta.jax.State` and `yancc_wrapper2` only — no transport case, so nothing below applies to it |
+| `diagnostics/yancc_gpu_test.py` | Closest. Uses `manta.jax.State` and `yancc_wrapper2` only — no transport case, so nothing below applies to it |
 | `scan_eq.py` | Against `stellarator2.py`. Needed `use_chunking`, which that file reads and the branch had no notion of; added as `False`, which is what it ran with |
 | `desc_optimize_bfgs.py` | As above. Its `"optimizeMode": True` has no MaNTA equivalent — see below |
 | `scan_eq_ambipolar.py`, `stellarator_example.py` | Against `stellarator_multichannel.py`, which is what their `st_config` describes. `scan_eq_ambipolar.py` has one loose end — see below |
@@ -175,9 +176,9 @@ Checks, all under `TEST_STELLARATOR=true`:
 
 | | what it checks |
 |---|---|
-| `itg_check.py` | the bare ensemble on the table reproduces `NNITGProxy.compute`; interpolation between table points; units; the `compute_dke_sol` signature through `vmap_batched`; Jacobians; floor; no retrace on a new equilibrium; `d/d(params)` through the builder |
-| `fd_check_itg.py --mode params` | the ITG adjoint columns: fields fixed, builder `params` perturbed, JVP against central differences |
-| `fd_check_itg.py --mode proximal` | the same objective inside `ProximalProjection` over `ForceBalance`, as `scan_eq_ambipolar.py` uses it |
+| `diagnostics/itg_check.py` | the bare ensemble on the table reproduces `NNITGProxy.compute`; interpolation between table points; units; the `compute_dke_sol` signature through `vmap_batched`; Jacobians; floor; no retrace on a new equilibrium; `d/d(params)` through the builder |
+| `diagnostics/fd_check_itg.py --mode params` | the ITG adjoint columns: fields fixed, builder `params` perturbed, JVP against central differences |
+| `diagnostics/fd_check_itg.py --mode proximal` | the same objective inside `ProximalProjection` over `ForceBalance`, as `scan_eq_ambipolar.py` uses it |
 
 The network is piecewise smooth in its geometry inputs (max pooling), so
 finite differences there need relative steps of 1e-5 or below to agree with the

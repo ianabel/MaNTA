@@ -36,11 +36,14 @@ product fails on a shape mismatch.
 Run only with TEST_STELLARATOR=true:
 
     TEST_STELLARATOR=true PYTHONPATH=$PWD/build/python \\
-        python python-physics/stellarator/fd_check_objective.py --layout-only
+        python python-physics/stellarator/diagnostics/fd_check_objective.py --layout-only
 """
 
 import os
 import sys
+
+# the stellarator modules (objective, itg_wrapper, config, ...) are one level up
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 if os.environ.get("TEST_STELLARATOR") != "true":
     sys.exit(

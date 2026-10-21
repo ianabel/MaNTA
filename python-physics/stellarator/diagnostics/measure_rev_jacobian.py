@@ -18,7 +18,7 @@ import sys
 import time
 
 here = os.path.dirname(os.path.abspath(__file__))
-driver = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "desc-optimize-itg-flux.py")
+driver = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "..", "paper", "desc-optimize-itg-flux.py")
 n_check = int(sys.argv[2]) if len(sys.argv) > 2 else 4
 os.chdir(os.path.dirname(os.path.abspath(driver)))
 

@@ -12,6 +12,9 @@ real yancc solve; nothing here calls one. Exits nonzero on any failed check.
 
 import os
 import sys
+
+# the stellarator modules (objective, itg_wrapper, config, ...) are one level up
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
 
 import jax

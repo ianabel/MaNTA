@@ -27,7 +27,7 @@ equilibrium an optimisation visits (`objective.py`):
 
 `make_itg_flux(eq, rho, ...)` is all three at `eq.params_dict`. Evaluating the
 ensemble on the tabulated signals reproduces `NNITGProxy.compute`; see
-`itg_check.py`.
+`diagnostics/itg_check.py`.
 
 Conventions, each of which is a choice the training data made for us:
 
@@ -68,7 +68,7 @@ reaches the transported flux only through the geometry signals; `builder(params)
 is traceable, so the `ITGFlux` it returns carries d(signals)/d(params), and
 `StellaratorAdjointProblem` takes each MaNTA node's signals as spatial
 parameters, which `objective.py`'s custom JVP contracts with that tangent.
-`fd_check_itg.py` checks it, directly and through ProximalProjection.
+`diagnostics/fd_check_itg.py` checks it, directly and through ProximalProjection.
 
 The network is smooth in a/LT and a/Ln but only piecewise smooth in the
 signals (max pooling), so a finite difference in the geometry agrees with the

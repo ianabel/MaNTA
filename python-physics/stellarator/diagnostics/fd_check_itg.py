@@ -26,11 +26,14 @@ Run only with TEST_STELLARATOR=true, from a scratch directory (MaNTA writes
 its output and restart files into the cwd):
 
     TEST_STELLARATOR=true PYTHONPATH=$PWD/build/python \\
-        python python-physics/stellarator/fd_check_itg.py --mode both
+        python python-physics/stellarator/diagnostics/fd_check_itg.py --mode both
 """
 
 import os
 import sys
+
+# the stellarator modules (objective, itg_wrapper, config, ...) are one level up
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 if os.environ.get("TEST_STELLARATOR") != "true":
     sys.exit(
