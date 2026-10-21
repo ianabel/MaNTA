@@ -46,7 +46,7 @@ struct Options
 {
     Index nCells = 6;
     Index k = 3;
-    Index intervals = 12;
+    Index intervalsPerCell = 2;
     bool iterative = true;
     bool writeOutput = false;
     double cadence = 0.25;
@@ -70,7 +70,7 @@ Run makeRun(Options const &o, std::string const &stem,
     if (prepare)
         prepare(*r.problem, *r.grid);
     r.field = std::make_shared<ThetaPinchEquilibrium>(
-        ThetaPinchEquilibrium::Parameters{.intervals = o.intervals}, *r.grid);
+        ThetaPinchEquilibrium::Parameters{.intervalsPerCell = o.intervalsPerCell}, *r.grid);
     r.sys = std::make_unique<SystemSolver>(*r.grid, o.k, r.problem.get());
 
     SystemSolver &sys = *r.sys;
@@ -175,16 +175,35 @@ BOOST_AUTO_TEST_CASE(exact_and_iterative_field_solves_give_the_same_run)
     // Not merely the same answer to tolerance: the iterative solve stops at
     // FieldSolveTolerance, so Newton sees a slightly different correction, but
     // the step sequence is set by IDA's error test, which that difference does
-    // not reach. Measured: the same 156 steps, and the same answer to 5e-15.
+    // not reach. Measured: the same 166 steps, and the same answer to 1.2e-11.
+    //
+    // This is also the run that pins the sweep's test as *relative* to the
+    // increment. An absolute bound of 1e-2 error-weight units -- far inside
+    // the 0.33 at which Newton stops -- took 658 steps here and differed by
+    // 2e-7: late in a Newton solve the update is itself that small, and IDA's
+    // rate estimate read the sweep's error as divergence.
     auto exact = makeRun({.iterative = false}, "theta_pinch_exact");
     auto iterative = makeRun({.iterative = true}, "theta_pinch_iterative");
+    std::string logExact, logIterative;
     {
-        CapturedOutput quiet;
+        CapturedOutput capture;
         exact.sys->runSolver(0.5);
-        iterative.sys->runSolver(0.5);
+        logExact = capture.text();
     }
+    {
+        CapturedOutput capture;
+        iterative.sys->runSolver(0.5);
+        logIterative = capture.text();
+    }
+    auto steps = [](std::string const &log)
+    {
+        const auto at = log.find("Total Number of Timesteps");
+        return at == std::string::npos ? std::string("?") : log.substr(at, log.find('\n', at) - at);
+    };
     const Vector a = sample(*exact.sys), b = sample(*iterative.sys);
-    BOOST_TEST_MESSAGE("exact vs iterative: " << (a - b).cwiseAbs().maxCoeff());
+    BOOST_TEST_MESSAGE("exact: " << steps(logExact) << "; iterative: " << steps(logIterative)
+                                 << "; max difference " << (a - b).cwiseAbs().maxCoeff() << " against max "
+                                 << a.cwiseAbs().maxCoeff());
     BOOST_TEST((a - b).cwiseAbs().maxCoeff() < 1e-9 * a.cwiseAbs().maxCoeff());
 }
 
@@ -543,8 +562,13 @@ BOOST_AUTO_TEST_CASE(the_objective_estimate_carries_the_field_share)
         const double forward = e.value(g) - e.corrected(g);
         BOOST_TEST_MESSAGE("objective " << g << ": (dG/dy) . J^-1 F = " << forward << ", z^T F = " << zF
                                         << ", of which the field rows " << fieldShare);
+        // The two forms agree to the forward sweep's tolerance, not to
+        // roundoff: it stops where IDA needs it to, about 1e-7 relative in this
+        // estimate. Dropping G_field . delta psi from the forward form moves
+        // them apart by 100% and 1.3% for the two objectives, so 1e-6 still
+        // separates a missing field share by four orders.
         BOOST_TEST(std::abs(forward) > 1e-4);
-        BOOST_TEST(std::abs(forward - zF) <= 1e-9 * std::abs(forward));
+        BOOST_TEST(std::abs(forward - zF) <= 1e-6 * std::abs(forward));
     }
     N_VDestroy(zero);
     N_VDestroy(F);

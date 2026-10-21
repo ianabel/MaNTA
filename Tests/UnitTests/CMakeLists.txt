@@ -82,6 +82,7 @@ set(MANTA_TEST_SOURCES
   SystemSolverMatrixTests.cpp
   SystemSolverTests.cpp
   ThetaPinchEquilibriumTests.cpp
+  ThetaPinchMMSTests.cpp
   ThetaPinchRunTests.cpp
   TimeDerivativeSourceTests.cpp
   TransportSystemTests.cpp

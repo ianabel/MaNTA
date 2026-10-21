@@ -138,6 +138,7 @@ struct SolverConfig
     double                   FieldSolveTolerance;
     int                      FieldSolveMaxSweeps;
     int                      FieldSolveMaxAdjointSweeps;
+    double                   FieldSolveAdjointTolerance;
 
     // Presence, not value, carries the meaning for these two.
     //

@@ -297,8 +297,13 @@ const std::vector<Entry> &table()
         {"FieldSolve", {}, Type::String, Category::Solver, false, false, std::string{"iterative"},
          "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default) "
          "or exact (Schur complement onto the field block; a verification tool, see docs)."},
-        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
-         "Convergence tolerance for FieldSolve = iterative."},
+        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-4,
+         "Convergence tolerance for FieldSolve = iterative: the change one sweep makes to the "
+         "Newton increment, in the error-weighted RMS norm IDA's tests use (where its Newton "
+         "iteration stops at 0.33); a millionth of the increment governs when larger."},
+        {"FieldSolveAdjointTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
+         "Convergence tolerance for the coupled adjoint sweep: its backward error relative to "
+         "the right-hand side."},
         {"FieldSolveMaxSweeps", {}, Type::Int, Category::Solver, false, false, 20,
          "Sweep cap for FieldSolve = iterative."},
         {"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,

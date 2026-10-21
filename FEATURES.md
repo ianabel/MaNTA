@@ -52,7 +52,7 @@ Irons-Tuck acceleration, one transport solve per sweep). The guess that the
 exact route "would almost certainly be expensive" depends on the coupling: the
 break-even is `#sweeps < nField + 1`, the manufactured fixtures are on the losing
 side of it, and the theta pinch -- the registered model -- is on the winning
-side at every resolution measured, 28x faster than exact at `nField = 516`. See
+side at every resolution measured, 12x faster than exact at `nField = 132`. See
 `docs/field_coupling.rst`.
 
   What remains, and is not in scope of that work:

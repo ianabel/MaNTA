@@ -909,8 +909,10 @@ class SystemSolver
         // Block Gauss-Seidel between the transport and field blocks, with
         // Irons-Tuck acceleration: one transport solve and one field solve per
         // sweep, against the exact path's nField + 1 transport solves. Stops
-        // once the relative change in psi between sweeps is below
-        // FieldSolveTolerance, up to FieldSolveMaxSweeps.
+        // once a sweep changes the whole increment -- transport and field -- by
+        // less than FieldSolveTolerance in the run's own error-weighted RMS
+        // norm, or by less than a millionth of the increment when that is
+        // larger, up to FieldSolveMaxSweeps.
         //
         // Reaching that cap **escalates to solveCoupledJacExact** rather than
         // returning the last iterate, so this mode can no longer be wrong, only
@@ -1293,6 +1295,17 @@ class SystemSolver
             fieldSolveTolerance = tol;
         };
         double getFieldSolveTolerance() const { return fieldSolveTolerance; };
+
+        // The adjoint sweep's tolerance, on a relative backward error rather than
+        // a weighted change: the adjoint solves at cj = 0 for a gradient, with no
+        // error test to measure against. See solveCoupledAdjointIterative.
+        void setFieldSolveAdjointTolerance(double tol)
+        {
+            if (tol <= 0)
+                throw std::logic_error("Field solve adjoint tolerance cannot be zero or negative.");
+            fieldSolveAdjointTolerance = tol;
+        };
+        double getFieldSolveAdjointTolerance() const { return fieldSolveAdjointTolerance; };
 
         void setFieldSolveMaxSweeps(int n)
         {
@@ -2348,7 +2361,11 @@ class SystemSolver
         // rather than two that can drift. Read by solveJacEq and by
         // initialize(), which reports what the choice costs.
         FieldSolveMode fieldSolveMode = FieldSolveMode::Iterative;
-        double fieldSolveTolerance = 1e-8;
+        // Absolute, in the error-weighted RMS norm IDA's Newton test is in; see
+        // solveCoupledJacIterative for what looser and differently-measured
+        // tests cost. Matching ConfigSchema.
+        double fieldSolveTolerance = 1e-4;
+        double fieldSolveAdjointTolerance = 1e-8;
         int fieldSolveMaxSweeps = 20;
         // Larger than the forward cap, and for the reason the setter gives: the
         // adjoint runs at cj = 0, where the coupling is stiffest. One default,
@@ -2532,8 +2549,10 @@ class SystemSolver
         void assembleTauBlocks(Index i, Matrix const &tau, Matrix &D, Matrix &E,
                                Matrix &G, Matrix &H) const;
 
-        double rtol;
-        std::vector<double> atol;
+        // The schema's defaults, so a solver no configuration reached -- the
+        // test fixtures that build a Jacobian directly -- still has error weights.
+        double rtol = 1e-3;
+        std::vector<double> atol{1e-3};
 
         NetCDFIO nc_output;
         NetCDFIO restart_file;

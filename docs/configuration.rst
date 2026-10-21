@@ -608,18 +608,23 @@ the coupling on.
        the field block, at :math:`\texttt{nField}+1` transport solves per
        Jacobian solve.
    * - ``FieldSolveTolerance``
+     - ``1e-4``
+     - Where the forward sweep stops: once one sweep changes the whole Newton
+       increment -- transport and field -- by less than this in the run's
+       error-weighted RMS norm, the norm IDA's own tests are in, where its
+       Newton iteration stops at 0.33; or by less than a millionth of the
+       increment when that is larger, which only ``IDACalcIC``'s first step
+       reaches. Measured in IDA's terms because IDA is
+       what reads the answer: see :ref:`field-solve` for what a 2-norm test, a
+       looser bound and a relative one each cost. Reaching the cap escalates to the exact solve rather than
+       returning an under-converged answer.
+   * - ``FieldSolveAdjointTolerance``
      - ``1e-8``
-     - Where the sweep stops — **one key, two tests**, because the two
-       directions have different things available to measure. Forward, it is a
-       relative *change*: the sweep stops once
-       :math:`\|\delta\psi\| \le \texttt{tol}\,\|\psi\|` for the unaccelerated
-       iterate. In the adjoint it is a relative *backward error*: the field row
+     - Where the adjoint sweep stops: a relative *backward error*. The field row
        of the transposed system holds identically at every iterate, so the
-       residual of the pair returned is exactly
-       :math:`A_2^{T}\,\delta z_\psi`, and the sweep stops once that is below
-       ``tol`` times the norm of the right-hand side. Both are scale
-       equivariant, so neither has an absolute floor, and neither returns an
-       under-converged answer — reaching the cap escalates to the exact solve.
+       residual of the pair returned is exactly :math:`A_2^{T}\,\delta z_\psi`,
+       and the sweep stops once that is below this times the norm of the
+       right-hand side. Reaching the cap escalates to the exact solve.
    * - ``FieldSolveMaxSweeps``
      - ``20``
      - Sweep cap for the forward solve. Reaching it escalates to the exact
@@ -627,8 +632,7 @@ the coupling on.
    * - ``FieldSolveMaxAdjointSweeps``
      - ``100``
      - The same cap for the adjoint solve. Separate, and larger, because the
-       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest —
-       five field unknowns have been measured needing 13–38 sweeps.
+       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest.
 
 .. important::
 

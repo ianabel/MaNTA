@@ -75,9 +75,10 @@ of the work.
 
 `B_z = Φ_a / V'` is then derived.
 
-`V'` is a cubic B-spline on the model's own uniform grid of `M` intervals
-(`M + 3` coefficients `v_n`), plus the unknown `C`. So `nField = M + 4`, all
-algebraic. The rows are Galerkin against the same B-splines `φ_m`:
+`V'` is a C² cubic B-spline whose knots are the transport mesh's faces, each
+cell split into `IntervalsPerCell` equal intervals (default 1), so `M` intervals
+in all and `M + 3` coefficients `v_n`, plus the unknown `C`. So `nField = M + 4`,
+all algebraic. The rows are Galerkin against the same B-splines `φ_m`:
 
 ```
 R_m  = ∫₀¹ φ_m ( Φ_a² / V_h'² + 2μ₀ p_h − C ) dx  = 0       m = 0 … M+2
@@ -90,11 +91,24 @@ section). A field that is only C⁰ hands the transport discontinuous coefficien
 loses its order to that. A cubic spline is C², so the geometry is smooth
 everywhere and its own error is `O(h_f⁴)`.
 
-**Why the model's own grid and not the transport nodes.** It keeps `nField`
-independent of `k` and of the transport mesh. A restart onto a different degree
-can then carry `ψ` across verbatim (see Restarts below). And the field
-resolution becomes a dial of its own, which is exactly what is needed to put
-`nField ≫` the transport's own count and test whether `iterative` wins.
+**Why knots on the transport mesh, and not a grid of the model's own.** The
+design began with a uniform grid of the model's own, `Intervals` of it, chosen
+to make the field resolution an independent dial. The coupled MMS study
+(`ThetaPinchMMSTests.cpp`) measured what that dial costs. The pressure arrives
+as the transport's piecewise polynomial `p_h`, which jumps by `O(h^{k+1})` at
+every transport face; a spline much finer than the mesh resolves those jumps
+into spikes in `∂_x V'` beside each face, and the flux reads `∂_x V'`. Four
+intervals per cell at `k = 1` drops `N` to order `k`; two per cell on 64 cells
+at `k = 3`, and sixteen per cell on 8 at `k = 6`, stall IDA at order one under
+`FieldSolve = exact` as much as `iterative`. One interval per cell converges at
+`k + 1` for `k = 1, 2, 3` and never stalled. Letting `V'` break where `p_h`
+does (repeated knots) was tried and is worse at every `k`, about order `k`:
+`V'` then inherits `p_h`'s derivative error cell by cell. So the knots are the
+mesh's, smooth across it, and `IntervalsPerCell` remains as the dial for a
+high-degree run whose error is the spline's own `O(h_f⁴)`. `nField` is still
+independent of `k`, so a restart onto a different degree carries `ψ` across
+verbatim (see Restarts below); a restart onto a different mesh is refused by
+its `nField`.
 
 ### How the rows see the pressure: an auxiliary variable
 
@@ -356,11 +370,11 @@ test.
 | `solveB`/`solveBTranspose`/`applyB`/`applyBTranspose` against a dense LU of the same `B` | a wrong custom solve, e.g. the border sign |
 | Standalone equilibrium: prescribed `p(x)`, Newton on the field rows alone, against the closed form `V' = π/√(C − p)` with `C` from a scalar root-find; local orders in `M` approaching 4 | a wrong residual |
 | Coupled `J dy = g` with `FieldSolve = exact` (the `FieldJacobianTests` method) | a wrong coupled Jacobian |
-| MMS on the coupled system: manufactured `n(x,t)`, with `p = T n` independent of `V'`, so `V'_exact` is closed form; local orders in `h` at fixed fine `M`, and in `M` at fixed fine `h` | a converged, plausible, wrong coupled residual |
+| MMS on the coupled system: manufactured `n(x,t)`, with `p = T n` independent of `V'`, so `V'_exact` is closed form; local orders in `h` at one interval per cell (`N` at `k + 1`), and in `IntervalsPerCell` at high `k` (4); the case's own `SigmaFn` checked against the manufactured flux first; and the iterative solve's step count against the exact one's | a converged, plausible, wrong coupled residual; a field grid that outresolves the mesh; a sweep that stalls IDA |
 | Adjoint gradient against finite differences, coupling armed, parameter `D₀`, objective on `n` | a wrong `A₁ᵀ` / `A₂ᵀ` / `Bᵀ` |
 | The same with an objective reading geometry, `g = B(x) w(x)` with `w` varying within a cell; plus a guard that zeroing `G_field` moves the gradient by orders of magnitude more than the tolerance, and that the mass-matrix weighting misses | a missing or mis-weighted `∂G/∂ψ` |
 | `G` on a coupled run equals `Σ w_j g_j` on geometry-filled states, against `B(x)` from the standalone equilibrium | the value of a geometry-reading objective |
-| `"Objective"` steady test on a coupled run: the estimate against the adjoint's `zᵀF`, to round-off, with and without the field term | a missing `G_field · δψ` |
+| `"Objective"` steady test on a coupled run: the estimate against the adjoint's `zᵀF`, to the forward sweep's tolerance (1e-6 relative; dropping the field term moves it 1.3–100%) | a missing `G_field · δψ` |
 | `exact` and `iterative` agree; reuse is bit for bit (`a_coupled_solver_reused_matches_a_fresh_one`) | the iterative path and `resetForRun` |
 | `V' ≤ 0` throws and IDA recovers | the recoverable-failure path |
 | Low-β limit against `B ≈ 1 − p/2` | a sanity check on units |
@@ -399,8 +413,9 @@ A Python-*implemented* field model stays out of scope, as in #24.
   becomes a radial ODE and `K` a genuinely elliptic band. It is the obvious
   follow-on, and the spline/banded machinery here is what it would reuse.
 * An energy equation. It needs `∂_t V'` (time-derivative sources, phase 2).
-* Adaptation with a field model attached. It stays refused. The model's own grid
-  makes it *possible* later, since `nField` would not change.
+* Adaptation with a field model attached. It stays refused, and with the knots
+  on the transport mesh `nField` changes with the mesh, so a remesh would have
+  to rebuild the model and carry `ψ` across by projection.
 * `dRdot` / `states_dot` in `FieldResidual` (`TODO`). This model's rows have no
   time derivative.
 * Sparse/structured `dRdpsi` and `A₁` storage in the interface.

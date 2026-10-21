@@ -2921,6 +2921,17 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     Vector dpsi = Vector::Zero(nField);
     Vector delta = Vector::Zero(nField), deltaPrev = Vector::Zero(nField);
     bool haveDeltaPrev = false, converged = false;
+    // The run's error weights at the state the Jacobian was built at: the
+    // weights IDA's error and Newton tests use (it takes them from
+    // getErrorWeights), and those NewtonStep's tests use. See the acceptance
+    // test below for why the sweep has to be measured in them.
+    N_Vector ewt = N_VClone(delY), prevDelY = N_VClone(delY), change = N_VClone(delY);
+    {
+        N_Vector yAt = N_VMake_Serial(N_VGetLength(delY), yJacMem, ctx);
+        getErrorWeights(yAt, ewt);
+        N_VDestroy(yAt);
+    }
+    N_VConst(0.0, prevDelY);
 
     ++fieldSweepSolves;
 
@@ -2947,21 +2958,63 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
         deltaPrev = delta;
         delta = g - dpsi;
 
-        // The acceptance test is on the UNACCELERATED iterate, and is purely
-        // relative -- deliberately not `tol * max(1, |g|)`,
-        // whose absolute floor stopped the sweep after the first iterate
-        // whenever |g| < 1, i.e. throughout the small-correction regime Newton
-        // lives in. Accepting only g is also what keeps the returned pair
-        // consistent: dx was solved against the dpsi that produced this g, so
-        // row one of the coupled system is off by A1 . delta, which is the
-        // tolerance. An extrapolated dpsi would be off by the length of the
+        // The acceptance test is on the UNACCELERATED iterate, and on how far
+        // this sweep moved the *whole* increment, transport and field together,
+        // in the run's error-weighted RMS norm -- the norm IDA's Newton test is
+        // in. Accepting only g keeps the returned pair consistent: dx was solved
+        // against the dpsi that produced this g, so row one of the coupled system
+        // is off by A1 . delta, which A^-1 carries into the transport block as
+        // the size of the next sweep's change. This sweep's change estimates
+        // that to within the sweep's contraction factor, 0.1-0.2 on the theta
+        // pinch. An extrapolated dpsi would be off by the length of the
         // extrapolation instead, and nothing downstream would report it.
         //
+        // **What the test is measured in, and against what, were both settled
+        // by what each costs IDA**, on the manufactured theta pinch
+        // (ThetaPinchMMSTests.cpp) at 1e-9 / 1e-11 and on ThetaPinchRunTests.cpp's
+        // run at 1e-6 / 1e-8:
+        //
+        // * *In the run's weights, over the whole increment.* A relative 2-norm
+        //   test on psi alone leaves an error in the transport block, through
+        //   A^-1 A1 delta, that is negligible in the 2-norm and not in IDA's:
+        //   sigma and q near the axis sit near zero, so their weights are
+        //   ~1/atol. At k = 3 on 8 cells IDA then held order one for more than
+        //   20000 steps against the exact solve's 213, and tightening that test
+        //   to 1e-11 did not cure it.
+        // * *Absolute, and well inside Newton's own tolerance.* IDA estimates
+        //   Newton's rate as ||del_m|| / ||del_0|| in this norm and fails a step
+        //   above 0.9 (idaNlsConvTest, ida_nls.c), and it accepts a corrector
+        //   after one iteration on the strength of the last rate; an error that
+        //   is small against a late update, or against the first, is what keeps
+        //   both readings honest. At 1e-2 the run test took 658 steps against
+        //   the exact solve's 166. A test relative to the increment does not
+        //   fix that: at 1e-3 of the increment it lets a first update of size ~2
+        //   carry an error of 2e-3, and k = 4 on 8 cells held order one for
+        //   29000 steps against 214. At 1e-4 absolute every case measured takes
+        //   steps comparable to the exact solve's, and the answers agree.
+        // * *...or a millionth of the increment, whichever is larger.* The first
+        //   solve of a run is IDACalcIC's first Newton step, at cj ~ 1e9, and
+        //   its increment is ~4e8 error-weight units: 1e-4 there is 1e-13 of
+        //   it, which twenty sweeps cannot reach, and every such run fell back
+        //   to the exact solve exactly once. A relative error of 1e-6 in a
+        //   Newton update moves IDA's rate estimate by nothing it can see, and
+        //   for any increment below 100 units the absolute bound is the one in
+        //   force.
+        //
         // isZero(0.0), not the default: Eigen's dummy_precision is ~1e-12, so
-        // the bare call was an absolute magnitude test wearing a degenerate
-        // case's clothing. This fires only when the increment is exactly zero,
-        // which is the 0/0 the relative test genuinely cannot handle.
-        if (delta.isZero(0.0) || delta.norm() <= fieldSolveTolerance * g.norm())
+        // the bare call would be an absolute magnitude test wearing a degenerate
+        // case's clothing. This fires only when the increment is exactly zero.
+        constexpr double relativeFloor = 1e-6;
+        N_VLinearSum(1.0, delY, -1.0, prevDelY, change);
+        DGSoln(nVars, grid, k, N_VGetArrayPointer(change), nScalars, nAux, nField).getField() = delta;
+        N_VScale(1.0, delY, prevDelY);
+        DGSoln increment(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+        increment.getField() = g;
+        const double incrementNorm = N_VWrmsNorm(delY, ewt);
+        increment.getField().setZero(); // solveTransportJac leaves it zero; written on acceptance
+        const bool accept = delta.isZero(0.0) || N_VWrmsNorm(change, ewt) <=
+                                                     std::max(fieldSolveTolerance, relativeFloor * incrementNorm);
+        if (accept)
         {
             dpsi = g;
             converged = true;
@@ -2973,6 +3026,9 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     }
 
     N_VDestroy(work);
+    N_VDestroy(ewt);
+    N_VDestroy(prevDelY);
+    N_VDestroy(change);
 
     if (converged)
     {
@@ -2995,11 +3051,11 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     //     #sweeps  <  nField + 1
     //
     // and which side of it a run is on is a property of the coupling. The
-    // manufactured fixtures lose: at nField == 1 the sweep takes 3 against
-    // exact's 2, and at nField == 5 it takes 13 to 38 against exact's 6. The
-    // theta pinch wins: its sweep contracts at 0.10-0.19 and takes ~7.5 per
-    // solve whatever nField is, so iterative is 1.3x faster at nField == 12 and
-    // 28x at nField == 516. An escalation, though, pays fieldSolveMaxSweeps
+    // manufactured fixtures lose: over whole integrations they take 2.0-2.8
+    // sweeps a solve against an nField + 1 of 2 to 6. The theta pinch wins: its
+    // sweep contracts at 0.10-0.19 and takes ~3.7 a solve whatever nField is, so
+    // iterative is 1.5x faster at nField == 12 and 12x at nField == 132. An
+    // escalation, though, pays fieldSolveMaxSweeps
     // *plus* the exact solve on top -- which is why the mode is a cost choice,
     // stated here, in the initialize() message and in docs/field_coupling.rst.
     //
@@ -4410,7 +4466,7 @@ void SystemSolver::solveCoupledAdjointIterative()
             residual2 += (A2_transpose_cellwise[i] * delta).squaredNorm();
         residualNorm = std::sqrt(residual2);
 
-        if (residualNorm <= fieldSolveTolerance * rhsNorm)
+        if (residualNorm <= fieldSolveAdjointTolerance * rhsNorm)
         {
             zpsi = g;
             converged = true;
@@ -4457,7 +4513,7 @@ void SystemSolver::solveCoupledAdjointIterative()
         "to the exact transposed Schur solve, which costs {} transposed transport solves. "
         "The gradient is correct either way. Raise FieldSolveMaxAdjointSweeps to try "
         "longer, or set FieldSolve = exact to skip the sweep.",
-        fieldSolveMaxAdjointSweeps, residualNorm, fieldSolveTolerance, rhsNorm, nField + 1);
+        fieldSolveMaxAdjointSweeps, residualNorm, fieldSolveAdjointTolerance, rhsNorm, nField + 1);
     solveCoupledAdjointExact();
 }
 

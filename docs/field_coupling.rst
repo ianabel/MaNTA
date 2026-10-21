@@ -253,8 +253,9 @@ design.
   :math:`2\mu_0 = 1`, so :math:`p` is the local beta), and the wall fixes the
   area it encloses, :math:`\int_0^1 V' \,\mathrm{d}x = \pi a^2`. That
   integral is what determines :math:`C`.
-* The unknowns are :math:`V' = \mathrm{d}A/\mathrm{d}x` as a cubic B-spline on
-  the model's own grid of ``Intervals`` intervals, plus :math:`C`; the rows are
+* The unknowns are :math:`V' = \mathrm{d}A/\mathrm{d}x` as a :math:`C^2` cubic
+  B-spline whose knots are the transport mesh's faces, each cell split into
+  ``IntervalsPerCell`` equal intervals (default 1), plus :math:`C`; the rows are
   Galerkin against the same splines. The geometry slots are :math:`V'`,
   :math:`\mathrm{d}V'/\mathrm{d}x`, :math:`\langle|\nabla x|^2\rangle` and
   :math:`B`.
@@ -263,8 +264,35 @@ design.
   transport. The case evolves :math:`N = V' n`, which keeps continuity exactly
   conservative while :math:`V'` moves.
 * The block is banded with a one-row, one-column border, and the model
-  overrides all four ``B`` operations with Eigen's ``SparseLU``. So ``nField``
-  is set by ``Intervals`` independently of the transport's degree and mesh.
+  overrides all four ``B`` operations with Eigen's ``SparseLU``. ``nField`` is
+  :math:`n_\text{cells} \times` ``IntervalsPerCell`` :math:`+ 4`: independent
+  of the transport's degree, so a restart onto another degree carries
+  :math:`\psi` verbatim, but not of its mesh, so a restart onto another mesh is
+  refused by name.
+
+**Why the knots follow the transport mesh, and why the spline stays smooth
+across it.** The pressure arrives as the transport's piecewise polynomial
+:math:`p_h`, which the rows integrate exactly cell by cell, and :math:`p_h`
+jumps by :math:`O(h^{k+1})` at every transport face. A spline much finer than
+the mesh resolves those jumps, which puts spikes of about the jump over the knot
+spacing into :math:`\mathrm{d}V'/\mathrm{d}x` at the transport nodes beside
+each face -- and :math:`\mathrm{d}V'/\mathrm{d}x` goes straight into the flux.
+Measured on the manufactured theta pinch (``ThetaPinchMMSTests.cpp``):
+
+* one or two intervals per cell converge at :math:`k+1` in :math:`N` for
+  :math:`k = 1, 2, 3`, and four per cell at :math:`k = 1` drops to order
+  :math:`k`;
+* IDA stalls at order one -- under ``FieldSolve = exact`` as much as
+  ``iterative`` -- at two per cell on 64 cells at :math:`k = 3`, and at sixteen
+  per cell on 8 at :math:`k = 6`; at one per cell the exact solve never has;
+* letting :math:`V'` break where :math:`p_h` does (repeated knots at the faces)
+  is worse at every :math:`k`, about order :math:`k`: :math:`V'` then inherits
+  :math:`p_h`'s derivative error, :math:`O(h^k)`, cell by cell, where a smooth
+  spline averages it away.
+
+So one interval per cell is the default, and ``IntervalsPerCell`` is for a
+high-degree run in which the spline's own :math:`O(h^4)` is what limits the
+answer.
 
 .. code-block:: toml
 
@@ -273,7 +301,7 @@ design.
    FieldModel = "ThetaPinchEquilibrium"
 
    [ThetaPinchEquilibrium]
-   Intervals = 32        # nField = Intervals + 4
+   IntervalsPerCell = 1  # nField = cells * IntervalsPerCell + 4
    PressureAux = 0
 
    [ThetaPinchDiffusion]
@@ -302,8 +330,43 @@ How the coupled Jacobian is solved
 
 ``iterative`` (the default)
    Block Gauss–Seidel between the transport and field blocks, with Irons–Tuck
-   acceleration, at one transport solve per sweep. It stops once the relative
-   change in :math:`\psi` is below ``FieldSolveTolerance``.
+   acceleration, at one transport solve per sweep. It stops once a sweep changes
+   the whole increment -- transport and field together -- by less than
+   ``FieldSolveTolerance`` (default :math:`10^{-4}`) in the run's error-weighted
+   RMS norm, the one IDA's tests are in, where its Newton iteration stops at
+   0.33; or by less than a millionth of the increment, when that is larger.
+
+**What that test is measured in, and against what, were both settled by what
+each costs IDA**, on the manufactured theta pinch at :math:`10^{-9}/10^{-11}`
+and on the theta pinch in ``ThetaPinchRunTests.cpp`` at
+:math:`10^{-6}/10^{-8}`.
+
+* *In the run's weights, over the whole increment.* A relative 2-norm test on
+  :math:`\psi` alone leaves an error in the transport block, through
+  :math:`A^{-1} A_1 \delta\psi`, that is negligible in the 2-norm and not in
+  IDA's: :math:`\sigma` and :math:`q` near the axis sit near zero, where the
+  weights are about ``1/atol``. Newton then converges only linearly, the
+  leftover lands in IDA's local error estimate, and it holds order one at a
+  tiny step: the manufactured theta pinch at :math:`k = 3`, 8 cells and
+  :math:`10^{-9}/10^{-11}` took more than 20000 steps against the exact solve's
+  213, and tightening that test to :math:`10^{-11}` did not cure it.
+* *Absolute, and well inside Newton's own tolerance.* IDA estimates Newton's
+  rate as :math:`\|\delta_m\| / \|\delta_0\|` in the same norm, fails a step
+  above 0.9, and accepts a corrector after one iteration on the strength of the
+  last rate, so the solve's error has to be small against a late update and
+  against the first. At :math:`10^{-2}` the run test took 658 steps against the
+  exact solve's 166. A bound relative to the increment does not fix that: at
+  :math:`10^{-3}` of the increment a first update of size ~2 carries an error of
+  :math:`2\times10^{-3}`, and :math:`k = 4` on 8 cells held order one for 29000
+  steps against 214. At :math:`10^{-4}` absolute every case measured takes steps
+  comparable to the exact solve's -- 166 against 166, 221 against 213, 278
+  against 214 -- with the same answers.
+* *...or a millionth of the increment.* ``IDACalcIC``'s first step, at
+  :math:`c_j \sim 10^9`, has an increment of about :math:`4\times10^8`
+  error-weight units, where :math:`10^{-4}` is :math:`10^{-13}` of it and
+  twenty sweeps cannot reach it: every run escalated to the exact solve exactly
+  once. The relative arm governs only above 100 units, where an error of
+  :math:`10^{-6}` relative moves Newton's rate estimate by nothing it can see.
 
 .. important::
 
@@ -325,47 +388,43 @@ factorisation of its Schur complement. Which side of it a problem is on is a
 property of the coupling, and the tree has both:
 
 * The manufactured fixtures, with :math:`\texttt{nField}` of 1 and 5, are on
-  the losing side: iterative is about 1.5× more expensive than exact at
-  :math:`\texttt{nField} = 1` and 2.2–6.3× at :math:`\texttt{nField} = 5`.
+  the losing side: they run 2.0–2.8 sweeps per Jacobian solve against an
+  :math:`\texttt{nField}+1` of 2 to 6.
 * The theta pinch is on the winning side at every resolution measured, because
   its sweep contracts strongly (spectral radius 0.10–0.19 at every
-  :math:`c_j`) and takes about 7.5 sweeps per Jacobian solve whatever
-  :math:`\texttt{nField}` is. On 16 cells at :math:`k = 4`, one BLAS thread,
-  best of three:
+  :math:`c_j`) and takes about 3.7 sweeps per Jacobian solve whatever
+  :math:`\texttt{nField}` is. Its field unknowns follow the transport mesh, so
+  :math:`\texttt{nField}` grows with the cell count, and the exact solve's
+  :math:`\texttt{nField}+1` transport solves grow with it. ``ThetaPinch.conf``
+  at :math:`k = 4` and one interval per cell, one BLAS thread, best of three:
 
   .. list-table::
      :header-rows: 1
 
-     * - ``Intervals``
+     * - cells
        - ``nField``
        - ``exact``
        - ``iterative``
        - speed-up
      * - 8
        - 12
-       - 252 ms
-       - 196 ms
-       - 1.3×
+       - 151 ms
+       - 103 ms
+       - 1.5×
      * - 32
        - 36
-       - 583 ms
-       - 228 ms
-       - 2.6×
+       - 1288 ms
+       - 338 ms
+       - 3.8×
      * - 128
        - 132
-       - 3948 ms
-       - 496 ms
-       - 8×
-     * - 512
-       - 516
-       - 49185 ms
-       - 1772 ms
-       - 28×
+       - 24553 ms
+       - 2076 ms
+       - 12×
 
-  with the same step sequence in both modes and no fallbacks. That is the
-  regime the iterative path exists for, :math:`N_\text{magnetics} \gg
-  N_\text{HDG}`, where the exact solve's cost grows as
-  :math:`\texttt{nField}^3` and the sweep's not at all.
+  with the same step sequence in both modes and no fallbacks. The exact path
+  costs :math:`O(n_\text{cells}^2)` per Jacobian solve and the sweep
+  :math:`O(n_\text{cells})`, so the gap widens with the mesh.
 
 The Irons–Tuck step extrapolates along the last increment, which is exact once
 the sweep has settled into its dominant eigendirection and unjustified before.
@@ -394,9 +453,10 @@ accommodated. ``FieldSolveMaxAdjointSweeps`` is separate from
 ``FieldSolveMaxSweeps`` and defaults larger — 100 against 20 — because the
 adjoint always runs at :math:`c_j = 0`, where the coupling is stiffest.
 
-``FieldSolveTolerance``, though, is shared, and it does not mean the same thing
-in the two directions. Forward it bounds the relative *change* in :math:`\psi`
-between sweeps; here it bounds a relative *backward error*. The field row above
+The tolerance is separate too, ``FieldSolveAdjointTolerance`` (default
+:math:`10^{-8}`), because the two directions measure different things. Forward
+there is IDA's error test to measure against; here there is a gradient and no
+error test, and the tolerance bounds a relative *backward error*. The field row above
 holds identically at every iterate, so the residual of the pair the sweep
 returns is exactly :math:`A_2^T \, \delta z_\psi` in the first row and nothing in
 the second — which makes :math:`\|A_2^T \delta z_\psi\|`, compared against the

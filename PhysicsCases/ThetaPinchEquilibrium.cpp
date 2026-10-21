@@ -39,20 +39,68 @@ ThetaPinchEquilibrium::Parameters ThetaPinchEquilibrium::readParameters(toml::va
     if (!config.is_table() || !config.contains("ThetaPinchEquilibrium"))
         return p;
     auto const &table = config.at("ThetaPinchEquilibrium");
-    p.intervals = toml::find_or(table, "Intervals", p.intervals);
+
+    // Refused rather than ignored: find_or would read a misspelt key as absent
+    // and run on the default without a word.
+    static const std::vector<std::string> known = {"IntervalsPerCell", "PressureAux", "WallRadius",
+                                                   "VacuumField"};
+    for (auto const &[key, value] : table.as_table())
+        if (std::find(known.begin(), known.end(), key) == known.end())
+        {
+            std::string list;
+            for (auto const &k : known)
+                list += (list.empty() ? "" : ", ") + k;
+            throw std::invalid_argument("ThetaPinchEquilibrium: unknown key \"" + key +
+                                        "\" in [ThetaPinchEquilibrium]; the keys are " + list);
+        }
+
+    p.intervalsPerCell = toml::find_or(table, "IntervalsPerCell", p.intervalsPerCell);
     p.pressureAux = toml::find_or(table, "PressureAux", p.pressureAux);
     p.wallRadius = toml::find_or(table, "WallRadius", p.wallRadius);
     p.vacuumField = toml::find_or(table, "VacuumField", p.vacuumField);
     return p;
 }
 
-FieldModelSpec ThetaPinchEquilibrium::buildSpec(Index intervals)
+Vector ThetaPinchEquilibrium::knotVector(Parameters const &p, Grid const &grid)
 {
-    if (intervals < 1)
-        throw std::invalid_argument("ThetaPinchEquilibrium: Intervals must be at least 1, not " +
-                                    std::to_string(intervals));
+    if (p.intervalsPerCell < 1)
+        throw std::invalid_argument("ThetaPinchEquilibrium: IntervalsPerCell must be at least 1, not " +
+                                    std::to_string(p.intervalsPerCell));
+
+    // Every transport face is a knot, and each cell is split into
+    // intervalsPerCell equal intervals; every knot is simple, so the spline is
+    // C^2 throughout.
+    const Index nCells = static_cast<Index>(grid.getNCells());
+    const Index m = p.intervalsPerCell;
+    std::vector<double> interior;
+    for (Index i = 0; i < nCells; ++i)
+    {
+        const Interval I = grid[i];
+        if (i > 0)
+            interior.push_back(I.x_l);
+        for (Index j = 1; j < m; ++j)
+            interior.push_back(I.x_l + (I.x_u - I.x_l) * static_cast<double>(j) / static_cast<double>(m));
+    }
+
+    // Extended three intervals past each end at the end interval's width, so the
+    // basis on [0, 1] is the uniform spline's own wherever the mesh is uniform.
+    const double hLower = (grid[0].x_u - grid[0].x_l) / static_cast<double>(m);
+    const double hUpper = (grid[nCells - 1].x_u - grid[nCells - 1].x_l) / static_cast<double>(m);
+    Vector t(static_cast<Index>(interior.size()) + 8);
+    for (Index r = 0; r < 4; ++r)
+    {
+        t(r) = static_cast<double>(r - 3) * hLower;
+        t(t.size() - 1 - r) = 1.0 + static_cast<double>(3 - r) * hUpper;
+    }
+    for (size_t j = 0; j < interior.size(); ++j)
+        t(4 + static_cast<Index>(j)) = interior[j];
+    return t;
+}
+
+FieldModelSpec ThetaPinchEquilibrium::buildSpec(Index nCoefficients)
+{
     FieldModelSpec s;
-    for (Index n = 0; n < intervals + 3; ++n)
+    for (Index n = 0; n < nCoefficients; ++n)
         s.dofs.push_back({"v" + std::to_string(n), "cubic B-spline coefficient of V'", "a^2", false});
     s.dofs.push_back({"C", "total pressure p + B^2, with 2 mu0 = 1", "B0^2", false});
     s.geometry = {{"Vprime", "area per unit flux label, dA/dx", "a^2"},
@@ -70,7 +118,7 @@ ThetaPinchEquilibrium::ThetaPinchEquilibrium(toml::value const &config, Grid con
 }
 
 ThetaPinchEquilibrium::ThetaPinchEquilibrium(Parameters const &parameters_, Grid const &grid_)
-    : FieldModel(buildSpec(parameters_.intervals)), parameters(parameters_), grid(grid_)
+    : FieldModel(buildSpec(knotVector(parameters_, grid_).size() - 4)), parameters(parameters_), grid(grid_)
 {
     if (parameters.pressureAux < 0)
         throw std::invalid_argument("ThetaPinchEquilibrium: PressureAux must be an auxiliary variable index");
@@ -80,33 +128,35 @@ ThetaPinchEquilibrium::ThetaPinchEquilibrium(Parameters const &parameters_, Grid
         throw std::invalid_argument(
             "ThetaPinchEquilibrium: x is the normalised flux Phi / Phi_wall, so the grid must be [0, 1]");
 
-    const Index M = parameters.intervals;
-    h = 1.0 / static_cast<double>(M);
     wallA = M_PI * parameters.wallRadius * parameters.wallRadius;
     Phi = wallA * parameters.vacuumField;
 
-    knots3.resize(M + 7);
-    for (Index i = 0; i < M + 7; ++i)
-        knots3(i) = static_cast<double>(i - 3) * h;
-    knots4.resize(M + 9);
-    for (Index i = 0; i < M + 9; ++i)
-        knots4(i) = static_cast<double>(i - 4) * h;
+    knots = knotVector(parameters, grid);
+    nCoef = knots.size() - 4;
+    for (Index i = 3; i < knots.size() - 3; ++i)
+        if (breaks.empty() || knots(i) > breaks.back())
+            breaks.push_back(knots(i));
 
-    tailAtLower = Vector::Zero(nCoefficients());
-    tailAtLower = antiderivativeWeights(0.0); // with tailAtLower zero, this is the raw tail
-    basisIntegrals = antiderivativeWeights(1.0);
-
+    // The model's Gauss rule, per interval between distinct knots, and the
+    // running integral of every basis function at each knot. Eight points are
+    // exact for the cubics many times over.
+    cumulative = Matrix::Zero(static_cast<Index>(breaks.size()), nCoef);
     std::vector<double> x, w;
-    for (Index c = 0; c < M; ++c)
+    for (size_t b = 0; b + 1 < breaks.size(); ++b)
     {
-        gaussOn(c * h, (c + 1) * h, x, w);
+        cumulative.row(b + 1) = cumulative.row(b);
+        gaussOn(breaks[b], breaks[b + 1], x, w);
         for (size_t q = 0; q < x.size(); ++q)
         {
+            const Local l = localBasis(x[q]);
             qx.push_back(x[q]);
             qw.push_back(w[q]);
-            qBasis.push_back(localBasis(x[q]));
+            qBasis.push_back(l);
+            for (Index r = 0; r < 4; ++r)
+                cumulative(b + 1, l.first + r) += w[q] * l.d(0, r);
         }
     }
+    basisIntegrals = cumulative.row(cumulative.rows() - 1).transpose();
 }
 
 // ---- the spline -------------------------------------------------------------
@@ -115,35 +165,30 @@ ThetaPinchEquilibrium::Local ThetaPinchEquilibrium::localBasis(Position x) const
 {
     x = std::clamp(x, 0.0, 1.0);
     Local l;
-    l.first = Spline3::Span(x, 3, knots3) - 3;
-    l.d = Spline3::BasisFunctionDerivatives(x, 2, 3, knots3);
+    l.first = Spline3::Span(x, 3, knots) - 3;
+    l.d = Spline3::BasisFunctionDerivatives(x, 2, 3, knots);
     return l;
 }
 
-// The antiderivative of a cubic B-spline is a sum of quartic ones on the same
-// knots (de Boor): Int_{-inf}^x N3_n = h * sum_{j >= n+1} N4_j(x), the shift of
-// one because knots4 starts an interval earlier than knots3. The quartic basis
-// is a partition of unity on [0, 1], so the tail sum is 1 for every j left of
-// the four that are nonzero at x and 0 for every j right of them.
+// The integral to the last distinct knot at or left of x, then the rest of the
+// way by two-point Gauss, which is exact for the cubic pieces.
 Vector ThetaPinchEquilibrium::antiderivativeWeights(Position x) const
 {
     x = std::clamp(x, 0.0, 1.0);
-    const Index span = Spline4::Span(x, 4, knots4);
-    const auto N4 = Spline4::BasisFunctions(x, 4, knots4);
-    const Index first4 = span - 4;
-
-    Vector out(nCoefficients());
-    for (Index n = 0; n < nCoefficients(); ++n)
-    {
-        const Index j = n + 1;
-        double tail = 0.0;
-        if (j <= first4)
-            tail = 1.0;
-        else if (j <= span)
-            for (Index r = j - first4; r <= 4; ++r)
-                tail += N4(r);
-        out(n) = h * tail - tailAtLower(n);
-    }
+    const auto it = std::upper_bound(breaks.begin(), breaks.end(), x);
+    const Index b = std::min<Index>(static_cast<Index>(it - breaks.begin()) - 1,
+                                    static_cast<Index>(breaks.size()) - 2);
+    Vector out = cumulative.row(b).transpose();
+    const double a = breaks[b], mid = 0.5 * (a + x), half = 0.5 * (x - a);
+    if (half > 0.0)
+        for (double s : {-1.0 / std::sqrt(3.0), 1.0 / std::sqrt(3.0)})
+        {
+            // Evaluated inside [a, x], so the span is the one starting at a
+            // even where a carries repeated knots.
+            const Local l = localBasis(mid + half * s);
+            for (Index r = 0; r < 4; ++r)
+                out(l.first + r) += half * l.d(0, r);
+        }
     return out;
 }
 
@@ -188,9 +233,9 @@ Matrix const &ThetaPinchEquilibrium::pressureProjection(std::vector<Position> co
         // Split the cell at every field knot inside it, so each piece is a
         // polynomial in x and the Gauss rule integrates it exactly.
         std::vector<double> cuts{I.x_l};
-        for (Index c = 1; c < parameters.intervals; ++c)
-            if (c * h > I.x_l && c * h < I.x_u)
-                cuts.push_back(c * h);
+        for (double b : breaks)
+            if (b > I.x_l && b < I.x_u)
+                cuts.push_back(b);
         cuts.push_back(I.x_u);
 
         for (size_t s = 0; s + 1 < cuts.size(); ++s)

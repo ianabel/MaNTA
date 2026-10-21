@@ -463,29 +463,30 @@ reason it was not made:
     RichGeometricDiffusion: a property of the coupling, not of the time step.
     That fixture could not be integrated on FieldSolve = iterative at all before
     the acceleration -- IDA cut h to the floor over five attempts at the first
-    step, with Newton update norms of order 1e10 -- and now completes with zero
-    fallbacks over ~2000 Jacobian solves and reaches the finite-difference
+    step, with Newton update norms of order 1e10 -- and now completes with no
+    fallbacks over ~1900 Jacobian solves and reaches the finite-difference
     gradient to 1e-10.
 
     **Measured, the rank-one step copes better than the argument above predicts,
     and the successor is a scaling concern rather than a known gap.**
     ManufacturedFieldVector's five unknowns, scanned over coupling strengths from
     1 to 1e5 -- rho rising to just under 2 and never falling back within a cap
-    of 400 -- converge every time, in 13 to 38 sweeps depending on the
-    right-hand side. The steps are rank one individually but not the *same*
+    of 400 -- converge every time. The steps are rank one individually but not the *same*
     rank-one direction, so the iteration is not confined to the two-dimensional
     subspace the pessimistic argument assumes. No fixture has yet been found
     where the acceleration fails outright.
 
     What the spread does mean is that **FieldSolveMaxSweeps = 20 is not enough
-    for five field unknowns**: over six right-hand side *directions* at
-    strength 10 (rho = 1.57) the counts are 13, 33, 38, 21, 17, 19, so three of
-    the six escalate at the shipped default and all six converge at 60.
-    a_divergent_five_dof_coupling_is_still_solved_exactly measures exactly that
-    and asserts it, as a tripwire: it requires both some to converge and some to
-    escalate, so raising the default or improving the accelerator has to update
-    the test and this entry together. Note the counts cannot be varied by
-    *scaling* the right-hand side -- the solve is homogeneous -- so a
+    for five field unknowns on every right-hand side**: over six right-hand
+    side *directions* at strength 10 (rho = 1.57), with the sweep stopping at
+    1e-4 in the fixture's error weights or a millionth of the increment, the
+    counts are 10, 23, 10, 17, 13, 10, so one of the six escalates at the
+    shipped default and all six converge at 60. a_divergent_five_dof_coupling_is_still_solved_exactly measures exactly
+    that and asserts it, as a tripwire: it requires both some to converge and
+    some to escalate, so raising the default, changing the stopping test or
+    improving the accelerator has to update the test and this entry together.
+    The counts depend on the run's tolerances -- the stop is in its error
+    weights -- and on the right-hand side's direction, so a
     single-right-hand-side measurement of this is not a measurement.
 
   - Nothing latches the fallback. A genuinely divergent coupling pays

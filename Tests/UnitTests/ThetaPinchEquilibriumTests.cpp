@@ -61,6 +61,19 @@ GlobalStateMatrix zeroDerivatives(Index nRows, Grid const &grid, Index k)
 }
 
 const Grid unitGrid(0.0, 1.0, 5);
+// Unequal cells, so the knots are not uniform and the end extensions differ.
+const Grid gradedGrid(std::vector<double>{0.0, 0.1, 0.25, 0.45, 0.7, 1.0});
+
+/// The distinct knots of a model on `grid` with m intervals per cell: what the
+/// spline is piecewise polynomial between.
+std::vector<double> knotsOf(Grid const &grid, Index m)
+{
+    std::vector<double> out{0.0};
+    for (Index i = 0; i < static_cast<Index>(grid.getNCells()); ++i)
+        for (Index j = 1; j <= m; ++j)
+            out.push_back(grid[i].x_l + (grid[i].x_u - grid[i].x_l) * static_cast<double>(j) / static_cast<double>(m));
+    return out;
+}
 
 } // namespace
 
@@ -68,9 +81,9 @@ BOOST_AUTO_TEST_SUITE(theta_pinch_equilibrium_tests)
 
 BOOST_AUTO_TEST_CASE(the_spline_is_a_partition_of_unity_with_consistent_derivatives)
 {
-    Model m({.intervals = 7}, unitGrid);
+    Model m({.intervalsPerCell = 2}, gradedGrid);
     const double eps = 1e-6;
-    for (double x : {0.0, 0.03, 1.0 / 7.0, 0.31, 0.5, 0.77, 6.0 / 7.0, 0.999, 1.0})
+    for (double x : {0.0, 0.03, 0.05, 0.1, 0.31, 0.45, 0.5, 0.77, 0.85, 0.999, 1.0})
     {
         BOOST_TEST_CONTEXT("x = " << x)
         {
@@ -105,20 +118,21 @@ BOOST_AUTO_TEST_CASE(the_spline_is_a_partition_of_unity_with_consistent_derivati
 
 BOOST_AUTO_TEST_CASE(the_antiderivative_is_the_integral_of_each_basis_function)
 {
-    Model m({.intervals = 6}, unitGrid);
+    Model m({.intervalsPerCell = 2}, gradedGrid);
+    const std::vector<double> knots = knotsOf(gradedGrid, 2);
     using GK = boost::math::quadrature::gauss_kronrod<double, 31>;
-    for (double x : {0.0, 0.1, 1.0 / 6.0, 0.42, 0.5, 0.9, 1.0})
+    for (double x : {0.0, 0.1, 0.175, 0.42, 0.5, 0.9, 1.0})
     {
         BOOST_TEST_CONTEXT("x = " << x)
         {
             const Vector w = m.antiderivativeWeights(x);
             for (Index n = 0; n < m.nCoefficients(); ++n)
             {
-                // Piecewise polynomial, so integrate interval by interval.
+                // Piecewise polynomial, so integrate knot interval by interval.
                 double ref = 0.0;
-                for (Index c = 0; c < 6; ++c)
+                for (size_t c = 0; c + 1 < knots.size(); ++c)
                 {
-                    const double a = c / 6.0, b = std::min(x, (c + 1) / 6.0);
+                    const double a = knots[c], b = std::min(x, knots[c + 1]);
                     if (b <= a)
                         break;
                     ref += GK::integrate([&](double y)
@@ -132,15 +146,16 @@ BOOST_AUTO_TEST_CASE(the_antiderivative_is_the_integral_of_each_basis_function)
             }
         }
     }
-    // Interior basis functions integrate to one interval width.
-    const Vector total = m.antiderivativeWeights(1.0);
-    BOOST_TEST(total(3) == 1.0 / 6.0, boost::test_tools::tolerance(1e-14));
-    BOOST_TEST(total.sum() == 1.0, boost::test_tools::tolerance(1e-14));
+    // A partition of unity integrates to the length of [0, 1]; and on uniform
+    // knots an interior basis function integrates to one interval width.
+    BOOST_TEST(m.antiderivativeWeights(1.0).sum() == 1.0, boost::test_tools::tolerance(1e-14));
+    const Model uniform({.intervalsPerCell = 2}, unitGrid);
+    BOOST_TEST(uniform.antiderivativeWeights(1.0)(3) == 0.1, boost::test_tools::tolerance(1e-14));
 }
 
 BOOST_AUTO_TEST_CASE(the_vacuum_state_is_a_uniform_field)
 {
-    Model m({.intervals = 8, .wallRadius = 1.5, .vacuumField = 2.0}, unitGrid);
+    Model m({.intervalsPerCell = 2, .wallRadius = 1.5, .vacuumField = 2.0}, gradedGrid);
     Vector psi(m.nCoefficients() + 1);
     m.InitialFieldValue(psi);
     Vector g(4);
@@ -156,7 +171,7 @@ BOOST_AUTO_TEST_CASE(the_vacuum_state_is_a_uniform_field)
     }
 
     // And with no pressure it is the equilibrium: every row vanishes.
-    auto [states, points, weights] = pressureOnNodes(unitGrid, 3, [](double) { return 0.0; });
+    auto [states, points, weights] = pressureOnNodes(gradedGrid, 3, [](double) { return 0.0; });
     Vector R = Vector::Zero(m.nCoefficients() + 1);
     m.FieldResidual(R, psi, Vector::Zero(psi.size()), states, points, weights, 0.0);
     BOOST_TEST(R.cwiseAbs().maxCoeff() < 1e-12);
@@ -164,12 +179,12 @@ BOOST_AUTO_TEST_CASE(the_vacuum_state_is_a_uniform_field)
 
 BOOST_AUTO_TEST_CASE(dgeometry_dpsi_matches_finite_differences)
 {
-    Model m({.intervals = 9}, unitGrid);
+    Model m({.intervalsPerCell = 2}, gradedGrid);
     const Vector psi = perturbedField(m);
     const Index n = psi.size();
     Matrix dG(4, n);
     Vector gp(4), gm(4);
-    for (double x : {0.0, 0.07, 1.0 / 9.0, 0.48, 0.91, 1.0})
+    for (double x : {0.0, 0.07, 0.125, 0.48, 0.91, 1.0})
     {
         BOOST_TEST_CONTEXT("x = " << x)
         {
@@ -196,9 +211,9 @@ BOOST_AUTO_TEST_CASE(dgeometry_dpsi_matches_finite_differences)
 
 BOOST_AUTO_TEST_CASE(the_residual_derivatives_match_finite_differences)
 {
-    Model m({.intervals = 7}, unitGrid);
+    Model m({.intervalsPerCell = 2}, gradedGrid);
     const Index k = 3;
-    auto [states, points, weights] = pressureOnNodes(unitGrid, k, [](double x) { return 0.3 * (1.0 - x * x); });
+    auto [states, points, weights] = pressureOnNodes(gradedGrid, k, [](double x) { return 0.3 * (1.0 - x * x); });
     const Vector psi = perturbedField(m);
     const Index n = psi.size();
     const Vector zero = Vector::Zero(n);
@@ -210,7 +225,7 @@ BOOST_AUTO_TEST_CASE(the_residual_derivatives_match_finite_differences)
         return out;
     };
 
-    GlobalStateMatrix dR = zeroDerivatives(n, unitGrid, k), dRdot = zeroDerivatives(n, unitGrid, k);
+    GlobalStateMatrix dR = zeroDerivatives(n, gradedGrid, k), dRdot = zeroDerivatives(n, gradedGrid, k);
     Matrix dRdpsi = Matrix::Zero(n, n), dRddpsidt = Matrix::Zero(n, n);
     m.FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt, psi, zero, states, points, weights, 0.0);
 
@@ -244,11 +259,12 @@ BOOST_AUTO_TEST_CASE(the_pressure_projection_integrates_the_interpolant_exactly)
 {
     // A polynomial of degree k is its own interpolant, so P p must reproduce
     // Int phi_m p dx to rounding, with field knots falling inside transport
-    // cells (7 field intervals against 5 cells).
-    Model m({.intervals = 7}, unitGrid);
+    // cells (three intervals per cell, on unequal cells).
+    Model m({.intervalsPerCell = 3}, gradedGrid);
+    const std::vector<double> knots = knotsOf(gradedGrid, 3);
     const Index k = 4;
     auto p = [](double x) { return 1.0 + x - 2.0 * x * x + 0.5 * std::pow(x, 4); };
-    auto [states, points, weights] = pressureOnNodes(unitGrid, k, p);
+    auto [states, points, weights] = pressureOnNodes(gradedGrid, k, p);
     const Vector pv = states.Aux().row(0).transpose();
     const Vector got = m.pressureProjection(points) * pv;
 
@@ -256,20 +272,20 @@ BOOST_AUTO_TEST_CASE(the_pressure_projection_integrates_the_interpolant_exactly)
     for (Index n = 0; n < m.nCoefficients(); ++n)
     {
         double ref = 0.0;
-        for (Index c = 0; c < 7; ++c)
+        for (size_t c = 0; c + 1 < knots.size(); ++c)
             ref += GK::integrate([&](double y)
                                  {
                                      const auto l = m.localBasis(y);
                                      const Index r = n - l.first;
                                      return ((r >= 0 && r < 4) ? l.d(0, r) : 0.0) * p(y); },
-                                 c / 7.0, (c + 1) / 7.0, 0, 1e-15);
+                                 knots[c], knots[c + 1], 0, 1e-15);
         BOOST_TEST(got(n) == ref, boost::test_tools::tolerance(1e-12));
     }
 }
 
 BOOST_AUTO_TEST_CASE(the_field_block_solves_agree_with_a_dense_solve)
 {
-    Model m({.intervals = 12}, unitGrid);
+    Model m({.intervalsPerCell = 2}, unitGrid);
     auto [states, points, weights] = pressureOnNodes(unitGrid, 3, [](double x) { return 0.2 * (1.0 - x); });
     const Vector psi = perturbedField(m);
     const Index n = psi.size();
@@ -320,16 +336,16 @@ BOOST_AUTO_TEST_CASE(the_equilibrium_converges_to_the_closed_form_at_fourth_orde
     const double Cexact = 0.5 * (bracket.first + bracket.second);
     auto VpExact = [&](double x) { return M_PI / std::sqrt(Cexact - p(x)); };
 
-    // Transport resolved far beyond the field, so the pressure's interpolation
-    // error does not pollute the field's.
-    const Grid fine(0.0, 1.0, 16);
+    // The pressure at a degree high enough that its own interpolation error,
+    // O(h^9), stays well below the spline's O(h^4).
     const Index k = 8;
 
     std::vector<double> errors;
     const std::vector<Index> Ms{4, 8, 16, 32, 64};
     for (Index M : Ms)
     {
-        Model m({.intervals = M}, fine);
+        const Grid fine(0.0, 1.0, M);
+        Model m({.intervalsPerCell = 1}, fine);
         auto [states, points, weights] = pressureOnNodes(fine, k, p);
         const Index n = m.nCoefficients() + 1;
         Vector psi(n), R(n), dpsi(n);
@@ -379,7 +395,7 @@ BOOST_AUTO_TEST_CASE(the_equilibrium_converges_to_the_closed_form_at_fourth_orde
 
 BOOST_AUTO_TEST_CASE(a_non_positive_vprime_is_a_recoverable_failure)
 {
-    Model m({.intervals = 6}, unitGrid);
+    Model m({.intervalsPerCell = 1}, unitGrid);
     auto [states, points, weights] = pressureOnNodes(unitGrid, 3, [](double) { return 0.0; });
     Vector psi = perturbedField(m);
     psi(4) = -10.0;
@@ -395,18 +411,27 @@ BOOST_AUTO_TEST_CASE(it_is_registered_and_reads_its_own_table)
     using namespace toml::literals::toml_literals;
     const toml::value config = u8R"(
         [ThetaPinchEquilibrium]
-        Intervals = 11
+        IntervalsPerCell = 3
         PressureAux = 0
         WallRadius = 2.0
     )"_toml;
     auto model = FieldModels::InstantiateFieldModel("ThetaPinchEquilibrium", config, unitGrid);
-    BOOST_TEST(model->nFieldDOF() == 11 + 3 + 1);
+    BOOST_TEST(model->nFieldDOF() == 5 * 3 + 3 + 1);
     BOOST_TEST(model->nGeometry() == 4);
     auto const *tp = dynamic_cast<Model const *>(model.get());
     BOOST_REQUIRE(tp != nullptr);
     BOOST_TEST(tp->wallArea() == 4.0 * M_PI, boost::test_tools::tolerance(1e-15));
 
-    BOOST_CHECK_THROW(Model({.intervals = 4}, Grid(0.0, 2.0, 4)), std::invalid_argument);
+    BOOST_CHECK_THROW(Model(Model::Parameters{}, Grid(0.0, 2.0, 4)), std::invalid_argument);
+    BOOST_CHECK_THROW(Model({.intervalsPerCell = 0}, unitGrid), std::invalid_argument);
+
+    // A key the model does not read is refused, not run on the default.
+    const toml::value misspelt = u8R"(
+        [ThetaPinchEquilibrium]
+        Intervals = 16
+    )"_toml;
+    BOOST_CHECK_THROW(FieldModels::InstantiateFieldModel("ThetaPinchEquilibrium", misspelt, unitGrid),
+                      std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

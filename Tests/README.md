@@ -396,7 +396,7 @@ exact path's answer with nothing in the result to say so.
 `the_coupled_problem_converges_at_k_plus_one_in_u` therefore runs the whole `k =
 1, 2, 3` study on **both** modes and requires the local orders to agree.
 
-They do, to **1.8e-9, 3.2e-8 and 1.3e-7** at `k = 1, 2, 3` -- so the numbers above
+They do, to **7.6e-9, 1.4e-8 and 1.5e-6** at `k = 1, 2, 3` -- so the numbers above
 are the iterative mode's own, and the table would be unchanged had it been the
 exact mode's. The assertion is pinned at 0.01, the brief's "third digit of a
 rate", rather than at the measured gap: the gap is set by where IDA's Newton
@@ -407,24 +407,19 @@ worse.
 **`getFieldSweepStats().fallbacks` is zero at every refinement, on every case in
 the file, and that is asserted rather than printed** (`checkNoFallbacks`). The
 distinction is the whole finding: forcing an escalation by capping the sweep at
-one iteration leaves every local order in the file *bit for bit unchanged* -- the
-escalation returns the exact path's answer -- and drives the two-mode gap from
-1.3e-7 to **exactly zero**, so the agreement check passes more strongly while the
-study has stopped measuring the iterative mode at all. Only the fallback count
+one iteration leaves every local order in the file unchanged to the digits
+printed -- the escalation returns the exact path's answer -- and moves the
+two-mode gap no further than a different step sequence moves it anyway (1.0e-6
+at `k = 3`, against 1.5e-6), so the agreement check passes as before while the
+study has mostly stopped measuring the iterative mode. Only the fallback count
 tells the difference, and only if something checks it.
 
-The sweep runs 2.5 to 3.6 iterations per Jacobian solve here. Read that beside
-`FieldJacobianTests.cpp`'s 13 to 38 sweeps on *random* right-hand sides, where
-three of six exhaust the shipped cap of 20: the two are not in tension, and the
+The sweep runs 2.0 to 2.8 iterations per Jacobian solve here. Read that beside
+`FieldJacobianTests.cpp`'s 10 to 23 sweeps on *random* right-hand sides, where
+one of six exhausts the shipped cap of 20: the two are not in tension, and the
 contrast is the explanation for why that cap is adequate in a real run. Newton's
 right-hand sides are small, smooth corrections about a nearby state; a random
 vector is the hard case. Neither number says anything about the cap on its own.
-
-One outlier is worth recording so it is not mistaken for a defect later: the
-multi-DOF case at `n = 8` takes 1591 field solves and 4877 sweeps where its
-neighbours take ~200 and ~700. That is IDA working harder over that particular
-step sequence, not the sweep failing -- the fallback count is still zero and the
-ratio, 3.07 sweeps per solve, is inside the band every other row sits in.
 
 **These tests are not vacuous, and that was checked rather than assumed.** Three
 mutations, applied and reverted:
@@ -433,7 +428,7 @@ mutations, applied and reverted:
 |---|---|
 | `SigmaFn` drops `s.geom(0)`, i.e. the geometry never reaches the physics | the flux check fails at every sample point; both single-DOF studies die with `IDASolve could not complete`; the multi-DOF orders collapse to -0.001, -0.000, -0.000 |
 | `ManufacturedField::FieldResidual` becomes `psi - 1.05 Int u dx`, a 5% error in the field row -- not even a sign error | `k = 1` orders fall to 1.79, 0.85, 0.07; `k = 2` to 0.26, 0.00, -0.00; `k = 3` to 0.005, 0.000, 0.000; `psi` to -0.007 |
-| `FieldSolveMaxSweeps` capped at 1, so every Jacobian solve escalates | every order unchanged, the two-mode gap improves to exactly zero, and only `checkNoFallbacks` fires -- 382 fallbacks in 382 solves at `k = 1, n = 4` |
+| `FieldSolveMaxSweeps` capped at 1, so every Jacobian solve whose increment is not already below the tolerance escalates | every order unchanged, the two-mode gap moves by no more than the step sequence moves it, and only `checkNoFallbacks` fires -- 335 fallbacks in 357 solves at `k = 1, n = 4` |
 
 The second is the one that matters for the equations: it is the failure mode the
 whole file exists for, and the study loses the rate entirely rather than
@@ -469,6 +464,50 @@ carries no information whatever about the equations.
   to do with the coupling -- and the source-consistency check would still pass,
   since it samples away from the kinks by more than the stencil's reach.
 
+### The theta pinch's own order study
+
+`ThetaPinchMMSTests.cpp` runs the registered pair -- `ThetaPinchDiffusion`'s
+own flux and aux row, under `ThetaPinchEquilibrium` -- against a manufactured
+density `n = (1 + cos(pi x)/2)(1 + t)`. With `p = T n` independent of `V'`, the
+equilibrium is closed form up to the constant `C(t)`, which a root-find on the
+wall condition gives, and the source is `N_t - d_x sigma_hat` with every term
+analytic. Before trusting any order, the file checks the case's own `SigmaFn`
+on the exact state against the manufactured flux (2.3e-15) and the PDE residual
+by a six-point stencil of that `SigmaFn` (1.9e-10 against `|S|` = 30) -- the
+sign convention trap, which an order study cannot see.
+
+Local orders, one interval per cell, at `1e-9 / 1e-11`:
+
+| `k` | `N`, n = 8 -> 16 -> 32 (-> 64) | `V'` |
+|---|---|---|
+| 1 | 1.99, 1.99, (2.00) | 2.55, 2.49, (2.42) |
+| 2 | 3.01, 3.00, (3.00) | 3.59, 3.53, (3.47) |
+| 3 | 3.95, 3.99, (4.03) | 3.97, 3.98, (4.06) |
+
+The bracketed 64-cell column is measured and left out of the test for its cost.
+`N` goes at `k + 1`, the transport's own rate; `C` converges too, at 1.4 to 4.1,
+not cleanly enough to assert. At `k = 6` on 8 cells, where the spline is what
+limits the answer, halving the knot spacing goes at 4.03 in `N` and 4.00 in
+`V'`. Zero fallbacks throughout, asserted.
+
+**Two findings about the method came out of this study, and each has a test
+that only a run can provide.**
+
+* *The field grid has to follow the transport mesh.* With knots finer than the
+  mesh the spline resolves the `O(h^{k+1})` jumps of `p_h` at the faces into
+  spikes in `d_x V'`, which the flux reads: four intervals per cell at `k = 1`
+  goes at order 1.0, and two per cell on 64 cells at `k = 3` stalls IDA at order
+  one under either `FieldSolve`. Breaking `V'` at the faces instead is worse,
+  about order `k`. `ThetaPinchEquilibrium.hpp` has the measurements.
+* *The sweep has to stop in IDA's own terms.* Under the original test -- a
+  relative 2-norm change in `psi` alone -- `k = 3` on 8 cells took more than
+  20000 steps against the exact solve's 213, and the answer was right. The
+  sweep left an error in `sigma` and `q` near the axis that is O(1) in IDA's
+  error weights. `the_iterative_solve_does_not_stall_ida` runs that case in both
+  modes and requires comparable step counts (221 against 213 now); no unit test
+  with random right-hand sides at a fixture state sees it, because the residue
+  only concentrates there on Newton's own corrections.
+
 ### The coupled regression case
 
 `Tests/RegressionTests/ThetaPinch.conf` runs the registered field model,
@@ -496,6 +535,7 @@ catches:
 | `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
 | `ThetaPinchEquilibriumTests.cpp` | the theta pinch's spline, its derivatives, its sparse block solve in both directions, and its equilibrium against the closed form `V' = Phi / sqrt(C - p)`, at local orders 3.8-3.9 in the field resolution |
 | `FieldJacobianTests.cpp` (theta pinch cases) | the coupled Jacobian of a model whose `A2` lives only in an aux column and whose `A1` runs through four slots; that its sweep contracts at every `cj`, so a sweep that diverges on it is the sweep's defect |
+| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA |
 | `ThetaPinchRunTests.cpp` | a degree-changing restart losing psi; diagnostics evaluated without geometry; a reused solver; the coupled gradient for a parameter that reaches the transport only through the field (`T`); `G_field` against differences of the reported `G`; the objective estimate's field share; the adjoint sweep falling back when it should converge |
 
 **The restart case's oracle is the raw netCDF array, not `getSolution()`, and

@@ -265,12 +265,12 @@ void SystemSolver::initialize()
 			logmsg<LOG_LEVEL::INFO>(
 				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
 				"blocks with Irons-Tuck acceleration, one transport solve per sweep against "
-				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "
-				"FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
-				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
+				"exact's {} per Jacobian solve. Stops once a sweep changes the increment by less "
+				"than FieldSolveTolerance = {} in the error-weighted norm (or a millionth of the "
+				"increment), up to FieldSolveMaxSweeps = {} sweeps ({} for the adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
 				"mode costs more than exact in the worst case and never less accuracy. It is "
 				"only *cheaper* than exact when the sweep converges in fewer than {} sweeps, "
-				"which depends on the coupling: the theta pinch does it in ~7.5 at any "
+				"which depends on the coupling: the theta pinch does it in ~3.7 at any "
 				"resolution, while a strongly divergent coupling may not at all. Watch the "
 				"\"Coupled field sweeps\" line at the end of the run.",
 				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps,

@@ -1338,9 +1338,16 @@ read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
 physics). Three things about it are load-bearing. Its pressure crosses as the
 transport case's aux variable, so its `A2` lives *only* in aux columns and its
 `A1` runs through four geometry slots — the combination the manufactured
-fixtures never reach. Its unknowns live on its own spline grid, so `nField` is
-independent of `k` and the mesh, which is what lets a degree-changing restart
-carry `psi` verbatim (`setInitialConditions`' projection path). And
+fixtures never reach. Its spline's knots are the transport mesh's faces
+(`IntervalsPerCell`, default 1), so `nField` is independent of `k` -- which is
+what lets a degree-changing restart carry `psi` verbatim
+(`setInitialConditions`' projection path) -- and not of the mesh, so a restart
+onto another mesh is refused by its `nField`. The knots follow the mesh because
+`p_h` jumps at every face and a spline finer than the mesh resolves the jumps
+into spikes in `dV'/dx`, which the flux reads: four intervals per cell costs an
+order at `k = 1`, and more stalls IDA under either `FieldSolve`. The model's
+header has the measurements, and refuses an unknown key in its table rather
+than running on a default. And
 `ThetaPinchDiffusion` refuses to run without a field model unless
 `VacuumGeometry = true`, so a frozen-geometry run is a choice rather than a
 forgotten key.
@@ -1364,15 +1371,44 @@ in *both* the forward and the adjoint directions, so it can be slower than
 `#sweeps < nField + 1` — one transport solve per sweep against `nField + 1` for
 the exact solve, plus its dense `O(nField^3)` Schur factorisation — and which
 side a problem is on is a property of the coupling. The manufactured fixtures
-lose (iterative ~1.5x more expensive at `nField = 1`, 2.2-6.3x at `nField = 5`);
-the theta pinch wins at every resolution measured, from 1.3x at `nField = 12`
-to 28x at `nField = 516`, because its sweep contracts at 0.10-0.19 at every
-`cj` and takes ~7.5 sweeps per solve whatever `nField` is.
-`docs/field_coupling.rst` has the table. Note that
-isolated Jacobian solves with *random* right-hand sides needed 13-38 sweeps at
-`nField = 5`, while a real integration averages 2.5-3.6 and has never hit the
-cap; Newton's right-hand sides are far more benign than random vectors, and
-neither number says anything about the cap on its own.
+lose (2.0-2.8 sweeps per solve against an `nField + 1` of 2 to 6); the theta
+pinch wins at every resolution measured, from 1.5x at `nField = 12` to 12x at
+`nField = 132`, because its sweep contracts at 0.10-0.19 at every `cj` and
+takes ~3.7 sweeps per solve whatever `nField` is. `docs/field_coupling.rst` has
+the table. Note that isolated Jacobian solves with *random* right-hand sides
+need 10-23 sweeps at `nField = 5`, while a real integration averages 2.0-2.8
+and has never hit the cap; Newton's right-hand sides are far more benign than
+random vectors, and neither number says anything about the cap on its own.
+
+**The sweep has to stop in IDA's own terms, or "a cost choice" becomes a 100x
+cost, and it took three tests to learn which terms.** The forward sweep stops once one sweep
+changes the *whole* increment, transport and field, by less than
+`FieldSolveTolerance` (1e-4) in the run's error-weighted RMS norm -- absolute,
+in the norm IDA's Newton test is in -- or by less than a millionth of the
+increment, whichever is larger. Each alternative was measured failing, and
+the failure is never a wrong answer, only IDA stalling at order one with a tiny
+step, which looks like a hard problem rather than a solver defect:
+
+* a relative 2-norm test on `psi` alone (the original) leaves an error in
+  `sigma` and `q` near the axis, where values sit near zero and the weights are
+  ~1/atol, that is O(1) in IDA's norm: 20000+ steps against the exact solve's
+  213 on the manufactured theta pinch, uncured by tightening it to 1e-11;
+* an absolute bound of 1e-2 is too loose for IDA's Newton rate estimate,
+  `||del_m|| / ||del_0||`: 658 steps against 166;
+* a bound *relative to the increment* at 1e-3 lets a first Newton update of
+  size ~2 carry 2e-3: 29000 steps against 214 at `k = 4`;
+* and the absolute bound alone cannot be met on `IDACalcIC`'s first step,
+  whose increment at `cj ~ 1e9` is ~4e8 units: every run escalated to the exact
+  solve exactly once, which is what the millionth is for -- it governs only
+  above 100 units, where a 1e-6 relative error moves Newton's rate by nothing.
+
+`the_iterative_solve_does_not_stall_ida` (`ThetaPinchMMSTests.cpp`) and
+`exact_and_iterative_field_solves_give_the_same_run` (`ThetaPinchRunTests.cpp`)
+are the guards, and they have to be *runs*: a unit test with random right-hand
+sides at a fixture state cannot see any of the three, because the residue only
+concentrates where it hurts on Newton's own corrections. The adjoint sweep has
+no error test to measure against and keeps a relative backward error, under its
+own key, `FieldSolveAdjointTolerance`.
 `FieldSolveMaxAdjointSweeps` defaults to 100 against `FieldSolveMaxSweeps`'s 20
 because the adjoint always runs at `cj = 0`, where the coupling is stiffest.
 `TODO` records two candidate latches for a run that falls back on every solve;

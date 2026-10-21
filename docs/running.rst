@@ -307,10 +307,10 @@ prints one extra line beside the step and Jacobian counts at the end::
 The ratio is what to read. A sweep is one transport solve; the exact Schur
 complement is :math:`\texttt{nField}+1` of them. So the iterative path is
 *cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`.
-Whether it is depends on the coupling: the theta pinch runs about 7.5 sweeps per
-Jacobian solve at every field resolution, so iterative wins from
-:math:`\texttt{nField} = 12` up, while the small manufactured fixtures run 2.5
-to 3.6 against an :math:`\texttt{nField}+1` of 2 to 6 and lose — see
+Whether it is depends on the coupling: the theta pinch runs about 3.7 sweeps per
+Jacobian solve at every resolution, so iterative wins from
+:math:`\texttt{nField} = 12` up, while the small manufactured fixtures run 2.0
+to 2.8 against an :math:`\texttt{nField}+1` of 2 to 6 and lose — see
 :doc:`field_coupling` for the numbers.
 
 .. important::
@@ -337,9 +337,8 @@ makes ``FieldSolve`` a cost choice and never an accuracy one. The adjoint has it
 own cap, ``FieldSolveMaxAdjointSweeps``, defaulting to 100 against the forward
 20: the transposed iteration has the same spectrum — it *is* the transpose — but
 always runs at :math:`c_j = 0`, where the spectral radius is largest, so it is
-strictly the harder direction. Five field unknowns have been measured needing
-13–38 sweeps on isolated right-hand sides, which is why inheriting the forward
-cap would under-serve it.
+strictly the harder direction, and inheriting the forward cap would
+under-serve it.
 
 .. note::
 

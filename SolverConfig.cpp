@@ -360,6 +360,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(FieldSolveTolerance, double);
     READ(FieldSolveMaxSweeps, int);
     READ(FieldSolveMaxAdjointSweeps, int);
+    READ(FieldSolveAdjointTolerance, double);
 #undef READ
 
     // Those whose presence, rather than value, is the signal.
@@ -1127,6 +1128,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setFieldSolveTolerance(config.FieldSolveTolerance);
     system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
     system.setFieldSolveMaxAdjointSweeps(config.FieldSolveMaxAdjointSweeps);
+    system.setFieldSolveAdjointTolerance(config.FieldSolveAdjointTolerance);
 
     if (config.PseudoTransientInitialStep > 0.0)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);

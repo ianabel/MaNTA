@@ -45,7 +45,10 @@ public:
     // The adjoint parameters, as AutodiffTransportSystem numbers them.
     static constexpr Index pD0 = 0, pTemperature = 1;
 
-private:
+protected:
+    // Protected rather than private for the manufactured-solution study
+    // (ThetaPinchMMSTests.cpp), which replaces the source, the wall datum and the
+    // initial state and keeps the flux, the aux row and the parameters.
     Value LowerBoundary(Index, Time) const override;
     Value UpperBoundary(Index, Time) const override;
 
