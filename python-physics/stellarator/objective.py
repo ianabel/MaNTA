@@ -67,20 +67,23 @@ def _itg_node_tangent(itg, itg_tangent, points, n_itg):
     are None where nothing depends on the parameters (the weights, rho, a).
     Only the signals matter -- the transported flux is normalised to the
     constants' B0 and a, not the equilibrium's B_ref (`ITGFlux.local`).
-    Interpolation is linear in the table, so interpolating the tangent table
-    is the tangent of the interpolated geometry.
+    The interpolation is monotonic (PCHIP), whose slopes are nonlinear in the
+    table, so the tangent is pushed through it by a jvp rather than by
+    interpolating the tangent table.
     """
     points = jnp.asarray(points)
     sig_t = getattr(itg_tangent, "signals", None)
     if sig_t is None:
         return jnp.zeros((points.shape[0], n_itg))
-    sig_nodes_t = itg.signals_at(points, signals=sig_t)
+    _, sig_nodes_t = jax.jvp(
+        lambda s: itg.signals_at(points, signals=s), (itg.signals,), (sig_t,)
+    )
     out = sig_nodes_t.reshape(points.shape[0], -1)
     assert out.shape[1] == n_itg, (out.shape, n_itg)
     return out
 
 
-def make_objective(config, yancc_res=None, normalization=None):
+def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-10):
     """Make an external (python) function work with JAX.
 
     The returned function takes `(tree_in, grid)`, where `tree_in` is
@@ -94,6 +97,11 @@ def make_objective(config, yancc_res=None, normalization=None):
     over the optimisation (config.field_norm_from_eq at the initial
     equilibrium, say): one that followed the geometry would move the physical
     sources with it, through a path the gradient does not carry.
+
+    `failure_value` is G when the steady solve fails. The default, 1e-10, is
+    for a driver minimising 1/G (stored energy): a failure is then 1e10 and
+    the step is rejected. A driver minimising G itself (the ITG heat flux)
+    needs a large value instead.
     """
     if normalization is None:
         normalization = config.get("Normalization", {})
@@ -141,7 +149,7 @@ def make_objective(config, yancc_res=None, normalization=None):
                 return st.G()[0]
 
             def false_fn():
-                return jnp.array([1e-10], dtype=cpu_fp_dtype)
+                return jnp.array([failure_value], dtype=cpu_fp_dtype)
                 # ec = st2.run()
                 #
                 # return st2.G()[0]

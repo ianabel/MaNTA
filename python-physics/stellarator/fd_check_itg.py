@@ -83,6 +83,8 @@ def parse_args():
     p.add_argument("--ss-tol", type=float, default=1e-10, help="primal SteadyStateTolerance")
     p.add_argument("--evolve-density", action="store_true")
     p.add_argument("--itg-scale", type=float, default=1e-2, help="ITGScale")
+    p.add_argument("--objective", default="StoredEnergy",
+                   help="StellaratorTransport objective G, e.g. ITGHeatFlux")
     p.add_argument("--sweep", type=int, default=7,
                    help="proximal: points in the boundary-mode sweep plotted (0 to skip)")
     p.add_argument("--sweep-frac", type=float, default=0.1,
@@ -306,6 +308,7 @@ def main():
     config, nodes = make_config(args)
     config["Stellarator"]["useITGProxy"] = True
     config["Stellarator"]["ITGScale"] = args.itg_scale
+    config["Objective"] = args.objective
     eq = load_eq(args.eq)
     if args.rescale != "none":
         from desc.compat import rescale

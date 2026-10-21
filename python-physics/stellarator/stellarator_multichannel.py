@@ -301,6 +301,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         solver_config = config["Solver"]
         st_config = config["Stellarator"]
         normalization = config.get("Normalization", {})
+        # what the adjoint differentiates: the name of one of the objective
+        # methods below (StoredEnergy, ITGHeatFlux, ...)
+        objective = config.get("Objective", "StoredEnergy")
 
         # Built and passed rather than assigned: see buildSpec. params is a
         # local until the base class exists, because until then there is no
@@ -355,8 +358,20 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.points
         )
         self.vp_interp = interpax.Akima1DInterpolator(self.points, self.vp, check=False)
-        g = [self.StoredEnergy]
-        # g = [self.FusionPower]
+        objectives = {
+            "StoredEnergy": self.StoredEnergy,
+            "FusionPower": self.FusionPower,
+            "tauE": self.tauE,
+            "TripleProduct": self.TripleProduct,
+            "ITGHeatFlux": self.ITGHeatFlux,
+        }
+        if objective not in objectives:
+            raise ValueError(
+                f"unknown Objective {objective!r}; expected one of {sorted(objectives)}"
+            )
+        if objective == "ITGHeatFlux" and self.itg is None:
+            raise ValueError("Objective = ITGHeatFlux needs the ITG term (useITGProxy)")
+        g = [objectives[objective]]
 
         self.levels = []  # (cells, k) of each plan MaNTA handed over
         ### for adaptive grid problems ###
@@ -392,6 +407,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return True
 
     def run(self, tFinal=None):
+        # what getAdjointGradients hands the gradient read; only the sliced
+        # steady solve below produces one
+        self.steady_outcome = None
         if tFinal is not None:
             self.runner.Run(tFinal)
             return 0
@@ -408,18 +426,25 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
                 with jax.default_device(jax.devices("cpu")[0]):
 
+                    # each branch returns the outcome, so the value leaving
+                    # the cond exists only once finish_steady (where the
+                    # adjoint is solved) or abandon_steady has run: that is
+                    # what orders a later gradient read after them
                     def true_fn():
                         self.runner.finish_steady()
-                        return True
+                        return outcome
 
                     def false_fn():
                         self.runner.abandon_steady()
-                        return False
+                        return outcome
 
-                    ec = jax.lax.cond(
+                    self.steady_outcome = jax.lax.cond(
                         jnp.equal(outcome, MaNTA.SteadyOutcome.Converged),
                         true_fn,
                         false_fn,
+                    )
+                    ec = jnp.equal(
+                        self.steady_outcome, MaNTA.SteadyOutcome.Converged
                     )
                     jax.debug.print("ec: {val}", val=ec)
 
@@ -456,7 +481,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return self.runner.Get_G()
 
     def getAdjointGradients(self):
-        G, G_p = self.runner.Get_adjoint_gradients()
+        G, G_p = self.runner.Get_adjoint_gradients(
+            getattr(self, "steady_outcome", None)
+        )
         return G, G_p
 
     def getPressure(self, points=None):
@@ -523,7 +550,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     ):
         return params.constants.IonElectronEnergyExchange(state.n, state.pe, state.pi)
 
-    def StoredEnergy(self, field, state, x, params: StellaratorParams):
+    def StoredEnergy(self, field, vp, vpp, geometry, state, x, params: StellaratorParams):
 
         if self.params.config.evolveDensity:
             return (
@@ -533,7 +560,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         else:
             return state.Variable[0]
 
-    def FusionPower(self, field, state, x, params: StellaratorParams):
+    def FusionPower(self, field, vp, vpp, geometry, state, x, params: StellaratorParams):
         if self.params.config.evolveDensity:
             n = state.Variable[Channel.Density]
             pi = 2.0 / 3.0 * state.Variable[Channel.IonEnergy]
@@ -553,12 +580,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
             / params.constants.HeatEquationNormalization()
         )
 
-    def tauE(self, field, state, x, params: StellaratorParams):
-        return self.StoredEnergy(field, state, x, params) / self.FusionPower(
-            field, state, x, params
-        )
+    def tauE(self, field, vp, vpp, geometry, state, x, params: StellaratorParams):
+        args = (field, vp, vpp, geometry, state, x, params)
+        return self.StoredEnergy(*args) / self.FusionPower(*args)
 
-    def TripleProduct(self, field, state, x, params):
+    def TripleProduct(self, field, vp, vpp, geometry, state, x, params):
         if self.params.config.evolveDensity:
             n = state.Variable[Channel.Density]
             pi = 2.0 / 3.0 * state.Variable[Channel.IonEnergy]
@@ -573,7 +599,20 @@ class StellaratorTransport(MaNTA.TransportSystem):
             )
             Ti = 2.0 / 3.0 * state.Variable[0] / n
 
-        return n * Ti * self.tauE(field, state, x, params)
+        return n * Ti * self.tauE(field, vp, vpp, geometry, state, x, params)
+
+    def ITGHeatFlux(self, field, vp, vpp, geometry, state, x, params):
+        """V' <q_ITG . grad rho>, the NN ITG ion heat flux, in the units MaNTA
+        transports it in and with the sign of an outward flux: G is then its
+        integral over rho. Reads `geometry` (the ITG signals at this node), V'
+        and V'' explicitly, so the adjoint's explicit term carries all three.
+        """
+        flux, _ = self.itg.local(
+            geometry, state, x, 0.0, vp, vpp, params, params.config.evolveDensity
+        )
+        channel = Channel.IonEnergy if params.config.evolveDensity else 0
+        # local's sign follows compute_dke_sol's, where the flux enters negated
+        return -flux[channel]
 
     @partial(jax.jit, static_argnums=(0,))
     def InitialValue(self, index, x):
@@ -873,11 +912,20 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         for i in range(self.nVars):
             self.addUpperBoundarySensitivity(i)
 
+    # each g is g(field, vp, vpp, geometry, state, x, params), geometry the ITG
+    # signals at the node (None without the ITG term)
+    _g_axes = (0, 0, 0, 0, State.vmap_axes(), 0, None)
+
+    def _g_explicit(self):
+        """What g reads besides the state: the parameters its explicit
+        derivative is taken with respect to, in G_p's column order."""
+        return (self.field, self.vp, self.vpp, self.itg_geometry)
+
     @MaNTA_Decorator
     def gFn(self, i, states, positions):
         out = _unpad_state(
-            jax.vmap(self.g[i], in_axes=(0, State.vmap_axes(), 0, None))(
-                self.field, states, positions, self.params
+            jax.vmap(self.g[i], in_axes=self._g_axes)(
+                *self._g_explicit(), states, positions, self.params
             ),
             self.npoints,
         )
@@ -886,19 +934,32 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     @MaNTA_Decorator
     def dgFndp(self, i, states, positions):
 
-        fgrad = eqx.filter_grad(self.g[i])
-        fgrad_vmap = eqx.filter_vmap(fgrad, in_axes=(0, State.vmap_axes(), 0, None))
-        grad_out = fgrad_vmap(self.field, states, positions, self.params)
+        g = self.g[i]
 
+        def g_of(explicit, state, x, params):
+            return g(*explicit, state, x, params)
+
+        fgrad_vmap = eqx.filter_vmap(
+            eqx.filter_grad(g_of), in_axes=((0, 0, 0, 0), State.vmap_axes(), 0, None)
+        )
+        grad_out = fgrad_vmap(self._g_explicit(), states, positions, self.params)
+
+        # ravelled per node as (field, V', V'', ITG geometry): the order of
+        # G_p's columns, so no reordering is needed
         grad_unstack = tree_unstack(grad_out)[: self.npoints]
         grad_unraveled = jnp.stack(
             [jax.flatten_util.ravel_pytree(g)[0] for g in grad_unstack], axis=0
         )
-        # zero columns for V', V'', the ITG geometry and the boundary
-        # sensitivities: g reads none of them explicitly
+        assert grad_unraveled.shape[1] == self.np_cell, (
+            grad_unraveled.shape,
+            self.np_cell,
+        )
+        # unweighted: PyAdjointProblem::explicitParameterDerivative applies
+        # the quadrature weight w_i of each node itself
+        # zero columns for the boundary sensitivities: g does not read them
         grad_w_vprime = jnp.pad(
             grad_unraveled,
-            ((0, 0), (0, 2 + self.n_itg + self.np_boundary)),
+            ((0, 0), (0, self.np_boundary)),
             mode="constant",
         )
 
@@ -906,9 +967,9 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
     @MaNTA_Decorator
     def dg(self, i, states, positions):
-        out = jax.vmap(
-            jax.grad(self.g[i], argnums=1), in_axes=(0, State.vmap_axes(), 0, None)
-        )(self.field, states, positions, self.params)
+        out = jax.vmap(jax.grad(self.g[i], argnums=4), in_axes=self._g_axes)(
+            *self._g_explicit(), states, positions, self.params
+        )
         return _unpad_state(out, self.npoints)
 
     @Physics_Decorator

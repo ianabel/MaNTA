@@ -139,13 +139,20 @@ class ITGFlux(eqx.Module):
     def signals_at(self, x, signals=None):
         """The tabulated signals interpolated to radius `x` (or to each of `x`).
 
-        `signals` defaults to the module's own; passing a tangent of them
-        interpolates the tangent, which is exact because interpolation is
-        linear in the data.
+        `signals` defaults to the module's own. The interpolation is not
+        linear in `signals`, so a tangent of the table is carried through it
+        by a jvp (`objective._itg_node_tangent`), not by passing it here.
+
+        Monotonic (PCHIP) rather than "cubic": the shear-normalised signals
+        blow up at a node near a zero of shat (4e7 on the itg-proxy demo's
+        optimised equilibrium), and "cubic"'s finite-difference slopes carry
+        that into the neighbouring interval, where Q came out exactly 0
+        between two nodes at ~6. PCHIP slopes are zeroed at a local extremum,
+        so the spike stays in the intervals adjacent to its node.
         """
         signals = self.signals if signals is None else signals
         x = jnp.clip(x, self.rho[0], self.rho[-1])
-        return interpax.interp1d(x, self.rho, signals, method="cubic")
+        return interpax.interp1d(x, self.rho, signals, method="monotonic")
 
     def geometry_at(self, points):
         """Per-point geometry, the signals at each of `points`, shape
