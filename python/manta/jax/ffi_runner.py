@@ -232,7 +232,20 @@ class FFIRunner(MaNTA.Runner):
                 has_side_effect=True,
             )(obj=self.get_address())
 
-    def Get_adjoint_gradients(self):
+    def Get_adjoint_gradients(self, outcome=None):
+        """G and G_p from the last run's adjoint solve.
+
+        `outcome` is the SteadyOutcome of the solve those gradients belong to:
+        what start_steady returned, or better a value that only exists once
+        finish_steady has run, since that is where the adjoint is solved. It is
+        passed so that the read depends on the solve. Inside a compiled program
+        (a lax.scan, say) XLA orders by data dependence alone, and without it
+        this call may run first, or be hoisted out of the loop, and read a G_p
+        nothing has filled. Omitted, it is taken as Converged -- right for eager
+        code that has already checked. Anything else is refused with an error.
+        """
+        args = () if outcome is None else (jnp.asarray(outcome, dtype=cpu_i_dtype),)
+
         def cpu_call():
             adjoint_output = [
                 jax.ShapeDtypeStruct((self.ng,), cpu_fp_dtype),
@@ -240,7 +253,7 @@ class FFIRunner(MaNTA.Runner):
             ]
             G, G_p = jax.ffi.ffi_call(
                 ffi_ops["get_adjoint_gradients"][Platform.CPU], adjoint_output
-            )(obj=self.get_address())
+            )(*args, obj=self.get_address())
             return G, G_p
 
         def gpu_call():
@@ -250,7 +263,7 @@ class FFIRunner(MaNTA.Runner):
             ]
             G, G_p = jax.ffi.ffi_call(
                 ffi_ops["get_adjoint_gradients"][Platform.GPU], adjoint_output
-            )(obj=self.get_address())
+            )(*args, obj=self.get_address())
             return cpu_fp_dtype(G), cpu_fp_dtype(G_p)
 
         if has_gpu:

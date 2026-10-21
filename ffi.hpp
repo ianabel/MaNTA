@@ -177,14 +177,44 @@ inline Matrix adjointGradientMatrix(py::dict const &G_p) {
   return full;
 }
 
+// The outcome of the solve whose gradients these are, as start_steady or
+// continue_steady returned it -- or after finish_steady, which is where the
+// adjoint solve runs. It is an operand rather than something to look up so that
+// the read *depends* on the solve: inside a compiled program (a lax.scan, as
+// DESC's jac_chunk_size uses) XLA orders by data dependence alone, and with no
+// operand this call could run before the solve, or be hoisted out of the loop,
+// and read a G_p nothing had filled. Absent, it is taken as Converged, which is
+// what an eager caller that has already checked the outcome means.
+static ffi::Error
+checkAdjointOutcome(std::optional<SystemSolver::SteadyOutcome> outcome) {
+  using SO = SystemSolver::SteadyOutcome;
+  const SO o = outcome.value_or(SO::Converged);
+  if (o == SO::Converged)
+    return ffi::Error::Success();
+  return ffi::Error::InvalidArgument(
+      "get_adjoint_gradients: the steady solve did not converge (SteadyOutcome " +
+      std::to_string(static_cast<int>(o)) +
+      "), so there are no adjoint gradients to read");
+}
+
 static ffi::Error get_adjoint_gradients_ffi_impl(
-    PyRunner *runner, ffi::Result<ffi::BufferR1<fp_dtype>> Gout,
+    PyRunner *runner, std::optional<ffi::BufferR0<i_dtype>> outcome,
+    ffi::Result<ffi::BufferR1<fp_dtype>> Gout,
     ffi::Result<ffi::BufferR2<fp_dtype>> G_p_out) {
   py::gil_scoped_acquire gil;
-  py::tuple result = runner->getAdjointGradients();
-  auto G = result[0].cast<Vector>();
-  copyToBuffer(Gout, G);
-  copyToBuffer(G_p_out, adjointGradientMatrix(result[1]));
+  std::optional<SystemSolver::SteadyOutcome> o;
+  if (outcome)
+    o = static_cast<SystemSolver::SteadyOutcome>(*outcome->typed_data());
+  if (auto err = checkAdjointOutcome(o); err.failure())
+    return err;
+  try {
+    py::tuple result = runner->getAdjointGradients();
+    auto G = result[0].cast<Vector>();
+    copyToBuffer(Gout, G);
+    copyToBuffer(G_p_out, adjointGradientMatrix(result[1]));
+  } catch (const std::exception &e) {
+    return ffi::Error::Internal(e.what());
+  }
 
   return ffi::Error::Success();
 };
@@ -249,13 +279,28 @@ static void copyToBufferCUDA(cudaStream_t stream, Buffer &&lhs, const T &rhs) {
 
 static ffi::Error get_adjoint_gradients_ffi_impl_cuda(
     cudaStream_t stream, PyRunner *runner,
+    std::optional<ffi::BufferR0<i_dtype_cuda>> outcome,
     ffi::Result<ffi::BufferR1<fp_dtype_cuda>> Gout,
     ffi::Result<ffi::BufferR2<fp_dtype_cuda>> G_p_out) {
   py::gil_scoped_acquire gil;
-  py::tuple result = runner->getAdjointGradients();
-  auto G = result[0].cast<Vector>();
-  copyToBufferCUDA(stream, Gout, G);
-  copyToBufferCUDA(stream, G_p_out, adjointGradientMatrix(result[1]));
+  std::optional<SystemSolver::SteadyOutcome> o;
+  if (outcome) {
+    int32_t value;
+    cudaMemcpyAsync(&value, outcome->typed_data(), sizeof(int32_t),
+                    cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
+    o = static_cast<SystemSolver::SteadyOutcome>(value);
+  }
+  if (auto err = checkAdjointOutcome(o); err.failure())
+    return err;
+  try {
+    py::tuple result = runner->getAdjointGradients();
+    auto G = result[0].cast<Vector>();
+    copyToBufferCUDA(stream, Gout, G);
+    copyToBufferCUDA(stream, G_p_out, adjointGradientMatrix(result[1]));
+  } catch (const std::exception &e) {
+    return ffi::Error::Internal(e.what());
+  }
   cudaStreamSynchronize(stream);
   return ffi::Error::Success();
 };
@@ -306,6 +351,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(get_adjoint_gradients_ffi_ops,
                               get_adjoint_gradients_ffi_impl,
                               ffi::Ffi::Bind()
                                   .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .OptionalArg<ffi::BufferR0<i_dtype>>()
                                   .Ret<ffi::BufferR1<fp_dtype>>()
                                   .Ret<ffi::BufferR2<fp_dtype>>());
 
@@ -347,6 +393,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(get_adjoint_gradients_ffi_ops_cuda,
                               ffi::Ffi::Bind()
                                   .Ctx<ffi::PlatformStream<cudaStream_t>>()
                                   .Attr<ffi::Pointer<PyRunner>>("obj")
+                                  .OptionalArg<ffi::BufferR0<i_dtype_cuda>>()
                                   .Ret<ffi::BufferR1<fp_dtype_cuda>>()
                                   .Ret<ffi::BufferR2<fp_dtype_cuda>>());
 

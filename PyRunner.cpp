@@ -565,6 +565,17 @@ py::tuple PyRunner::getAdjointGradients(void) {
 
   auto np_internal = adjoint->getNpInternal();
 
+  // G_p is filled by the adjoint solve at the end of a run. Read before one --
+  // a solve that failed or was abandoned, or a call ordered ahead of the run --
+  // it has no columns, and leftCols below would abort the process in Eigen's
+  // bounds assertion rather than raise.
+  if (system->G_p.cols() < adjoint->getNp())
+    throw std::runtime_error(
+        "\"getAdjointGradients\" called before an adjoint solve has filled G_p "
+        "(it has " + std::to_string(system->G_p.cols()) + " columns, needs " +
+        std::to_string(adjoint->getNp()) +
+        "); run with solveAdjoint = True and check the run converged");
+
   Matrix G_p = system->G_p.leftCols(np_internal);
 
   // Create output to pass back to Python
