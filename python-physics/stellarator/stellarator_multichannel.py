@@ -185,14 +185,31 @@ class FieldJac(eqx.Module):
     flux: Callable
 
     def __call__(
-        self, states, positions, t, field, vp, vpp, pitchgrid, speedgrid, params,
+        self,
+        states,
+        positions,
+        t,
+        field,
+        vp,
+        vpp,
+        pitchgrid,
+        speedgrid,
+        params,
         evolveDensity=False,
     ):
         def flux_of(tree_in):
             _field, _vp, _vpp = tree_in
             return self.flux(
-                states, positions, t, _field, _vp, _vpp, pitchgrid, speedgrid,
-                params, evolveDensity,
+                states,
+                positions,
+                t,
+                _field,
+                _vp,
+                _vpp,
+                pitchgrid,
+                speedgrid,
+                params,
+                evolveDensity,
             )
 
         return eqx.filter_jacrev(flux_of)((field, vp, vpp))
@@ -318,9 +335,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # config.DEFAULT_NORMALIZATION. Changing one changes what the
         # normalised entries of config["Stellarator"] mean, so a physically
         # identical run needs config.rescale_config as well.
-        self.params = StellaratorParams(
-            config, **normalization_args(normalization)
-        )
+        self.params = StellaratorParams(config, **normalization_args(normalization))
 
         if self.params.config.useITGProxy and itg is None:
             raise ValueError("useITGProxy is set but no ITGFlux was passed")
@@ -554,11 +569,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         if self.params.config.evolveDensity:
             return (
-                state.Variable[Channel.IonEnergy]
-                + state.Variable[Channel.ElectronEnergy]
+                params.constants.n0
+                * 1e-20
+                * (
+                    state.Variable[Channel.IonEnergy]
+                    + state.Variable[Channel.ElectronEnergy]
+                )
             )
         else:
-            return state.Variable[0]
+            return params.constants.n0 * 1e-20 * state.Variable[0]
 
     def FusionPower(self, field, vp, vpp, geometry, state, x, params: StellaratorParams):
         if self.params.config.evolveDensity:
@@ -1055,13 +1074,19 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         daux_out = []
         for i in range(0, self.nVars):
             dsigma_out.append(
-                with_itg(unravel(ddke_data[0][i]), ditg[0][i] if self.itg is not None else None)
+                with_itg(
+                    unravel(ddke_data[0][i]),
+                    ditg[0][i] if self.itg is not None else None,
+                )
             )
             dsources_out.append(with_itg(unravel(dsources[i]), None))
 
         for i in range(0, self.nAux):
             daux_out.append(
-                with_itg(unravel(ddke_data[1][i]), ditg[1][i] if self.itg is not None else None)
+                with_itg(
+                    unravel(ddke_data[1][i]),
+                    ditg[1][i] if self.itg is not None else None,
+                )
             )
 
         return [dsigma_out, dsources_out, daux_out]
