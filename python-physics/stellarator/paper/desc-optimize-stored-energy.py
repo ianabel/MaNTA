@@ -43,7 +43,7 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-eq_name = "eq_itg"
+eq_name = "eq4"
 fname = "stellarator_opt" + eq_name
 
 #
@@ -69,10 +69,10 @@ fname = "stellarator_opt" + eq_name
 fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 0.02,
+    "ParticleSourceHeight": fac * 0.5,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 8.0,
+    "NBIPower": fac * 80.0,
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
     "ECHPower": fac * 0.0,
@@ -84,7 +84,7 @@ st_config = {
     "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
-    "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+    "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
     "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
     "useBatching": True,
     "nchunks": 3,
@@ -93,7 +93,7 @@ st_config = {
 # st_config and the solver settings are written in the default normalisation.
 # True converts them (rescale_config) so only the units change, not the physics;
 # False reads them as numbers in the new units.
-keep_physics = True
+keep_physics = False
 
 
 rho_upper = 1.0
@@ -192,9 +192,9 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # eq = desc.compat.rescale(
 #     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
 # )
-# # #
-# # # # # # #
-# # # # # eq.pressure = desc_pressure
+# # # #
+# # # # # # # #
+# # # # # # eq.pressure = desc_pressure
 # eq = eq.solve(x_scale="ess")[0]
 # eqs = EquilibriaFamily(eq)
 # # desc_pressure = eq.get_profile('p')
@@ -243,7 +243,7 @@ yancc_wrapper = yancc_data.from_eq(
 
 # Normalise lengths and fields to the initial equilibrium's a and <|B|>_rms,
 # fixed from here on: every run below, and the objective, use these numbers
-normalization = field_norm_from_eq(eq_init)
+normalization = {"n0": 1e19, **field_norm_from_eq(eq_init)}
 print(f"Normalization from the initial equilibrium: {normalization}")
 
 
