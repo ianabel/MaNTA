@@ -503,7 +503,7 @@ stored_energy_weight = 50.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 40
+max_it = 20
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]

@@ -210,6 +210,8 @@ def dke_field_jac(
 Linear diffusion with the same signature as above for testing purposes
 """
 
+_TEST_D = 0.3
+
 
 def test_flux(
     _state,
@@ -228,17 +230,17 @@ def test_flux(
 
     def ambipolar(state, x, t, field, vp, vpp, *args):
 
-        particle_flux = vp * 0.1 * state.dndrho
-        ion_heat_flux = vp * 0.1 * state.dTidrho
+        particle_flux = vp * _TEST_D * state.dndrho
+        ion_heat_flux = vp * _TEST_D * state.dTidrho
 
-        electron_heat_flux = vp * 0.1 * state.dTedrho
+        electron_heat_flux = vp * _TEST_D * state.dTedrho
 
         aux_g_out = 0.0 * vp
 
         return [particle_flux, ion_heat_flux, electron_heat_flux], [aux_g_out]
 
     def constant_density(state, x, t, field, vp, vpp, *args):
-        return [vp * 0.01 * state.dTidrho], []
+        return [vp * _TEST_D * state.dTidrho], []
 
     if evolveDensity:
         return ambipolar(state, x, t, field, vp, vpp, pitchgrid, speedgrid, params)
@@ -301,12 +303,12 @@ reference values are fixed physical constants, deliberately not
 `params.constants`.
 """
 
-_MOCK_D_ION = 0.03  # [1/s], at the temperature, density and field below
-_MOCK_D_ELECTRON = 0.015
+_MOCK_D_ION = 0.003  # [1/s], at the temperature, density and field below
+_MOCK_D_ELECTRON = 0.0015
 _MOCK_T_REF = 1000.0  # [eV]
 _MOCK_N_REF = 1e20  # [m^-3]
 _MOCK_B_REF = 5.0  # [T]
-_MOCK_T_EXPONENT = 3.5
+_MOCK_T_EXPONENT = 1.5
 _MOCK_N_EXPONENT = -1.0
 _MOCK_D2_OVER_D1 = 3.5
 _ELEMENTARY_CHARGE = 1.60217663e-19

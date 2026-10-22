@@ -31,10 +31,14 @@ import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
 driver = os.path.abspath(
-    sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, "desc-optimize-itg-flux.py")
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else os.path.join(here, "desc-optimize-itg-flux.py")
 )
 family = os.path.abspath(
-    sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, "eq_itg_flux_all_equilibria.h5")
+    sys.argv[2]
+    if len(sys.argv) > 2
+    else os.path.join(here, "eq_itg_flux_all_equilibria.h5")
 )
 outdir = here
 os.chdir(os.path.dirname(driver))
@@ -74,7 +78,11 @@ aLT_scan = jnp.linspace(*A_OVER_LT_RANGE, 291)
 
 def solve(eq, name):
     yw = ns["yancc_data"].from_eq(
-        ns["yancc_rho"], eq=eq, nt=ns["yancc_ntheta"], nz=ns["yancc_nzeta"], **ns["yancc_res"]
+        ns["yancc_rho"],
+        eq=eq,
+        nt=ns["yancc_ntheta"],
+        nz=ns["yancc_nzeta"],
+        **ns["yancc_res"],
     )
     solver = {**ns["initial_solver_config"], "OutputFilename": "marginal_" + name}
     config = ns["normalized"]({"Stellarator": st_config, "Solver": solver})
@@ -104,9 +112,9 @@ def solve(eq, name):
             "Scalars": [],
         }
     )
-    s = jax.vmap(StellaratorState.from_state, in_axes=(State.vmap_axes(), 0, 0, 0, None))(
-        state, rho, vp, vpp, st.params
-    )
+    s = jax.vmap(
+        StellaratorState.from_state, in_axes=(State.vmap_axes(), 0, 0, 0, None)
+    )(state, rho, vp, vpp, st.params)
     aLT = -s.dTidrho / s.Ti
     aLn = -s.dndrho / s.n
 

@@ -28,38 +28,73 @@ from itg_wrapper import itg_at, make_itg_builder, make_itg_flux
 from manta.jax import State
 from stellarator_state import StellaratorState
 
-eq_name = "eq_itg"
+eq_name = "eq_itg_flux"
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq_initial = desc.examples.get("precise_QH")
 # eq_final = eqs[0]
 eq_initial, eq_final = eqs[0], eqs[-1]
 
 
+st_config = {
+    "ParticleSourceCenter": 0.0,
+    "ParticleSourceHeight": 0.02,
+    "ParticleSourceWidth": 0.6,
+    "NBICenter": 0.0,
+    "NBIPower": 16.0,  # doubled from the stored-energy script's 8.0
+    "NBIWidth": 0.15,
+    "ECHCenter": 0.0,
+    "ECHPower": 0.0,
+    "ECHWidth": 0.1,
+    "EdgeTemperature": 0.5,
+    "EdgeDensity": 0.4,
+    "ADCoefficient": 0.0,
+    "n0": 1.0,
+    "T0": 1.0,
+    "alpha": 4.0,
+    "FusionFactor": 0.01,
+    "evolveDensity": False,
+    "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs ITG_NN_DIR
+    "ITGScale": 1.0,
+    "useBatching": True,
+    "nchunks": 3,
+}
+
+
 def make_state_from_output(rho, fname="stellarator_opt" + eq_name):
     data = Dataset(fname + ".nc", "r")
     x = jnp.array(data.variables["x"][:])
-    n = Akima1DInterpolator(
-        x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
-    )(rho)
     ui = Akima1DInterpolator(
         x, jnp.array(data.groups["IonEnergy"].variables["u"][:][-1, :])
     )(rho)
-    ue = Akima1DInterpolator(
-        x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
-    )(rho)
-    dndx = Akima1DInterpolator(
-        x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
-    )(rho)
+
     duidx = Akima1DInterpolator(
         x, jnp.array(data.groups["IonEnergy"].variables["q"][:][-1, :])
     )(rho)
-    duedx = Akima1DInterpolator(
-        x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
-    )(rho)
-    Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
+
+    if st_config["evolveDensity"]:
+        n = Akima1DInterpolator(
+            x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
+        )(rho)
+        ue = Akima1DInterpolator(
+            x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
+        )(rho)
+        dndx = Akima1DInterpolator(
+            x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
+        )(rho)
+        duedx = Akima1DInterpolator(
+            x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
+        )(rho)
+        Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
+        Variable = jnp.stack([n, ui, ue]).transpose()
+        Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+    else:
+        Variable = jnp.asarray(ui)[:, None]
+        Derivative = jnp.asarray(duidx)[:, None]
+
+        Er = jnp.zeros(Variable.shape)
+
     data.close()
-    Variable = jnp.stack([n, ui, ue]).transpose()
-    Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+
     state = {
         "Variable": Variable,
         "Derivative": Derivative,
@@ -70,32 +105,6 @@ def make_state_from_output(rho, fname="stellarator_opt" + eq_name):
     }
     return State.from_manta(state)
 
-
-fac = 1.0
-st_config = {
-    "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 0.015,
-    "ParticleSourceWidth": 0.6,
-    "NBICenter": 0.0,
-    "NBIPower": fac * 8.0,
-    "NBIWidth": 0.15,
-    "ECHCenter": 0.0,
-    "ECHPower": fac * 0.0,
-    "ECHWidth": 0.1,
-    "EdgeTemperature": 0.5,
-    "EdgeDensity": 0.4,
-    "ADCoefficient": 0.0,
-    "n0": 0.5,
-    "T0": 1.0,
-    "FusionFactor": 0.01,
-    "evolveDensity": True,
-    "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
-    # must match the run's: MaNTA transported ITGScale times the prediction,
-    # and that is what is plotted
-    "ITGScale": 1.0,
-    "useBatching": True,
-    "nchunks": 3,
-}
 
 config = StellaratorConfig(rhoUpper=1.0, **st_config)
 # The run's normalisation. The ITG flux takes its gyro-Bohm value at the
@@ -111,7 +120,7 @@ yancc_nzeta = 25
 yancc_res = {"na": 45, "nx": 7}
 
 
-rho = jnp.linspace(0.01, 1.0, 50)
+rho = jnp.linspace(0.05, 0.95, 37)
 
 _eqs = [eq_initial, eq_final]
 
@@ -132,14 +141,16 @@ state_ = make_state_from_output(rho)
 #     model_dir="/home/eatocco/projects/itg-proxy/demo/neural_networks/",
 #     solve_length_at_compute=False,
 # )
+
+builder = make_itg_builder(
+    st_config,
+    eq_initial,
+    model_dir="/home/eatocco/projects/itg-proxy/demo/neural_networks/",
+)
+
 for eq, name, color in zip(_eqs, names, colors):
     yancc_wrapper = yancc_data.from_eq(
         rho, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-    )
-    builder = make_itg_builder(
-        st_config,
-        eq,
-        model_dir="/home/eatocco/projects/itg-proxy/demo/neural_networks/",
     )
     itg_wrapper = builder(eq.params_dict)
 
@@ -156,7 +167,7 @@ for eq, name, color in zip(_eqs, names, colors):
         state.n, state.Ti, params, params.constants.B0, params.constants.a
     )
     Qi_GB = jax.vmap(itg_wrapper.normalized_heat_flux)(
-        rho, -state.Ti / state.dTidrho, -state.n / state.dndrho
+        rho, -state.dTidrho / state.Ti, -0.5 * state.dndrho / state.n
     )
 
     # Qi = vp * jax.vmap(itg_wrapper.heat_flux_SI, in_axes=(0, 0, None))(
@@ -180,11 +191,11 @@ for eq, name, color in zip(_eqs, names, colors):
     # V' <q . grad r> in W/m^2, r = a rho with the a the gyro-Bohm value used
     ax.plot(
         rho,
-        Qi_GB,
-        # -jnp.array(Qi)
-        # * params.constants.HeatEquationNormalization()
-        # * params.constants.a
-        # * 1e-6,
+        # Qi_GB,
+        -jnp.array(Qi)
+        * params.constants.HeatEquationNormalization()
+        * params.constants.a
+        * 1e-6,
         color,
         label=name,
     )
@@ -196,7 +207,6 @@ ax2.plot(rho, state.n, label="n")
 
 ax2.plot(rho, state.Ti, label="Ti")
 ax2.legend()
-ax.set_ylim(0, 2)
 
 ax.set_xlabel(r"$\rho$")
 ax.set_ylabel(r"$V'Q_{ITG}$ (MW/$m^2$)")

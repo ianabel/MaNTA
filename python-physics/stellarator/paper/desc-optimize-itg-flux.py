@@ -16,7 +16,9 @@ import sys
 
 # physical test flux in place of yancc; must be set before stellarator_multichannel
 os.environ["TEST_STELLARATOR"] = "true"
-os.environ["STELLARATOR_TEST_FLUX"] = "physical"
+
+# the physical test flux has too large of an effect on the solution, so just use the linear term
+# os.environ["STELLARATOR_TEST_FLUX"] = "physical"
 # itg_wrapper reads it at import
 os.environ.setdefault(
     "ITG_NN_DIR", "/home/eatocco/projects/itg-proxy/demo/neural_networks/"
@@ -32,12 +34,14 @@ from config import rescale_config, field_norm_from_eq
 from yancc_wrapper import yancc_data
 
 import matplotlib.pyplot as plt
-from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error
+from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error, plot_1d
 from desc.plotting import plot_comparison
 from desc.objectives import (
     AspectRatio,
     FixCurrent,
     FixPsi,
+    FixBoundaryR,
+    FixBoundaryZ,
     ForceBalance,
     LinearObjectiveFromUser,
     ObjectiveFunction,
@@ -58,6 +62,10 @@ import manta as MaNTA
 eq_in = "eq_itg"  # initial equilibrium: the first of this family
 eq_name = "eq_itg_flux"  # what this run writes
 fname = "stellarator_opt" + eq_name
+append = True
+
+if append:
+    eq_in = eq_name
 
 st_config = {
     "ParticleSourceCenter": 0.0,
@@ -72,8 +80,9 @@ st_config = {
     "EdgeTemperature": 0.5,
     "EdgeDensity": 0.4,
     "ADCoefficient": 0.0,
-    "n0": 0.5,
+    "n0": 1.0,
     "T0": 1.0,
+    "alpha": 4.0,
     "FusionFactor": 0.01,
     "evolveDensity": False,
     "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs ITG_NN_DIR
@@ -166,14 +175,37 @@ pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
 eqs = desc.io.load(eq_in + "_all_equilibria.h5")
-eq = eqs[0].copy()
-eq_init = eq.copy()
-eqs = EquilibriaFamily(eq_init.copy())
+
+if not append:
+    eq_init = eqs[0]
+    eq_init = desc.examples.get("precise_QH")
+    eq_init = desc.compat.rescale(
+        eq_init,
+        L=("a", 1.7),
+        B=("<B>", 5.86),
+        scale_pressure=False,
+        copy=True,
+        verbose=1,
+    )
+    # #
+    # # # # # #
+    eq_init.pressure = desc_pressure
+    eq_init = eq_init.solve(x_scale="ess")[0]
+
+    # i_initial = -1 if append else 0
+
+    # eq = eqs[i_initial].copy()
+    # eq_init = eqs[0].copy()
+    eqs = EquilibriaFamily(eq_init.copy())
+    eq = eq_init.copy()
+else:
+    eq_init = eqs[0].copy()
+    eq = eqs[-1].copy()
 
 V0 = eq_init.compute("V")["V"]
 
 yancc_wrapper = yancc_data.from_eq(
-    yancc_rho, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    yancc_rho, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 
 # Normalise lengths and fields to the initial equilibrium's a and <|B|>_rms,
@@ -194,7 +226,7 @@ itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
 
 config = normalized({"Stellarator": st_config, "Solver": initial_solver_config})
 st = StellaratorTransport(
-    config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
+    config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict)
 )
 st.run()
 
@@ -291,20 +323,20 @@ obj_mirror_ratio = ObjectiveFromUser(
     fun=fun_mirror_ratio,
     thing=eq,
     grid=yancc_desc_grid,
-    bounds=(0.0, 0.2),
-    weight=10.0,
+    bounds=(0.0, 0.4),
+    weight=100.0,
     name="my mirror ratio",
     jac_chunk_size=jac_chunk_size,
 )
 
 # as in desc-optimize-stored-energy.py
-stored_energy_weight = 50.0
-max_it = 8  # this machine runs out of memory past ~12
+stored_energy_weight = 10.0
+max_it = 15  # this machine runs out of memory past ~12
 
 eqfam = EquilibriaFamily(eq)
 
 objectives = [
-    AspectRatio(eq=eq, bounds=(0, 8), weight=10.0, jac_chunk_size=jac_chunk_size),
+    # AspectRatio(eq=eq, target=8, weight=100.0, jac_chunk_size=jac_chunk_size),
     obj_mirror_ratio,
     Volume(eq=eq, target=V0, weight=100.0, jac_chunk_size=jac_chunk_size),
     ObjectiveFromUserWithParams(
@@ -321,9 +353,22 @@ objectives = [
 objective = ObjectiveFunction(objectives, deriv_mode="blocked")
 objective.build(use_jit=False)
 
+k = 5
+# #
+R_modes = np.vstack(
+    (
+        [0, 0, 0],
+        eq.surface.R_basis.modes[np.max(np.abs(eq.surface.R_basis.modes), 1) > k, :],
+    )
+)
+Z_modes = eq.surface.Z_basis.modes[np.max(np.abs(eq.surface.Z_basis.modes), 1) > k, :]
+
+
 constraints = [
     ForceBalance(eq=eq),  # J x B - grad(p) = 0
     FixCurrent(eq=eq),  # zero current; eventually a real bootstrap
+    FixBoundaryR(eq=eqfam[-1], modes=R_modes),
+    FixBoundaryZ(eq=eqfam[-1], modes=Z_modes),
     FixPsi(eq=eq),  # fix total magnetic flux
     LinearObjectiveFromUser(
         pressure_constraint_fun, eq, target=pressure_constraint_target
@@ -337,7 +382,7 @@ eq, info_out = eq.optimize(
     x_scale="ess",
     maxiter=max_it,
     ftol=1e-4,
-    xtol=1e-5,
+    xtol=1e-6,
     gtol=1e-6,
     verbose=3,
     copy=True,
@@ -356,4 +401,10 @@ fig, ax = plot_boozer_surface(eqfam[-1], fieldlines=8)
 fig.savefig("figs/" + eq_name + "final_boozer_surface.png")
 fig, ax = plot_qs_error(eqfam[-1])
 fig.savefig("figs/" + eq_name + "final_qs_error.png")
+
+fig, ax = plot_1d(eq_init, "iota", color="r", label="initial")
+plot_1d(eq, "iota", ax=ax, color="b", label="final")
+fig.savefig("figs/" + eq_name + "iota.pdf", dpi=500)
+
+
 plt.show()
