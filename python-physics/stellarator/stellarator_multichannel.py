@@ -614,9 +614,17 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # local's sign follows compute_dke_sol's, where the flux enters negated
         return -flux[channel]
 
-    @partial(jax.jit, static_argnums=(0,))
+    # vp_interp is an argument, never read off self inside the trace: jit keys
+    # its cache on self alone, so arrays closed over that way are captured
+    # from whichever call compiled first, and JAX >= 0.9 hoists them into
+    # hidden executable arguments the cached fast path then fails to supply
+    # ("Execution supplied 2 arguments but compiled program expected 4").
     def InitialValue(self, index, x):
-        return self._initial_value(index, x, self.vp_interp)
+        return self._initial_value_jit(index, x, self.vp_interp)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _initial_value_jit(self, index, x, vp_interp):
+        return self._initial_value(index, x, vp_interp)
 
     def upper_boundary_values(self, Vp):
         """The Dirichlet data at x_R, as a function of V' on the field's rho.
@@ -690,9 +698,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.params.config.evolveDensity, ambipolar, constant_density, index, x
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     def InitialDerivative(self, index, x):
-        return jax.grad(self.InitialValue, argnums=1)(index, x)
+        return self._initial_derivative_jit(index, x, self.vp_interp)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _initial_derivative_jit(self, index, x, vp_interp):
+        return jax.grad(self._initial_value, argnums=1)(index, x, vp_interp)
 
     def InitialAuxValue(self, index, x):
         return 0.0
