@@ -15,14 +15,14 @@ import os
 import sys
 
 # physical test flux in place of yancc; must be set before stellarator_multichannel
-os.environ["TEST_STELLARATOR"] = "true"
+# os.environ["TEST_STELLARATOR"] = "true"
 
 # the physical test flux has too large of an effect on the solution, so just use the linear term
 # os.environ["STELLARATOR_TEST_FLUX"] = "physical"
 # itg_wrapper reads it at import
-os.environ.setdefault(
-    "ITG_NN_DIR", "/home/eatocco/projects/itg-proxy/demo/neural_networks/"
-)
+# os.environ.setdefault(
+#     "ITG_NN_DIR", "/home/eatocco/projects/itg-proxy/demo/neural_networks/"
+# )
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
@@ -51,7 +51,8 @@ from desc.objectives import (
 import desc
 from desc.grid import Grid
 from desc.profiles import SplineProfile
-from desc.equilibrium import EquilibriaFamily
+from desc.geometry import FourierRZToroidalSurface
+from desc.equilibrium import Equilibrium, EquilibriaFamily
 import yancc
 import jax.numpy as jnp
 import numpy as np
@@ -62,7 +63,8 @@ import manta as MaNTA
 eq_in = "eq_itg"  # initial equilibrium: the first of this family
 eq_name = "eq_itg_flux"  # what this run writes
 fname = "stellarator_opt" + eq_name
-append = True
+append = False
+use_default = True
 
 if append:
     eq_in = eq_name
@@ -176,26 +178,49 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
 eqs = desc.io.load(eq_in + "_all_equilibria.h5")
 
-if not append:
-    eq_init = eqs[0]
-    eq_init = desc.examples.get("precise_QH")
-    eq_init = desc.compat.rescale(
-        eq_init,
-        L=("a", 1.7),
-        B=("<B>", 5.86),
-        scale_pressure=False,
-        copy=True,
-        verbose=1,
+
+def make_initial_eq():
+    surf = FourierRZToroidalSurface(
+        R_lmn=[1, 0.125, 0.1],
+        Z_lmn=[-0.125, -0.1],
+        modes_R=[[0, 0], [1, 0], [0, 1]],
+        modes_Z=[[-1, 0], [0, -1]],
+        NFP=4,
     )
-    # #
-    # # # # # #
-    eq_init.pressure = desc_pressure
-    eq_init = eq_init.solve(x_scale="ess")[0]
+    # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
+    # # default is zero pressure and zero current
+    eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+    eq = desc.compat.rescale(
+        eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+    )
+    # # #
+    # # # # # # #
+    # # # # # eq.pressure = desc_pressure
+    return eq.solve(x_scale="ess")[0]
 
-    # i_initial = -1 if append else 0
 
-    # eq = eqs[i_initial].copy()
-    # eq_init = eqs[0].copy()
+if not append:
+    if use_default:
+        eq_init = make_initial_eq()
+    else:
+        eq_init = desc.examples.get("precise_QH")
+        eq_init = desc.compat.rescale(
+            eq_init,
+            L=("a", 1.7),
+            B=("<B>", 5.86),
+            scale_pressure=False,
+            copy=True,
+            verbose=1,
+        )
+        # #
+        # # # # # #
+        eq_init.pressure = desc_pressure
+        eq_init = eq_init.solve(x_scale="ess")[0]
+
+        # i_initial = -1 if append else 0
+
+        # eq = eqs[i_initial].copy()
+        # eq_init = eqs[0].copy()
     eqs = EquilibriaFamily(eq_init.copy())
     eq = eq_init.copy()
 else:
@@ -331,7 +356,7 @@ obj_mirror_ratio = ObjectiveFromUser(
 
 # as in desc-optimize-stored-energy.py
 stored_energy_weight = 10.0
-max_it = 15  # this machine runs out of memory past ~12
+max_it = 40  # this machine runs out of memory past ~12
 
 eqfam = EquilibriaFamily(eq)
 

@@ -95,6 +95,7 @@ st_config = {
 # False reads them as numbers in the new units.
 keep_physics = False
 
+append = False
 
 rho_upper = 1.0
 rtol = 1e-2
@@ -178,25 +179,26 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # # default is zero pressure and zero current
 # this is usually all you need to solve a fixed boundary equilibrium
-
-# surf = FourierRZToroidalSurface(
-#     R_lmn=[1, 0.125, 0.1],
-#     Z_lmn=[-0.125, -0.1],
-#     modes_R=[[0, 0], [1, 0], [0, 1]],
-#     modes_Z=[[-1, 0], [0, -1]],
-#     NFP=4,
-# )
-# # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
-# # # default is zero pressure and zero current
-# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-# eq = desc.compat.rescale(
-#     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
-# )
-# # # #
-# # # # # # # #
-# # # # # # eq.pressure = desc_pressure
-# eq = eq.solve(x_scale="ess")[0]
-# eqs = EquilibriaFamily(eq)
+#
+if not append:
+    surf = FourierRZToroidalSurface(
+        R_lmn=[1, 0.125, 0.1],
+        Z_lmn=[-0.125, -0.1],
+        modes_R=[[0, 0], [1, 0], [0, 1]],
+        modes_Z=[[-1, 0], [0, -1]],
+        NFP=4,
+    )
+    # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
+    # # default is zero pressure and zero current
+    eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+    eq = desc.compat.rescale(
+        eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+    )
+    # # #
+    # # # # # # #
+    # # # # # eq.pressure = desc_pressure
+    eq = eq.solve(x_scale="ess")[0]
+    eqs = EquilibriaFamily(eq)
 # # desc_pressure = eq.get_profile('p')
 #
 # surf = FourierRZToroidalSurface.from_qp_model(
@@ -220,8 +222,9 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # eq = eq.solve(x_scale="ess")[0]
 # eqs = EquilibriaFamily(eq)
 #
-eqs = desc.io.load(eq_name + "_all_equilibria.h5")
-eq = eqs[-1].copy()
+else:
+    eqs = desc.io.load(eq_name + "_all_equilibria.h5")
+    eq = eqs[-1].copy()
 # eq.pressure = desc_pressure
 
 eq_init = eq.copy()
@@ -499,7 +502,7 @@ obj_mirror_ratio = ObjectiveFromUser(
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-5)
 
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 2e-6)
-stored_energy_weight = 50.0
+stored_energy_weight = 10.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()

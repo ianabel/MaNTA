@@ -22,6 +22,7 @@ class StellaratorConfig(eqx.Module):
     alpha: float
     FusionFactor: float
     evolveDensity: bool
+    Er: float  # Er in units of T0eV, for use in constant density runs
     useSharding: bool
     useBatching: bool
     useITGProxy: bool
@@ -50,6 +51,7 @@ class StellaratorConfig(eqx.Module):
         alpha=2.0,
         FusionFactor=1.0,
         evolveDensity=False,
+        Er=0.0,
         useSharding=True,
         useBatching=False,
         useITGProxy=False,
@@ -83,6 +85,7 @@ class StellaratorConfig(eqx.Module):
         self.alpha = alpha
         self.FusionFactor = FusionFactor
         self.evolveDensity = evolveDensity
+        self.Er = Er
         self.useSharding = useSharding
         self.useBatching = useBatching
         self.useITGProxy = useITGProxy
