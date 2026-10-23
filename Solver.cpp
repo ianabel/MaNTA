@@ -107,6 +107,10 @@ void SystemSolver::initialize()
 	// count reported as a per-run one is a lie a second run would tell silently.
 	fieldSweepSolves = 0;
 	fieldSweepIterations = 0;
+	nTransportSolves = 0; // EXPERIMENT
+	nFieldConsistencySolves = 0;
+	nFieldConsistencyIterations = 0;
+	physicsValuePoints = physicsDerivativePoints = geometryDerivativePoints = 0;
 	fieldSweepFallbacks = 0;
 	fieldAdjointSweeps = 0;
 	fieldAdjointFellBack = false;
@@ -922,6 +926,16 @@ void SystemSolver::integrate(double tFinal)
 			throw;
 		}
 
+		{ // EXPERIMENT
+			auto const &st = steadyStats;
+			std::println("EXPERIMENT steady steps {} rejected {} newton {} residuals {} jacbuilds {} jacsolves {} "
+						 "transportsolves {} sweeps {} fallbacks {} fieldconsistency {} solves {} iterations",
+						 st.steps, st.rejected, st.newtonIters, st.residualEvals, st.jacBuilds, st.jacSolves,
+						 nTransportSolves, fieldSweepIterations, fieldSweepFallbacks, nFieldConsistencySolves,
+						 nFieldConsistencyIterations);
+			std::println("EXPERIMENT physics values {} derivatives {} geometry-derivatives {}",
+						 physicsValuePoints, physicsDerivativePoints, geometryDerivativePoints);
+		}
 		writeSteadyState();
 	}
 	else
@@ -1029,6 +1043,18 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Timesteps             :{}", nsteps);
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
+	{ // EXPERIMENT
+		long nni, nncf, netf;
+		IDAGetNumNonlinSolvIters(IDA_mem, &nni);
+		IDAGetNumNonlinSolvConvFails(IDA_mem, &nncf);
+		IDAGetNumErrTestFails(IDA_mem, &netf);
+		std::println("EXPERIMENT newton {} convfails {} errtestfails {} jacsolves {} transportsolves {} "
+					 "fieldconsistency {} solves {} iterations",
+					 nni, nncf, netf, nJacSolves, nTransportSolves, nFieldConsistencySolves,
+					 nFieldConsistencyIterations);
+		std::println("EXPERIMENT physics values {} derivatives {} geometry-derivatives {}",
+					 physicsValuePoints, physicsDerivativePoints, geometryDerivativePoints);
+	}
 
 	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative)
 	{

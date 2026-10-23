@@ -1283,6 +1283,9 @@ class SystemSolver
         {
             Iterative,
             Exact,
+            // EXPERIMENT: the field solved to consistency inside every residual,
+            // and left out of the Jacobian (A1 = A2 = 0, B = I).
+            Consistent,
         };
 
         void setFieldSolveMode(FieldSolveMode m) { fieldSolveMode = m; };
@@ -1800,6 +1803,12 @@ class SystemSolver
         long nResidualEvals = 0;
         long nJacBuilds = 0;
         long nJacSolves = 0;
+        // EXPERIMENT: comparison counters, zeroed per run.
+        long nTransportSolves = 0;
+        long nFieldConsistencySolves = 0, nFieldConsistencyIterations = 0;
+        mutable long physicsValuePoints = 0, physicsDerivativePoints = 0, geometryDerivativePoints = 0;
+        // EXPERIMENT: psi*(p) for the Consistent mode, solved with the transport state fixed.
+        Vector consistentField(DGSoln const &Y, Time t);
         long nAdjointSolves = 0;   // solveAdjointState calls, one objective each
         bool steadyDiagnostics = false;
         bool steadyStepDiagnostics = false;

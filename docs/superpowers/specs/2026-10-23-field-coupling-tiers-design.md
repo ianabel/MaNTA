@@ -33,7 +33,10 @@ point: 1 for residual values, 2 for a derivative evaluation. Linear solves and
 field-model work are free by comparison -- assembling the transport matrices
 is the step that takes tens of minutes on GPUs for a GX-class flux. Measured on
 `ThetaPinchDiffusion` at k = 4 with an experimental build of tier 0
-(`FieldSolve = "consistent"`, uncommitted on `feat/theta-pinch-field`),
+(`FieldSolve = "consistent"`, the `EXPERIMENT`-marked code on
+`feat/theta-pinch-field`, kept until tier 0 replaces it and can be compared
+against it; `theta_pinch_mms_tests/compare_field_solves`, disabled by default,
+is the harness),
 values + 2 x derivatives, with the coupled modes' `dflux/dgeometry` calls shown
 separately as `+2g`:
 

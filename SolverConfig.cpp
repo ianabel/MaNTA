@@ -1121,6 +1121,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
     else if (config.FieldSolve == "exact")
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+    else if (config.FieldSolve == "consistent") // EXPERIMENT
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Consistent);
     else
         throw std::invalid_argument(
             "FieldSolve must be \"iterative\" or \"exact\"; got \"" + config.FieldSolve + "\".");

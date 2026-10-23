@@ -236,6 +236,39 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     }
 }
 
+// EXPERIMENT: Newton on the field rows alone, the transport state held fixed,
+// warm-started from Y's psi. Converged when the step is below 1e-13 relative.
+Vector SystemSolver::consistentField(DGSoln const &Y, Time t)
+{
+    ++nFieldConsistencySolves;
+    const GlobalState states = Y.evalOnNodes();
+    const std::vector<Position> points = Y.getPoints();
+    const Vector &weights = integrator.integrationWeights(Y.getBasis(), grid);
+    Vector psi = Y.getField();
+    const Vector zero = Vector::Zero(nField);
+    GlobalStateMatrix dR(nField), dRdot(nField);
+    for (Index f = 0; f < nField; ++f)
+    {
+        dR.add(nCells, k, nVars, nScalars, nAux);
+        dRdot.add(nCells, k, nVars, nScalars, nAux);
+    }
+    for (int it = 0; it < 50; ++it)
+    {
+        ++nFieldConsistencyIterations;
+        Vector R = Vector::Zero(nField);
+        fieldModel->FieldResidual(R, psi, zero, states, points, weights, t);
+        Matrix dRdpsi = Matrix::Zero(nField, nField), dRddpsidt = Matrix::Zero(nField, nField);
+        fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt, psi, zero, states, points, weights, t);
+        fieldModel->updateFieldJacobian(dRdpsi, dRddpsidt, 0.0);
+        Vector step(nField);
+        fieldModel->solveB(step, R);
+        psi -= step;
+        if (step.norm() <= 1e-13 * std::max(psi.norm(), 1.0))
+            return psi;
+    }
+    throw std::runtime_error("consistentField: the field rows did not converge");
+}
+
 // See the declaration for why this is once per residual rather than once per
 // variable, and why the superconvergent star nodes need no special case.
 void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
@@ -249,7 +282,8 @@ void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const
     // filled.
     states.setGeometrySlots(nGeom);
 
-    const Vector psi = Y.getField();
+    const Vector psi = fieldSolveMode == FieldSolveMode::Consistent ? consistentField(Y, t_eval)
+                                                                    : Vector(Y.getField());
     Vector g(nGeom);
     for (size_t j = 0; j < points.size(); ++j)
     {
@@ -292,6 +326,7 @@ SystemSolver::evaluateFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
                                    integrator.integrationWeights(Y.getBasis(), grid),
                                    tEval);
 
+    geometryDerivativePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     // ---- A1, cell by cell: the chain through the case's geometry hooks. Does
     // not depend on alpha, so it is evaluated here, once, for whichever alpha
     // applyFieldCoupling is then given.
@@ -932,6 +967,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     // du/dt solved here is the one the u row reads back at t0.
     const Index physicsDoF = superconvergent ? k + 2 : k + 1;
     PhysicsNodes sourceNodes = physicsNodesAt(y, t);
+    physicsValuePoints += static_cast<long>(sourceNodes.points.size()); // EXPERIMENT
     auto Source_vals = problem->ComputePhysics(sourceNodes.states, sourceNodes.points, t)[1];
     for (Index var = 0; var < nVars; var++)
     {
@@ -1559,6 +1595,7 @@ Matrix SystemSolver::faceKappaOverH(FaceStates const &faces, Time tEval)
     }
     for (Index a = 0; a < nAux; a++)
         dAux_vals.add(nCells, 1, nVars, nScalars, nAux);
+    physicsDerivativePoints += static_cast<long>(faces.points.size()); // EXPERIMENT
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, faces.states,
                                        faces.points, tEval);
 
@@ -2078,6 +2115,7 @@ Vector SystemSolver::projectOntoTestSpace(Index cell, Interval const &I, Vector 
 void SystemSolver::assignSigmaFromFlux(DGSoln &Y, Time tEval)
 {
     PhysicsNodes nodes = physicsNodesAt(Y, tEval);
+    physicsValuePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     auto const physics = problem->ComputePhysics(nodes.states, nodes.points, tEval);
     std::vector<Values> const &sigmaHat = physics[0];
 
@@ -2153,6 +2191,7 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Ti
       dAux_vals.add(nCells, derivK, nVars, nScalars, nAux);
     }
 
+    physicsDerivativePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, nodes.states,
                                        nodes.points, tEval);
 
@@ -2625,7 +2664,7 @@ void SystemSolver::updateMatricesForJacSolve()
     if (nScalars > 0)
         rec.stateDot.assign(dydtJac.data(), dydtJac.data() + dydtJac.getDoF());
 
-    if (fieldModel)
+    if (fieldModel && fieldSolveMode != FieldSolveMode::Consistent)
     {
         rec.stateDot.assign(dydtJac.data(), dydtJac.data() + dydtJac.getDoF());
         rec.field = evaluateFieldCoupling(yJac, dydtJac, nodes, jt);
@@ -2695,6 +2734,15 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
     case FieldSolveMode::Iterative:
         solveCoupledJacIterative(res_g, delY);
         return;
+    case FieldSolveMode::Consistent:
+    {
+        // EXPERIMENT: B = I, no A1 or A2. solveTransportJac zeroes the field block.
+        DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
+        DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+        solveTransportJac(res_g, delY);
+        out.getField() = rhs.getField();
+        return;
+    }
     }
 }
 
@@ -2709,6 +2757,7 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 // any of them would corrupt the Schur complement being built from them.
 void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
 {
+    ++nTransportSolves; // EXPERIMENT
     if (nScalars > 0)
     {
         // The working space for the Gaussian elimination of the scalar rows.
@@ -3340,6 +3389,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     // *source's* view of the same vector.
     states.setVariableDot(variableTimeDerivatives(dYdt_h));
 
+    physicsValuePoints += static_cast<long>(points.size()); // EXPERIMENT
     auto values = problem->ComputePhysics(states, points, tres);
 
     assembleTransportResidual(Y_h, dYdt_h, values, res);
@@ -3370,8 +3420,11 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
 
         Vector fieldRes = Vector::Zero(nField);
-        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
-                                  fieldStates, Y_h.getPoints(), weights, tres);
+        if (fieldSolveMode == FieldSolveMode::Consistent) // EXPERIMENT
+            fieldRes = Vector(Y_h.getField()) - consistentField(Y_h, tres);
+        else
+            fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
+                                      fieldStates, Y_h.getPoints(), weights, tres);
         res.getField() = fieldRes;
     }
 
@@ -3555,6 +3608,7 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
     for (Index aux = 0; aux < nAux; aux++)
         rec.dAux.add(nCells, derivK, nVars, nScalars, nAux);
 
+    physicsDerivativePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     problem->ComputePhysicsDerivatives({rec.dSigma, rec.dSource, rec.dAux}, nodes.states,
                                        nodes.points, tEval);
 
@@ -4281,6 +4335,8 @@ void SystemSolver::solveAdjointState()
     case FieldSolveMode::Iterative:
         solveCoupledAdjointIterative();
         return;
+    case FieldSolveMode::Consistent: // EXPERIMENT: no adjoint for this mode
+        throw std::logic_error("FieldSolve = consistent has no adjoint");
     }
 }
 
@@ -5151,6 +5207,10 @@ int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
     {
         double absTol = atol[0];
         ewt.Field(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Field(i)) + absTol);
+        // EXPERIMENT: in the Consistent mode psi is a copy of psi*(p), not an
+        // unknown, so it carries no weight in IDA's tests (MANTA_PSI_WEIGHTED=1 restores it).
+        if (fieldSolveMode == FieldSolveMode::Consistent && !std::getenv("MANTA_PSI_WEIGHTED"))
+            ewt.Field(i) = 1e-20;
     }
 
     return 0;
