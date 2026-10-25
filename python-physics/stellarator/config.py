@@ -29,6 +29,15 @@ class StellaratorConfig(eqx.Module):
     batch_size: int
     nchunks: int
     adaptiveGrid: bool
+    # How Er is determined with evolveDensity on. "Algebraic": an aux variable
+    # pinned at every node by ambipolarity, J(Er) = 0. "Diffusive": a fourth
+    # transported variable, V' Er, obeying
+    #     ErInertia d_t Er = (1/V') d_rho(V' ErDiffusion d_rho Er) - J,
+    # whose diffusion selects one root where J(Er) = 0 has several. Static, so
+    # it can choose the shape of the system under a trace.
+    ErModel: str = eqx.field(static=True)
+    ErDiffusion: float
+    ErInertia: float
 
     def __init__(
         self,
@@ -57,6 +66,9 @@ class StellaratorConfig(eqx.Module):
         batch_size=16,
         nchunks=2,
         adaptiveGrid=False,
+        ErModel="Algebraic",
+        ErDiffusion=0.0,
+        ErInertia=1.0,
     ):
         self.ParticleSourceCenter = ParticleSourceCenter
         self.ParticleSourceWidth = ParticleSourceWidth
@@ -91,6 +103,33 @@ class StellaratorConfig(eqx.Module):
         self.batch_size = batch_size
         self.nchunks = nchunks
         self.adaptiveGrid = adaptiveGrid
+
+        if ErModel not in ("Algebraic", "Diffusive"):
+            raise ValueError(
+                f"unknown ErModel {ErModel!r}; expected 'Algebraic' or 'Diffusive'"
+            )
+        if ErModel == "Diffusive":
+            if not evolveDensity:
+                raise ValueError("ErModel = 'Diffusive' needs evolveDensity")
+            # a zero D_E leaves the Er row without the coupling it exists for,
+            # and the steady state no longer depends on ErInertia, so it has no
+            # natural default; a negative one is anti-diffusive
+            if not ErDiffusion > 0.0:
+                raise ValueError("ErModel = 'Diffusive' needs ErDiffusion > 0")
+            if not ErInertia > 0.0:
+                raise ValueError("ErModel = 'Diffusive' needs ErInertia > 0")
+        self.ErModel = ErModel
+        # in the normalised units of the Er row: ErDiffusion in current per Er
+        # (times rho^2), ErInertia in current * time per Er; see
+        # STELLARATOR_UNITS. ErInertia is not free even at a steady state: it
+        # sets the weight of the HDG stabilisation in the Er row (see
+        # DiffusiveErFlux), so keep it small.
+        self.ErDiffusion = ErDiffusion
+        self.ErInertia = ErInertia
+
+    @property
+    def diffusiveEr(self):
+        return self.ErModel == "Diffusive"
 
 
 class StellaratorParams(eqx.Module):
@@ -152,6 +191,11 @@ STELLARATOR_UNITS = {
     "NBIPower": "heat_rate",
     "ECHPower": "heat_rate",
     "ADCoefficient": "rate",
+    # The Er row is current balance: J is in CurrentNormalization and Er in
+    # T0eV volts per unit rho, so D_E is a current per Er and the inertia a
+    # charge per Er.
+    "ErDiffusion": "er_diffusion",
+    "ErInertia": "er_inertia",
 }
 
 # The same for the "Solver" table. tau is added to a flux per unit of the
@@ -176,6 +220,8 @@ def reference_values(constants: PlasmaConstants):
         "heat_rate": constants.HeatEquationNormalization(),
         "rate": 1.0 / t0,
         "time": t0,
+        "er_diffusion": constants.CurrentNormalization() / constants.T0eV,
+        "er_inertia": constants.CurrentNormalization() * t0 / constants.T0eV,
     }
 
 

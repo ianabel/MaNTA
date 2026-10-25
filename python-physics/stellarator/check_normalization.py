@@ -21,6 +21,7 @@ Run only with TEST_STELLARATOR=true:
 
     TEST_STELLARATOR=true PYTHONPATH=$PWD/build/python \\
         python python-physics/stellarator/check_normalization.py [--evolve-density]
+        [--er-model Diffusive [--er-diffusion D]]
 """
 
 import os
@@ -62,6 +63,24 @@ def parse_args():
     p.add_argument("--cells", type=int, default=6)
     p.add_argument("--degree", type=int, default=3)
     p.add_argument("--evolve-density", action="store_true")
+    p.add_argument(
+        "--er-model",
+        choices=("Algebraic", "Diffusive"),
+        default="Algebraic",
+        help="how Er is determined (with --evolve-density)",
+    )
+    p.add_argument(
+        "--er-diffusion",
+        type=float,
+        default=1e-3,
+        help="ErDiffusion under --er-model Diffusive, in the default normalisation",
+    )
+    p.add_argument(
+        "--er-inertia",
+        type=float,
+        default=1.0,
+        help="ErInertia under --er-model Diffusive, in the default normalisation",
+    )
     p.add_argument("--cases", default=",".join(CASES), help="normalisations to run")
     p.add_argument("--tol", type=float, default=1e-6, help="relative agreement required")
     p.add_argument("--keep", action="store_true", help="keep the scratch directory")
@@ -113,6 +132,15 @@ def base_config(args):
         "zeroFlux": True,
         "solveAdjoint": False,
     }
+    if args.er_model == "Diffusive":
+        # ErInertia explicit, so that rescale_config converts it: it drops out
+        # of the steady equation but not out of the HDG stabilisation, which
+        # tau adds to the Er row undivided by it
+        st_config.update(
+            ErModel="Diffusive",
+            ErDiffusion=args.er_diffusion,
+            ErInertia=args.er_inertia,
+        )
     return {"Stellarator": st_config, "Solver": solver_config, "Normalization": {}}
 
 
@@ -159,14 +187,19 @@ def worker(args):
         n = np.asarray(st.runner.Get_profile(0)) / vp
         pi = 2.0 / 3.0 * np.asarray(st.runner.Get_profile(1)) / vp
         pe = 2.0 / 3.0 * np.asarray(st.runner.Get_profile(2)) / vp
-        with Dataset(solver["OutputFilename"] + ".nc") as nc:
-            er = np.asarray(nc.variables["Er"][-1, :])
-            er_x = np.asarray(nc.variables["x"][:])
+        if args.er_model == "Diffusive":
+            # the fourth variable, V' Er, on the nodes like the others
+            er = np.asarray(st.runner.Get_profile(3)) / vp
+        else:
+            with Dataset(solver["OutputFilename"] + ".nc") as nc:
+                er = np.asarray(nc.variables["Er"][-1, :])
+                er_x = np.asarray(nc.variables["x"][:])
+            er = np.interp(points, er_x, er)
         out.update(
             n=n * c.n0,
             Ti=pi / n * c.T0eV,
             Te=pe / n * c.T0eV,
-            Er=np.interp(points, er_x, er) * c.T0eV,
+            Er=er * c.T0eV,
         )
     else:
         from stellarator_state import StellaratorState
@@ -192,6 +225,8 @@ def main(args):
         cmd = [sys.executable, os.path.abspath(__file__), "--worker", name, "--out", out]
         cmd += ["--eq", args.eq, "--cells", str(args.cells), "--degree", str(args.degree)]
         cmd += ["--evolve-density"] if args.evolve_density else []
+        cmd += ["--er-model", args.er_model, "--er-diffusion", str(args.er_diffusion)]
+        cmd += ["--er-inertia", str(args.er_inertia)]
         log = os.path.join(scratch, f"{name}.log")
         print(f"solving under normalisation {name:8s} {json.dumps(CASES[name])}", flush=True)
         with open(log, "w") as f:

@@ -31,6 +31,9 @@ class Channel(enum.IntEnum):
     Density = 0
     IonEnergy = 1
     ElectronEnergy = 2
+    # V' Er, present only under ErModel = "Diffusive"; otherwise Er is the aux
+    # variable
+    Er = 3
 
 
 def StellaratorDecorator(func):
@@ -140,7 +143,9 @@ class StellaratorState(eqx.Module):
                 gamma=_zero,
                 qi=state.Flux[0],
                 qe=_zero,
-                Er=state.Aux,
+                # read as the other branch reads it: lax.cond traces both, and
+                # they must return the same structure
+                Er=StellaratorState.Er_of(state, x, vp, vpp, params),
                 rho=x,
                 vp=vp,
                 vpp=vpp,
@@ -179,6 +184,8 @@ class StellaratorState(eqx.Module):
             dTidrho = (dpidrho - dndrho * Ti) / n
             dTedrho = (dpedrho - dndrho * Te) / n
 
+            Er = StellaratorState.Er_of(state, x, vp, vpp, params)
+
             return cls(
                 n=n,
                 pi=pi,
@@ -193,7 +200,7 @@ class StellaratorState(eqx.Module):
                 gamma=state.Flux[Channel.Density],
                 qi=state.Flux[Channel.IonEnergy],
                 qe=state.Flux[Channel.ElectronEnergy],
-                Er=state.Aux,
+                Er=Er,
                 rho=x,
                 vp=vp,
                 vpp=vpp,
@@ -209,6 +216,16 @@ class StellaratorState(eqx.Module):
             vpp,
             params,
         )
+
+    @staticmethod
+    def Er_of(state: State, x, vp, vpp, params: StellaratorParams):
+        """Er, from wherever ErModel keeps it: the aux variable, or the
+        fourth variable V' Er. A Python branch, not a cond: ErModel is a static
+        field, and the two shapes of state have different numbers of
+        variables."""
+        if params.config.diffusiveEr:
+            return StellaratorState.Vp_u_to_u(Channel.Er, state, x, vp, vpp)
+        return state.Aux
 
     @staticmethod
     def Vp_u_to_u(index, s, x, vp, vpp):

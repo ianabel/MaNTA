@@ -215,6 +215,63 @@ class FieldJac(eqx.Module):
         return eqx.filter_jacrev(flux_of)((field, vp, vpp))
 
 
+class DiffusiveErFlux(eqx.Module):
+    """Er as a transported variable, wrapped around any flux with
+    `compute_dke_sol`'s signature.
+
+    Under ErModel = "Diffusive" the fourth variable is V' Er, and its row is
+
+        ErInertia d_t (V' Er) = d_rho(V' ErDiffusion d_rho Er) - V' J,
+
+    J the normalised radial current the algebraic model drives to zero. In
+    MaNTA's form a d_t u - d_rho sigma = S, with a = 1, that is a flux
+    V' (D_E / eps) d_rho Er and a source -V' J / eps. Where J(Er) = 0 has
+    several roots the diffusion chooses between them, and a root is stable
+    only where dJ/dEr > 0.
+
+    eps drops out of the exact steady equation but not out of the discrete
+    one: MaNTA's HDG stabilisation adds tau (u - lambda) to this flux undivided
+    by eps, so the steady row is D_E d^2 Er - J + eps * (tau jumps) = 0 and the
+    inter-cell coupling has a floor of eps * tau that no D_E goes below.
+    Measured on the SI mock, D_E = 1e-7: the gap to the algebraic Er fell from
+    0.32 to 0.017 in the interior as eps went from 1 to 1e-4. So a small
+    ErInertia is what lets a small ErDiffusion take effect.
+
+    The current comes back in the auxiliary slot as the Er row's *source*, so
+    the hooks move it from aux to sources. It stays a return of this function,
+    rather than going into `compute_sources`, so that the drift-kinetic solve
+    that produces J runs once and every derivative of it -- the forward
+    Jacobian's and the adjoint's d/d(field, V', V'') -- goes through one
+    function. Outermost around `SumFlux`, whose zip would otherwise drop the
+    fourth flux.
+    """
+
+    flux: Callable
+
+    def __call__(
+        self,
+        state,
+        x,
+        t,
+        field,
+        vp,
+        vpp,
+        pitchgrid,
+        speedgrid,
+        params,
+        evolveDensity=False,
+    ):
+        fluxes, aux = self.flux(
+            state, x, t, field, vp, vpp, pitchgrid, speedgrid, params, evolveDensity
+        )
+        c = params.config
+        dErdrho = StellaratorState.Vp_up_to_up(Channel.Er, state, x, vp, vpp)
+        er_flux = vp * c.ErDiffusion / c.ErInertia * dErdrho
+        # J is one entry per point whatever shape the solve returned it in
+        er_source = -vp / c.ErInertia * jnp.reshape(aux[0], jnp.shape(er_flux))
+        return list(fluxes) + [er_flux], [er_source]
+
+
 def itg_geometry_jac(itg: ITGFlux, geometry, states, x, vp, vpp, params, evolveDensity):
     """d(ITG flux)/d(signals) at one point: the adjoint's ITG columns."""
     return eqx.filter_jacrev(
@@ -266,12 +323,31 @@ def buildSpec(params: StellaratorParams) -> MaNTA.SystemSpec:
             variables=[MaNTA.Field("IonEnergy", "ion energy density", "n0 T0", **bcs)]
         )
 
+    transported = [
+        MaNTA.Field("Density", "particle density", "n0", **bcs),
+        MaNTA.Field("IonEnergy", "ion energy density", "n0 T0", **bcs),
+        MaNTA.Field("ElectronEnergy", "electron energy density", "n0 T0", **bcs),
+    ]
+
+    if params.config.diffusiveEr:
+        # No boundary datum to give Er, so zero flux at both ends -- the
+        # axis's symmetry condition, and at the edge whatever ambipolarity
+        # alone chooses there. Order matters: Channel.Er indexes it.
+        return MaNTA.SystemSpec(
+            variables=transported
+            + [
+                MaNTA.Field(
+                    "Er",
+                    "V' times the radial electric field, by current balance",
+                    "T0/e",
+                    lower=MaNTA.Neumann,
+                    upper=MaNTA.Neumann,
+                )
+            ]
+        )
+
     return MaNTA.SystemSpec(
-        variables=[
-            MaNTA.Field("Density", "particle density", "n0", **bcs),
-            MaNTA.Field("IonEnergy", "ion energy density", "n0 T0", **bcs),
-            MaNTA.Field("ElectronEnergy", "electron energy density", "n0 T0", **bcs),
-        ],
+        variables=transported,
         aux=[
             MaNTA.Aux(
                 "Er",
@@ -345,6 +421,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # what ComputePhysics evaluates: an eqx.Module when the ITG term is on,
         # so its arrays are traced, not baked in
         self.flux_fn = compute_dke_sol if itg is None else SumFlux(compute_dke_sol, itg)
+        if self.params.config.diffusiveEr:
+            self.flux_fn = DiffusiveErFlux(self.flux_fn)
         # if "Superconvergent" in solver_config and solver_config["Superconvergent"]:
         #     raise RuntimeError(
         #         "Superconvergent is not compatible with this physics case"
@@ -512,7 +590,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return 0.0
 
     def UpperBoundary(self, index, t):
+        if self.params.config.diffusiveEr and index == Channel.Er:
+            # Neumann: the datum is the edge flux, zero
+            return 0.0
         return self.InitialValue(index, self.xR)
+
+    @property
+    def nDirichlet(self):
+        """The variables with Dirichlet edge data: all but a diffusive Er."""
+        return self.nVars - 1 if self.params.config.diffusiveEr else self.nVars
 
     @StellaratorDecorator
     def compute_sources(
@@ -658,7 +744,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         vp = interpax.interp1d(self.points, self.yancc_wrapper.rho, Vp, extrap=True)
         vp_interp = interpax.Akima1DInterpolator(self.points, vp, check=False)
         return jnp.stack(
-            [self._initial_value(i, self.xR, vp_interp) for i in range(self.nVars)]
+            [self._initial_value(i, self.xR, vp_interp) for i in range(self.nDirichlet)]
         )
 
     def _initial_value(self, index, x, vp_interp):
@@ -711,7 +797,13 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     )
                 )
 
-            return jax.lax.switch(index, [n0, ui0, ue0], x)
+            def Er0(x):
+                # V' Er = 0, as the algebraic model's InitialAuxValue starts
+                # it; switch clamps an index past the last branch, so Er needs
+                # a branch of its own even though it is only ever zero
+                return 0.0 * x
+
+            return jax.lax.switch(index, [n0, ui0, ue0, Er0], x)
 
         return jax.lax.cond(
             self.params.config.evolveDensity, ambipolar, constant_density, index, x
@@ -746,6 +838,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.compute_sources, states, positions, t, vmap_axes_sources, self.params
         )
 
+        if self.params.config.diffusiveEr:
+            # the current is the Er row's source; see DiffusiveErFlux
+            return [dke_data[0], list(sources) + list(dke_data[1]), []]
         return [dke_data[0], sources, dke_data[1]]
 
     @Physics_Decorator
@@ -772,6 +867,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.params,
         )
 
+        if self.params.config.diffusiveEr:
+            return [ddke_data[0], list(dsources) + list(ddke_data[1]), []]
         return [ddke_data[0], dsources, ddke_data[1]]
 
     def prepareEvaluation(self, plan):
@@ -926,20 +1023,20 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.compute_sources = transport_system.compute_sources
 
         self.params = transport_system.params
-        if self.params.config.evolveDensity:
-            self.nVars = 3
-            self.nAux = 1
-        else:
-            self.nVars = 1
-            self.nAux = 0
+        # from the spec: 3 and 1 with evolveDensity, 4 and 0 when Er is
+        # diffusive, 1 and 0 without evolveDensity
+        self.nVars = transport_system.nVars
+        self.nAux = transport_system.nAux
 
         self.UpperBoundarySensitivities = {}
         self.LowerBoundarySensitivities = {}
 
         # The Dirichlet edge data depend on V' (see upper_boundary_values), so
-        # G also depends on them. One parameter per variable, appended after
-        # the np_cell spatial ones: columns np_cell .. np_cell + nVars - 1.
-        for i in range(self.nVars):
+        # G also depends on them. One parameter per Dirichlet variable --
+        # every one but a diffusive Er, whose edge condition is a zero flux --
+        # appended after the np_cell spatial ones: columns np_cell ..
+        # np_cell + nDirichlet - 1.
+        for i in range(transport_system.nDirichlet):
             self.addUpperBoundarySensitivity(i)
 
     # each g is g(field, vp, vpp, geometry, state, x, params), geometry the ITG
@@ -1010,10 +1107,16 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         rounds = -(-self.npoints // self.batch_size)
         nchunks = 0 if self.batch_size == 0 else rounds
-        # dke_field_jac itself without the ITG term, so the traced function --
-        # and with it JAX's persistent-cache key -- is what it always was
+        # dke_field_jac itself for the bare neoclassical flux, so the traced
+        # function -- and with it JAX's persistent-cache key -- is what it
+        # always was; anything wrapped (the ITG term, a diffusive Er) is
+        # differentiated as a whole
         ddke_data = vmap_batched(
-            dke_field_jac if self.itg is None else FieldJac(self.flux_fn),
+            (
+                dke_field_jac
+                if self.flux_fn is compute_dke_sol
+                else FieldJac(self.flux_fn)
+            ),
             vmap_axes=vmap_axes_wfield,
             chunk_size=self.batch_size,
             nchunks=nchunks,
@@ -1080,17 +1183,25 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
                 )
             return jnp.concatenate([block, unravel(itg_block)], axis=0)
 
+        def itg_flux_part(i):
+            # the ITG term has one flux per transport channel, none for Er
+            if self.itg is None or i >= len(ditg[0]):
+                return None
+            return ditg[0][i]
+
         dsigma_out = []
         dsources_out = []
         daux_out = []
         for i in range(0, self.nVars):
-            dsigma_out.append(
-                with_itg(
-                    unravel(ddke_data[0][i]),
-                    ditg[0][i] if self.itg is not None else None,
-                )
-            )
+            dsigma_out.append(with_itg(unravel(ddke_data[0][i]), itg_flux_part(i)))
+        for i in range(0, len(dsources)):
             dsources_out.append(with_itg(unravel(dsources[i]), None))
+
+        if self.params.config.diffusiveEr:
+            # the Er row's source is the current, which came back in the
+            # auxiliary slot (DiffusiveErFlux); SumFlux takes it from the
+            # neoclassical solve alone, so it does not read the ITG geometry
+            dsources_out.append(with_itg(unravel(ddke_data[1][0]), None))
 
         for i in range(0, self.nAux):
             daux_out.append(
