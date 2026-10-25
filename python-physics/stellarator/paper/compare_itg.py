@@ -22,13 +22,13 @@ from stellarator_multichannel import vmap_axes_wfield
 import jax
 import os
 
-os.environ["ITG_NN_DIR"] = "/home/eatocco/projects/itg-proxy/demo/neural_networks/"
+# os.environ["ITG_NN_DIR"] = "/home/eatocco/projects/itg-proxy/demo/neural_networks/"
 
 from itg_wrapper import itg_at, make_itg_builder, make_itg_flux
 from manta.jax import State
 from stellarator_state import StellaratorState
 
-eq_name = "eq_itg_flux"
+eq_name = "eq_itg_flux_no_nc"
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq_initial = desc.examples.get("precise_QH")
 # eq_final = eqs[0]
@@ -120,13 +120,13 @@ yancc_nzeta = 25
 yancc_res = {"na": 45, "nx": 7}
 
 
-rho = jnp.linspace(0.05, 0.95, 37)
+rho = jnp.linspace(0.01, 0.95, 37)
 
 _eqs = [eq_initial, eq_final]
 
 plt.rcParams.update({"font.family": "serif", "font.size": 10})
 
-names = ["initial", "final"]
+names = ["Initial", "Optimized"]
 colors = ["r", "b"]
 fig, ax = plt.subplots()
 fig2, ax2 = plt.subplots()
@@ -145,7 +145,7 @@ state_ = make_state_from_output(rho)
 builder = make_itg_builder(
     st_config,
     eq_initial,
-    model_dir="/home/eatocco/projects/itg-proxy/demo/neural_networks/",
+    model_dir=os.environ["ITG_NN_DIR"],
 )
 
 for eq, name, color in zip(_eqs, names, colors):
@@ -189,7 +189,7 @@ for eq, name, color in zip(_eqs, names, colors):
     # Qi is MaNTA's normalised flux, -V' <q . grad rho> / HeatNorm; times
     # HeatNorm that is V' <q . grad rho> in W/m^3, and times a it is
     # V' <q . grad r> in W/m^2, r = a rho with the a the gyro-Bohm value used
-    ax.plot(
+    ax.semilogy(
         rho,
         # Qi_GB,
         -jnp.array(Qi)

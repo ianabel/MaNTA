@@ -68,21 +68,21 @@ fname = "stellarator_opt" + eq_name
 
 fac = 1.0
 st_config = {
-    "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 0.5,
-    "ParticleSourceWidth": 0.6,
+    "ParticleSourceCenter": 0.5,
+    "ParticleSourceHeight": fac * 1.2,
+    "ParticleSourceWidth": 0.4,
     "NBICenter": 0.0,
-    "NBIPower": fac * 80.0,
+    "NBIPower": fac * 300.0,
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
     "ECHPower": fac * 0.0,
     "ECHWidth": 0.1,
     "EdgeTemperature": 0.5,
-    "EdgeDensity": 0.4,
+    "EdgeDensity": 1.0,
     "ADCoefficient": 0.0,
-    "n0": 0.5,
+    "n0": 1.5,
     "T0": 1.0,
-    "FusionFactor": 0.01,
+    "FusionFactor": 1.0,
     "evolveDensity": True,
     "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
     "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
@@ -95,18 +95,19 @@ st_config = {
 # False reads them as numbers in the new units.
 keep_physics = False
 
+append = False
 
 rho_upper = 1.0
 rtol = 1e-2
-atol = 1e-10
+atol = 1e-6
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
 npoints = 9
 degree = 4
 # base = 1.5
 # tau = 0.5
 #
-base = 1.9
-tau = 0.2
+base = 1.5
+tau = 0.5
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
@@ -121,7 +122,7 @@ nodes = np.concatenate(([0, 0.05, 0.15, 0.3], nodes, [rho_upper]))
 print(nodes)
 # # %%
 solver_config = {
-    "OutputFilename": fname,
+    "OutputFilename": fname + "_acc",
     "PolynomialDegree": degree,
     "GridPoints": nodes,
     "GridSize": len(nodes) - 1,
@@ -141,14 +142,14 @@ solver_config = {
     "SteadyStateStepDiagnostics": True,
     # "tauScaling": "Diffusive",
     # "tauUpdate": "ContinuationStep",
-    "NewtonJacobianReuse": 5,
+    "NewtonJacobianReuse": 4,
     "NewtonMaxIterations": 25,
     "MaxRejectedSteps": 10,
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 1.0,
-    "PseudoTransientSERFloor": 2.0,
+    "PseudoTransientSERFloor": 4.0,
 }
 
 
@@ -178,25 +179,26 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # # default is zero pressure and zero current
 # this is usually all you need to solve a fixed boundary equilibrium
-
-# surf = FourierRZToroidalSurface(
-#     R_lmn=[1, 0.125, 0.1],
-#     Z_lmn=[-0.125, -0.1],
-#     modes_R=[[0, 0], [1, 0], [0, 1]],
-#     modes_Z=[[-1, 0], [0, -1]],
-#     NFP=4,
-# )
-# # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
-# # # default is zero pressure and zero current
-# eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
-# eq = desc.compat.rescale(
-#     eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
-# )
-# # # #
-# # # # # # # #
-# # # # # # eq.pressure = desc_pressure
-# eq = eq.solve(x_scale="ess")[0]
-# eqs = EquilibriaFamily(eq)
+#
+if not append:
+    surf = FourierRZToroidalSurface(
+        R_lmn=[1, 0.125, 0.1],
+        Z_lmn=[-0.125, -0.1],
+        modes_R=[[0, 0], [1, 0], [0, 1]],
+        modes_Z=[[-1, 0], [0, -1]],
+        NFP=4,
+    )
+    # # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
+    # # default is zero pressure and zero current
+    eq = Equilibrium(M=4, N=4, Psi=0.1, surface=surf, pressure=desc_pressure)
+    eq = desc.compat.rescale(
+        eq, L=("a", 1.7), B=("<B>", 5.86), scale_pressure=False, copy=True, verbose=1
+    )
+    # # #
+    # # # # # # #
+    # # # # # eq.pressure = desc_pressure
+    eq = eq.solve(x_scale="ess")[0]
+    eqs = EquilibriaFamily(eq)
 # # desc_pressure = eq.get_profile('p')
 #
 # surf = FourierRZToroidalSurface.from_qp_model(
@@ -220,8 +222,9 @@ desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 # eq = eq.solve(x_scale="ess")[0]
 # eqs = EquilibriaFamily(eq)
 #
-eqs = desc.io.load(eq_name + "_all_equilibria.h5")
-eq = eqs[-1].copy()
+else:
+    eqs = desc.io.load(eq_name + "_all_equilibria.h5")
+    eq = eqs[-1].copy()
 # eq.pressure = desc_pressure
 
 eq_init = eq.copy()
@@ -264,7 +267,9 @@ itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
 )
-st.run()
+if not append:
+    st.run()
+
 #
 # # %%
 #
@@ -301,6 +306,7 @@ fig, ax = plt.subplots()
 solver_config = {
     "OutputFilename": fname,
     "PolynomialDegree": degree,
+    "RestartFile": fname + "_acc.restart.nc",
     "GridPoints": nodes,
     "GridSize": len(nodes) - 1,
     "tau": tau,
@@ -308,21 +314,23 @@ solver_config = {
     "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
-    "delta_t": 1.0,
-    "initialTimestep": 1e-2,
+    "delta_t": 100.0,
+    "initialTimestep": 1e4,
     "MinStepSize": 1e-10,
     "WriteDatFile": True,
     "NewtonJacobianReuse": 5,
-    "NewtonMaxIterations": 20,
+    "NewtonMaxIterations": 15,
     "restart": True,
     "zeroFlux": True,
     # "tauScaling": "Constant",
     # "tauUpdate": "ContinuationStep",
     "SteadyStateTolerance": 2e-4,
+    "SteadyStateStepTolerance": 0.33,
     # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
     "SteadyStateSolver": "Newton",
     "SteadyStateDiagnostics": True,
     "MaxRejectedSteps": 0,
+    "MaxContinuationSteps": 30,
     "SteadyStateStepDiagnostics": True,
     # "ObjectiveDecreaseTolerance": 0.01,
     "PseudoTransientSERFloor": 2.0,
@@ -499,11 +507,11 @@ obj_mirror_ratio = ObjectiveFromUser(
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-5)
 
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 2e-6)
-stored_energy_weight = 50.0
+stored_energy_weight = 10.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 20
+max_it = 40
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -513,7 +521,7 @@ eqfam = EquilibriaFamily(eq)
 # print("====================================")
 #
 objectives = [
-    AspectRatio(eq=eq, bounds=(0, 8), weight=10.0),
+    # AspectRatio(eq=eq, bounds=(0, 8), weight=10.0),
     obj_mirror_ratio,
     Volume(eq=eq, target=V0, weight=100.0),
     # RotationalTransform(eq=eq, target=0.42, weight=10),
@@ -557,8 +565,8 @@ constraints = [
     ForceBalance(eq=eq),  # J x B - grad(p) = 0
     # fix zero current, eventually should use real bootstrap
     FixCurrent(eq=eq),
-    # FixBoundaryR(eq=eqfam[-1], modes=R_modes),
-    # FixBoundaryZ(eq=eqfam[-1], modes=Z_modes),
+    FixBoundaryR(eq=eqfam[-1], modes=R_modes),
+    FixBoundaryZ(eq=eqfam[-1], modes=Z_modes),
     FixPsi(eq=eq),  # fix total magnetic flux
     LinearObjectiveFromUser(
         pressure_constraint_fun, eq, target=pressure_constraint_target
@@ -574,16 +582,17 @@ eq, info_out = eq.optimize(
     ftol=1e-4,  # stopping tolerance on the function value
     xtol=1e-5,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
-    # options={
-    #     "initial_trust_radius": 0.1,
-    #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
-    #     #     # "solve_options": {
-    #     #     #     "ftol": 5e-3,
-    #     #     #     "xtol": 1e-6,
-    #     #     #     "gtol": 1e-6,
-    #     #     #     "verbose": 3,
-    #     # },  # for equilibrium subproblem
-    # },
+    options={
+        "max_trust_radius": 1.0,
+        # "initial_trust_radius": 0.1,
+        # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
+        #     # "solve_options": {
+        #     #     "ftol": 5e-3,
+        #     #     "xtol": 1e-6,
+        #     #     "gtol": 1e-6,
+        #     #     "verbose": 3,
+        # },  # for equilibrium subproblem
+    },
     verbose=3,
     copy=True,
 )
