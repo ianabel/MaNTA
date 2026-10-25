@@ -33,9 +33,10 @@ def load_and_rescale(name):
 # Magnetic field on a flux surface (here from a BOOZ_XFORM file).
 
 eqs_high = desc.io.load("eq_all_equilibria.h5")
-eqs_low = desc.io.load("eq3_all_equilibria.h5")
+eqs_low = desc.io.load("eq4_all_equilibria.h5")
 
-example_equilibria = ["precise_QH", "W7-X"]
+# example_equilibria = ["precise_QH", "W7-X"]
+example_equilibria = []
 
 # eq_qh = load_and_rescale("precise_QH")
 
@@ -123,5 +124,7 @@ for a in ax_flat[1::2]:
     a.set_ylabel(r"$|\hat{D}_{31}|$")
 
 fig.tight_layout()
+fig.set_figheight(2.5)
+fig.set_figwidth(5.0)
 fig.savefig("figs/nc_mdke_compare.pdf", dpi=500)
 plt.show()

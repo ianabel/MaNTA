@@ -15,7 +15,7 @@ import os
 import sys
 
 # physical test flux in place of yancc; must be set before stellarator_multichannel
-# os.environ["TEST_STELLARATOR"] = "true"
+os.environ["TEST_STELLARATOR"] = "true"
 
 # the physical test flux has too large of an effect on the solution, so just use the linear term
 # os.environ["STELLARATOR_TEST_FLUX"] = "physical"

@@ -38,7 +38,7 @@ data_sharding = NamedSharding(
         "axis",
     ),
 )
-eq_name = "eq_itg"
+eq_name = "eq_itg_flux"
 eqs = desc.io.load(eq_name + "_all_equilibria.h5")
 eq_initial, eq_final = eqs[0], eqs[-1]
 
@@ -46,65 +46,73 @@ eq_initial, eq_final = eqs[0], eqs[-1]
 def make_state_from_output(rho, fname="stellarator_opt" + eq_name):
     data = Dataset(fname + ".nc", "r")
     x = jnp.array(data.variables["x"][:])
-    n = Akima1DInterpolator(
-        x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
-    )(rho)
     ui = Akima1DInterpolator(
         x, jnp.array(data.groups["IonEnergy"].variables["u"][:][-1, :])
     )(rho)
-    ue = Akima1DInterpolator(
-        x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
-    )(rho)
-    dndx = Akima1DInterpolator(
-        x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
-    )(rho)
+
     duidx = Akima1DInterpolator(
         x, jnp.array(data.groups["IonEnergy"].variables["q"][:][-1, :])
     )(rho)
-    duedx = Akima1DInterpolator(
-        x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
-    )(rho)
-    Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
+
+    if st_config["evolveDensity"]:
+        n = Akima1DInterpolator(
+            x, jnp.array(data.groups["Density"].variables["u"][:][-1, :])
+        )(rho)
+        ue = Akima1DInterpolator(
+            x, jnp.array(data.groups["ElectronEnergy"].variables["u"][:][-1, :])
+        )(rho)
+        dndx = Akima1DInterpolator(
+            x, jnp.array(data.groups["Density"].variables["q"][:][-1, :])
+        )(rho)
+        duedx = Akima1DInterpolator(
+            x, jnp.array(data.groups["ElectronEnergy"].variables["q"][:][-1, :])
+        )(rho)
+        Er = Akima1DInterpolator(x, jnp.array(data.variables["Er"][:][-1, :]))(rho)
+        Variable = jnp.stack([n, ui, ue]).transpose()
+        Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+    else:
+        Variable = jnp.asarray(ui)[:, None]
+        Derivative = jnp.asarray(duidx)[:, None]
+
+        Er = jnp.zeros(Variable.shape)
+
     data.close()
-    Variable = jnp.stack([n, ui, ue]).transpose()
-    Derivative = jnp.stack([dndx, duidx, duedx]).transpose()
+
     state = {
         "Variable": Variable,
         "Derivative": Derivative,
-        "VariableDot": [],
+        "VariableDot": jnp.zeros(Variable.shape),
         "Flux": jnp.zeros(Variable.shape),
         "Aux": Er,
         "Scalars": [],
     }
-
     return eqx.partition(State.from_manta(state), lambda x: x.size > 0)[0]
 
 
-fac = 1.0
 st_config = {
     "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 0.015,
+    "ParticleSourceHeight": 0.02,
     "ParticleSourceWidth": 0.6,
     "NBICenter": 0.0,
-    "NBIPower": fac * 8.0,
+    "NBIPower": 16.0,  # doubled from the stored-energy script's 8.0
     "NBIWidth": 0.15,
     "ECHCenter": 0.0,
-    "ECHPower": fac * 0.0,
+    "ECHPower": 0.0,
     "ECHWidth": 0.1,
     "EdgeTemperature": 0.5,
     "EdgeDensity": 0.4,
     "ADCoefficient": 0.0,
-    "n0": 0.5,
+    "n0": 1.0,
     "T0": 1.0,
+    "alpha": 4.0,
     "FusionFactor": 0.01,
-    "evolveDensity": True,
-    "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
-    # must match the run's: MaNTA transported ITGScale times the prediction,
-    # and that is what is plotted
+    "evolveDensity": False,
+    "useITGProxy": True,  # NN ITG heat flux (itg_wrapper.py); needs ITG_NN_DIR
     "ITGScale": 1.0,
     "useBatching": True,
     "nchunks": 3,
 }
+
 
 config = StellaratorConfig(rhoUpper=1.0, **st_config)
 # The run's normalisation. The ITG flux takes its gyro-Bohm value at the
@@ -120,13 +128,13 @@ yancc_nzeta = 25
 yancc_res = {"na": 45, "nx": 7}
 
 
-rho = jnp.linspace(0.01, 0.9, 64)
+rho = jnp.linspace(0.01, 0.95, 64)
 
 _eqs = [eq_initial, eq_final]
 
 plt.rcParams.update({"font.family": "serif", "font.size": 10})
 
-names = ["initial", "final"]
+names = ["Initial", "Optimized"]
 colors = ["r", "b"]
 fig, ax = plt.subplots(1, 2, sharey=True)
 
@@ -141,6 +149,9 @@ for eq, name, color in zip(_eqs, names, colors):
     )
     itg_wrapper = itg_at(itg_builder, eq.params_dict)
     fields, vp, vpp = yancc_wrapper.get_fields()
+
+    index = 1 if st_config["evolveDensity"] else 0
+
     Qi_itg = jax.vmap(itg_wrapper, in_axes=vmap_axes_wfield)(
         state,
         rho,
@@ -151,8 +162,8 @@ for eq, name, color in zip(_eqs, names, colors):
         yancc_wrapper.pitchgrid,
         yancc_wrapper.speedgrid,
         params,
-        True,
-    )[0][1]
+        st_config["evolveDensity"],
+    )[0][index]
 
     Qi_nc = vmap_batched(
         compute_dke_sol,
@@ -170,8 +181,8 @@ for eq, name, color in zip(_eqs, names, colors):
         yancc_wrapper.pitchgrid,
         yancc_wrapper.speedgrid,
         params,
-        True,
-    )[0][1]
+        st_config["evolveDensity"],
+    )[0][index]
 
     # Qi is MaNTA's normalised flux, -V' <q . grad rho> / HeatNorm; times
     # HeatNorm that is V' <q . grad rho> in W/m^3, and times a it is
@@ -200,10 +211,13 @@ for a in ax.flatten():
     a.set_xlabel(r"$\rho$")
     a.legend()
     a.set_box_aspect(1)
-ax[0].set_ylabel(r"$V'Q$ (MW/$m^2$)")
+ax[0].set_ylabel(r"$V'Q_i$ (MW/$m^2$)")
 
 ax[0].set_title("Neoclassical")
 ax[1].set_title("ITG")
+
+fig.set_figwidth(5.0)
+fig.set_figheight(2.5)
 fig.tight_layout()
-fig.savefig("figs/compare_fluxes.pdf", dpi=500)
+fig.savefig("figs/" + eq_name + "compare_fluxes.pdf", dpi=500)
 plt.show()
