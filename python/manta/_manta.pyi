@@ -441,6 +441,10 @@ class Runner:
         ...
     def getAdjointGradients(self) -> tuple:
         ...
+    def getAuxiliary(self, aux: typing.SupportsInt | typing.SupportsIndex, points: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] | None = None) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:
+        """
+        Auxiliary variable `aux` after a run, at `points` or, if None, at the nodes getSolution samples.
+        """
     def getCellBoundaries(self) -> list[float]:
         ...
     def getDerivative(self, arg0: typing.SupportsInt | typing.SupportsIndex, arg1: collections.abc.Sequence[typing.SupportsFloat | typing.SupportsIndex] | None) -> typing.Annotated[numpy.typing.NDArray[numpy.float64], "[m, 1]"]:

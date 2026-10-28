@@ -156,6 +156,12 @@ public:
   Vector getDerivative(Index var,
                        std::optional<std::vector<Position>> const &points);
 
+  // Auxiliary variable `aux`, sampled exactly as getSolution samples u. The
+  // aux variables are written to the netCDF output but had no other way out to
+  // Python, so a driver wanting one after a run had to reopen the file.
+  Vector getAuxiliary(Index aux,
+                      std::optional<std::vector<Position>> const &points);
+
   // The element-local postprocessed solution u* in P_{k+1}, sampled the same way
   // getSolution samples u. Available for any k >= 1 regardless of whether the
   // superconvergent scheme is switched on.

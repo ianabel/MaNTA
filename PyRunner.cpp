@@ -7,6 +7,7 @@
 #include "PyConfigSource.hpp"
 #include "PyToml.hpp"
 #include <algorithm>
+#include <format>
 #include <pybind11/eigen.h>
 #include <string>
 #include <print>
@@ -718,6 +719,34 @@ PyRunner::getDerivative(Index var,
     if (p < grid->lowerBoundary() || p > grid->upperBoundary())
       throw std::out_of_range("Requested point outside of grid boundaries");
     sol(i) = system->yJac.q(var)(p);
+  }
+  return sol;
+}
+
+Vector
+PyRunner::getAuxiliary(Index aux,
+                       std::optional<std::vector<Position>> const &points) {
+  if (system == nullptr)
+    throw std::runtime_error(
+        "Error: Runner must be configured and run before reading an auxiliary "
+        "variable.");
+  // DGSoln::Aux indexes a std::vector unchecked, and nAux is often 0
+  if (aux < 0 || aux >= system->yJac.getAux())
+    throw std::out_of_range(std::format(
+        "Auxiliary variable {} requested, but the system has {}", aux,
+        system->yJac.getAux()));
+
+  // As getDerivative: the aux are DGApprox over the solver's own basis, read
+  // from yJac for the reason getSolution gives below
+  const std::vector<Position> xs =
+      points ? points.value() : system->yJac.getPoints();
+
+  Vector sol(xs.size());
+  for (size_t i = 0; i < xs.size(); i++) {
+    const auto &p = xs[i];
+    if (p < grid->lowerBoundary() || p > grid->upperBoundary())
+      throw std::out_of_range("Requested point outside of grid boundaries");
+    sol(i) = system->yJac.Aux(aux)(p);
   }
   return sol;
 }
