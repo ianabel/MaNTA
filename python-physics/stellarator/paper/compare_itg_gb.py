@@ -150,6 +150,7 @@ for name, r in res.items():
             f"{r['crit'][i]:9.2f}  {ratio:6.2f}  {r['Q'][i]:8.3f}"
         )
 
+plt.rcParams.update({"font.family": "serif", "font.size": 10})
 fig, axs = plt.subplots(1, 2, figsize=(5, 2.5))
 for (name, r), c in zip(res.items(), ["r", "b"]):
     axs[0].plot(rho, r["Ti"], c, label=name)
@@ -157,7 +158,7 @@ for (name, r), c in zip(res.items(), ["r", "b"]):
 axs[0].set_ylabel(r"$T_i (keV)$")
 axs[1].set_ylabel(r"$Q_i / Q_{GB}$")
 for a in axs:
-    a.set_xlabel("rho")
+    a.set_xlabel(r"$\rho$")
     a.legend(fontsize=7)
 fig.tight_layout()
 os.makedirs(os.path.join(outdir, "figs"), exist_ok=True)

@@ -12,11 +12,14 @@ from desc.plotting import plot_boozer_surface, plot_boundaries, plot_qs_error, p
 
 # eq_names = ["eq_random0", "eq_random2", "eq_random3"]
 # output_name = "random"
-eq_names = ["eq_itg_flux"]
-output_name = eq_names[0]
+# eq_names = ["eq_itg_flux"]
+# eq_names = ["eq_itg_flux_no_nc"]
+eq_names = ["eq4", "eq5"]
+output_name = "nc_regimes"
 
 
 fig, axs = plt.subplots(len(eq_names), 2, layout="compressed")
+
 # fig.subplots_adjust(wspace=0, hspace=0)
 ax_lists = []
 if len(eq_names) == 1:

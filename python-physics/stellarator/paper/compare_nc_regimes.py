@@ -32,8 +32,8 @@ def load_and_rescale(name):
 
 # Magnetic field on a flux surface (here from a BOOZ_XFORM file).
 
-eqs_high = desc.io.load("eq_all_equilibria.h5")
-eqs_low = desc.io.load("eq4_all_equilibria.h5")
+eqs_high = desc.io.load("eq4_all_equilibria.h5")
+eqs_low = desc.io.load("eq5_all_equilibria.h5")
 
 # example_equilibria = ["precise_QH", "W7-X"]
 example_equilibria = []
@@ -43,7 +43,7 @@ example_equilibria = []
 # eq_aries = desc.examples.get("ARIES-CS")
 
 
-# eq_w7x = load_and_rescale("W7-X")
+eq_w7x = load_and_rescale("W7-X")
 #
 example_eqs = []
 for name in example_equilibria:
@@ -89,42 +89,56 @@ fun = eqx.filter_jit(
     eqx.filter_vmap(compute_Dij, in_axes=(0, None, None), out_axes=(0, 0))
 )
 
-rhos = [0.5]
-names = ["initial", "low col", "high col"] + example_equilibria
-eqs = [eq0, eq_low, eq_high] + example_eqs
+rhos = [0.5, 0.9]
+names = ["initial", "A", "B", "W7-X"] + example_equilibria
+eqs = [eq0, eq_high, eq_low, eq_w7x] + example_eqs
 colors = ["r", "b", "g", "c", "m"]
 
 plt.rcParams.update({"font.family": "serif", "font.size": 10})
-fig, ax = plt.subplots(len(rhos), 2, sharex=True)
-ax_flat = ax.flatten()
+
+fig = plt.figure(figsize=(5, 2.5 * len(rhos)), layout="constrained")
+subfigs = fig.subfigures(len(rhos), 1, wspace=0, hspace=0.1)
+
 for rho, i in zip(rhos, range(0, len(rhos))):
     print(f"Solving at rho={rho}")
+    axs = subfigs[i].subplots(1, 2, sharex=True)
     for e, n, c in zip(eqs, names, colors):
         print(f"Solving mdke for {n}")
         field = Field.from_desc(e, rho, 25, 47)
         d11, d31 = fun(nuhats, field, species)
-        ax[2 * i].loglog(nuhats, d11, label=n, color=c)
-        ax[2 * i + 1].loglog(nuhats, jnp.abs(d31), label=n, color=c)
-        ax[2 * i].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
-        ax[2 * i + 1].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
+        axs[0].loglog(nuhats, d11, label=n, color=c)
+        axs[1].loglog(nuhats, jnp.abs(d31), label=n, color=c)
+        axs[0].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
+        axs[1].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
+    
+    subfigs[i].suptitle(rf"$\rho={rho}$", x=0.5, fontsize=10)
+    axs[0].set_ylabel(r"$\hat{D}_{11}$")
+    axs[1].set_ylabel(r"$|\hat{D}_{31}|$")
+    for a in axs:    
+        a.legend() 
+        a.set_box_aspect(1)
+
+    if i == len(rhos) - 1:
+        axs[0].set_xlabel(r"$\nu^*$")
+        axs[1].set_xlabel(r"$\nu^*$")
+
 print("done")
 
 # for i in range(0, len(rhos)):
 #     ax[i, 0].set_title(rf"$\rho=${rhos[i]}", loc="right")
 
 
-for a in ax_flat:
-    a.legend()
-    a.set_box_aspect(1)
-for a in ax_flat[-2:]:
-    a.set_xlabel(r"$\nu^*$")
-for a in ax_flat[0::2]:
-    a.set_ylabel(r"$\hat{D}_{11}$")
-for a in ax_flat[1::2]:
-    a.set_ylabel(r"$|\hat{D}_{31}|$")
+# for a in ax_flat:
+#     a.legend()
+#     a.set_box_aspect(1)
+# for a in ax_flat[-2:]:
+#     a.set_xlabel(r"$\nu^*$")
+# for a in ax_flat[0::2]:
+#     a.set_ylabel(r"$\hat{D}_{11}$")
+# for a in ax_flat[1::2]:
+#     a.set_ylabel(r"$|\hat{D}_{31}|$")
 
-fig.tight_layout()
-fig.set_figheight(2.5)
-fig.set_figwidth(5.0)
+# fig.set_figheight(2.5 * len(rhos))
+# fig.set_figwidth(5.0)
 fig.savefig("figs/nc_mdke_compare.pdf", dpi=500)
 plt.show()

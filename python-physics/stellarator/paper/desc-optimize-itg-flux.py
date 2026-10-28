@@ -15,7 +15,8 @@ import os
 import sys
 
 # physical test flux in place of yancc; must be set before stellarator_multichannel
-os.environ["TEST_STELLARATOR"] = "true"
+# os.environ["TEST_STELLARATOR"] = "true"
+
 
 # the physical test flux has too large of an effect on the solution, so just use the linear term
 # os.environ["STELLARATOR_TEST_FLUX"] = "physical"
@@ -61,7 +62,7 @@ import manta as MaNTA
 
 
 eq_in = "eq_itg"  # initial equilibrium: the first of this family
-eq_name = "eq_itg_flux"  # what this run writes
+eq_name = "eq_itg_flux_no_nc"  # what this run writes
 fname = "stellarator_opt" + eq_name
 append = False
 use_default = True
@@ -356,7 +357,7 @@ obj_mirror_ratio = ObjectiveFromUser(
 
 # as in desc-optimize-stored-energy.py
 stored_energy_weight = 10.0
-max_it = 40  # this machine runs out of memory past ~12
+max_it = 40 
 
 eqfam = EquilibriaFamily(eq)
 

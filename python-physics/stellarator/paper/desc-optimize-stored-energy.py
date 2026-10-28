@@ -43,7 +43,7 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-eq_name = "eq4"
+eq_name = "eq5"
 fname = "stellarator_opt" + eq_name
 
 #
@@ -66,41 +66,43 @@ fname = "stellarator_opt" + eq_name
 # }
 #
 
-fac = 1.0
-st_config = {
-    "ParticleSourceCenter": 0.5,
-    "ParticleSourceHeight": fac * 1.2,
-    "ParticleSourceWidth": 0.4,
-    "NBICenter": 0.0,
-    "NBIPower": fac * 300.0,
-    "NBIWidth": 0.15,
-    "ECHCenter": 0.0,
-    "ECHPower": fac * 0.0,
-    "ECHWidth": 0.1,
-    "EdgeTemperature": 0.5,
-    "EdgeDensity": 1.0,
-    "ADCoefficient": 0.0,
-    "n0": 1.5,
-    "T0": 1.0,
-    "FusionFactor": 1.0,
-    "evolveDensity": True,
-    # Er by current balance with a small diffusion rather than ambipolarity
-    # node by node, so that one root is chosen where J(Er) = 0 has several.
-    # Sized from an algebraic run of this case (stellarator_opteq4.dat): with
-    # J' ~ n D_i / T_i from its fluxes, D_E * |curvature of Er| / J' stays
-    # under 5% of Er out to rho ~ 0.98 only for D_E <~ 1e-6 -- Er's curvature
-    # grows four decades towards the edge while J' falls -- and the zero-flux
-    # edge layer, sqrt(D_E / J') ~ 3e-3, then sits inside the last cell.
-    # ErInertia keeps tau's stabilisation (an added diffusivity ~ ErInertia *
-    # tau * h) below D_E on the widest cell; see DiffusiveErFlux.
-    "ErModel": "Diffusive",
-    "ErDiffusion": 1e-6,
-    "ErInertia": 5e-6,
-    "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
-    "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
-    "useBatching": True,
-    "nchunks": 3,
-}
+
+def make_config(Spi=300.0, Sn=1.2):
+    return {
+        "ParticleSourceCenter": 0.4,
+        "ParticleSourceHeight": Sn,
+        "ParticleSourceWidth": 0.6,
+        "NBICenter": 0.0,
+        "NBIPower": Spi,
+        "NBIWidth": 0.15,
+        "ECHCenter": 0.0,
+        "ECHPower": 0.0,
+        "ECHWidth": 0.1,
+        "EdgeTemperature": 1.0,
+        "EdgeDensity": 1.0,
+        "ADCoefficient": 0.0,
+        "n0": 3.0,
+        "T0": 3.0,
+        "FusionFactor": 1.0,
+        "evolveDensity": True,
+        # Er by current balance with a small diffusion rather than ambipolarity
+        # node by node, so that one root is chosen where J(Er) = 0 has several.
+        # Sized from an algebraic run of this case (stellarator_opteq4.dat): with
+        # J' ~ n D_i / T_i from its fluxes, D_E * |curvature of Er| / J' stays
+        # under 5% of Er out to rho
+        # grows four decades towards the edge while J' falls -- and the zero-flux
+        # edge layer, sqrt(D_E / J') ~ 3e-3, then sits inside the last cell.
+        # ErInertia keeps tau's stabilisation (an added diffusivity ~ ErInertia *
+        # tau * h) below D_E on the widest cell; see DiffusiveErFlux.
+        # "ErModel": "Diffusive",
+        "ErDiffusion": 1e-6,
+        "ErInertia": 5e-6,
+        "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
+        "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
+        "useBatching": True,
+        "nchunks": 3,
+    }
+
 
 # st_config and the solver settings are written in the default normalisation.
 # True converts them (rescale_config) so only the units change, not the physics;
@@ -109,17 +111,17 @@ keep_physics = False
 
 append = False
 
-rho_upper = 1.0
+rho_upper = 0.9
 rtol = 1e-2
-atol = 1e-6
+atol = 1e-5
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
-npoints = 9
-degree = 4
+npoints = 8
+degree = 5
 # base = 1.5
 # tau = 0.5
 #
-base = 1.5
-tau = 0.5
+base = 1.8
+tau = 0.2
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
@@ -128,7 +130,7 @@ tau = 0.5
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 
-nodes = np.concatenate(([0, 0.05, 0.15, 0.3], nodes, [rho_upper]))
+nodes = np.concatenate(([0, 0.05, 0.1, 0.15], nodes, [rho_upper]))
 
 # nodes = np.linspace(0, 1.0, npoints + 1)
 print(nodes)
@@ -144,7 +146,7 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 0.01,
+    "initialTimestep": 1e-3,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-5,
     # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
@@ -161,12 +163,12 @@ solver_config = {
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 1.0,
-    "PseudoTransientSERFloor": 4.0,
+    "PseudoTransientSERFloor": 2.0,
 }
 
 
 config = {
-    "Stellarator": st_config,
+    "Stellarator": make_config(),
     "Solver": solver_config,
 }
 points = MaNTA.getNodes(
@@ -275,12 +277,52 @@ config = normalized(config)
 # # # %%
 # with jax.log_compiles(True):
 #
-itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+itg_builder = make_itg_builder(config["Stellarator"], eq_init, rho_upper)
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
 )
-if not append:
-    st.run()
+Sns = [1.1, 1.1]
+Spis = [350.0, 400.0]
+
+# if not append:
+#     st.run()
+
+#     # need to get to lower collisionality like this
+
+
+#     for Spi, Sn in zip(Spis, Sns):
+#         _st_config = make_config(Spi, Sn)
+#         _solver_config = solver_config.copy()
+#         _solver_config["restart"] = True
+#         _solver_config["initialTimestep"] = 1e6
+
+#         _solver_config["SteadyStateSolver"] =  "Newton"
+
+#         _config = {
+#             "Stellarator": _st_config,
+#             "Solver": _solver_config,
+#         }
+#         _config  = normalized(_config)
+#         st = StellaratorTransport(
+#             _config,
+#             yancc_wrapper=yancc_wrapper,
+#             itg=itg_at(itg_builder, eq_init.params_dict),
+#         )
+#         st.run()
+
+st_config = make_config(Spis[-1], Sns[-1])
+config = {
+    "Stellarator": st_config,
+    "Solver": solver_config,
+}
+config = normalized(config)
+st = StellaratorTransport(
+    config,
+    yancc_wrapper=yancc_wrapper,
+    itg=itg_at(itg_builder, eq_init.params_dict),
+)
+st.run()
+
 
 #
 # # %%
@@ -523,7 +565,7 @@ stored_energy_weight = 10.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 40
+max_it = 20
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
