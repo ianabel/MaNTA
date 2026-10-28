@@ -2,9 +2,11 @@
 
 The third generation of `stellarator.py` / `stellarator2.py`, and the one that
 adds an ambipolar radial electric field: with `evolveDensity` on there are three
-variables and one auxiliary, and the drift-kinetic solve is done at an `Er` the
-aux row pins. With it off there is one variable, the ion energy, and the case
-reduces to something close to `stellarator2.py`.
+variables and two auxiliaries, and the drift-kinetic solve is done at an `Er` the
+first aux row pins. The second carries the bootstrap current `<J||B>` from the
+same solve, for output; nothing reads it back. With it off there is one
+variable, the ion energy, and the case reduces to something close to
+`stellarator2.py`.
 
 It is a separate module rather than a new revision of `stellarator2.py` because
 its parameters are not the same ones -- `stellarator_state.StellaratorParams`
@@ -237,8 +239,9 @@ class DiffusiveErFlux(eqx.Module):
     0.32 to 0.017 in the interior as eps went from 1 to 1e-4. So a small
     ErInertia is what lets a small ErDiffusion take effect.
 
-    The current comes back in the auxiliary slot as the Er row's *source*, so
-    the hooks move it from aux to sources. It stays a return of this function,
+    The current comes back in the first auxiliary slot as the Er row's
+    *source*, so the hooks move it from aux to sources; the bootstrap row
+    behind it stays an aux. It stays a return of this function,
     rather than going into `compute_sources`, so that the drift-kinetic solve
     that produces J runs once and every derivative of it -- the forward
     Jacobian's and the adjoint's d/d(field, V', V'') -- goes through one
@@ -269,7 +272,7 @@ class DiffusiveErFlux(eqx.Module):
         er_flux = vp * c.ErDiffusion / c.ErInertia * dErdrho
         # J is one entry per point whatever shape the solve returned it in
         er_source = -vp / c.ErInertia * jnp.reshape(aux[0], jnp.shape(er_flux))
-        return list(fluxes) + [er_flux], [er_source]
+        return list(fluxes) + [er_flux], [er_source] + list(aux[1:])
 
 
 def itg_geometry_jac(itg: ITGFlux, geometry, states, x, vp, vpp, params, evolveDensity):
@@ -329,6 +332,15 @@ def buildSpec(params: StellaratorParams) -> MaNTA.SystemSpec:
         MaNTA.Field("ElectronEnergy", "electron energy density", "n0 T0", **bcs),
     ]
 
+    # Carried, not solved for: its row sets it to the solve's <J||B> (see
+    # dke_sol._normalized_fluxes), so it costs no extra solve and feeds nothing
+    # back. Last among the aux, so Er keeps index 0 (AuxChannel).
+    bootstrap = MaNTA.Aux(
+        "BootstrapCurrent",
+        "bootstrap current <J||B> from the drift-kinetic solve",
+        "e n0 v_ti0 B0",
+    )
+
     if params.config.diffusiveEr:
         # No boundary datum to give Er, so zero flux at both ends -- the
         # axis's symmetry condition, and at the edge whatever ambipolarity
@@ -343,7 +355,8 @@ def buildSpec(params: StellaratorParams) -> MaNTA.SystemSpec:
                     lower=MaNTA.Neumann,
                     upper=MaNTA.Neumann,
                 )
-            ]
+            ],
+            aux=[bootstrap],
         )
 
     return MaNTA.SystemSpec(
@@ -353,7 +366,8 @@ def buildSpec(params: StellaratorParams) -> MaNTA.SystemSpec:
                 "Er",
                 "radial electric field enforcing ambipolarity",
                 "T0/e",
-            )
+            ),
+            bootstrap,
         ],
     )
 
@@ -585,6 +599,22 @@ class StellaratorTransport(MaNTA.TransportSystem):
         else:
             ui = self.runner.Get_profile(0) / self.vp
         return 2.0 / 3.0 * ui * self.pnorm
+
+    def getBootstrapCurrent(self, points=None):
+        """The bootstrap current <J||B> [A T m^-2] after a run, at `points` or,
+        if None, at the nodes. Read eagerly from the runner, so not under jit."""
+        if not self.params.config.evolveDensity:
+            raise ValueError(
+                "the bootstrap current is carried only with evolveDensity: "
+                "without electrons there is none to compute"
+            )
+        index = StellaratorState.bootstrap_aux_index(self.params)
+        jbs = self.runner.getAuxiliary(
+            index, None if points is None else [float(p) for p in points]
+        )
+        return (
+            jnp.asarray(jbs) * self.params.constants.BootstrapCurrentNormalization()
+        )
 
     def LowerBoundary(self, index, t):
         return 0.0
@@ -840,7 +870,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         if self.params.config.diffusiveEr:
             # the current is the Er row's source; see DiffusiveErFlux
-            return [dke_data[0], list(sources) + list(dke_data[1]), []]
+            er_source, *aux = dke_data[1]
+            return [dke_data[0], list(sources) + [er_source], aux]
         return [dke_data[0], sources, dke_data[1]]
 
     @Physics_Decorator
@@ -868,7 +899,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         )
 
         if self.params.config.diffusiveEr:
-            return [ddke_data[0], list(dsources) + list(ddke_data[1]), []]
+            der_source, *daux = ddke_data[1]
+            return [ddke_data[0], list(dsources) + [der_source], daux]
         return [ddke_data[0], dsources, ddke_data[1]]
 
     def prepareEvaluation(self, plan):
@@ -1023,7 +1055,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         self.compute_sources = transport_system.compute_sources
 
         self.params = transport_system.params
-        # from the spec: 3 and 1 with evolveDensity, 4 and 0 when Er is
+        # from the spec: 3 and 2 with evolveDensity, 4 and 1 when Er is
         # diffusive, 1 and 0 without evolveDensity
         self.nVars = transport_system.nVars
         self.nAux = transport_system.nAux
@@ -1197,19 +1229,24 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         for i in range(0, len(dsources)):
             dsources_out.append(with_itg(unravel(dsources[i]), None))
 
+        # the aux rows the flux returned, after any that are sources
+        aux_rows = ddke_data[1]
         if self.params.config.diffusiveEr:
             # the Er row's source is the current, which came back in the
             # auxiliary slot (DiffusiveErFlux); SumFlux takes it from the
             # neoclassical solve alone, so it does not read the ITG geometry
-            dsources_out.append(with_itg(unravel(ddke_data[1][0]), None))
+            dsources_out.append(with_itg(unravel(aux_rows[0]), None))
+            aux_rows = aux_rows[1:]
+
+        def itg_aux_part(i):
+            # the ITG term returns one aux, for the ambipolarity row; the
+            # bootstrap row comes from the neoclassical solve alone
+            if self.itg is None or self.params.config.diffusiveEr:
+                return None
+            return ditg[1][i] if i < len(ditg[1]) else None
 
         for i in range(0, self.nAux):
-            daux_out.append(
-                with_itg(
-                    unravel(ddke_data[1][i]),
-                    ditg[1][i] if self.itg is not None else None,
-                )
-            )
+            daux_out.append(with_itg(unravel(aux_rows[i]), itg_aux_part(i)))
 
         return [dsigma_out, dsources_out, daux_out]
 

@@ -144,6 +144,16 @@ class PlasmaConstants(eqx.Module):
     def CurrentNormalization(self):
         return self.ElementaryCharge * self.DensityEquationNormalization()
 
+    # <J||B> [A T m^-2]: e n0 v_ti0 B0, SFINCS's FSABjHat normalisation with
+    # this case's reference ion in place of the proton
+    def BootstrapCurrentNormalization(self):
+        return (
+            self.ElementaryCharge
+            * self.n0
+            * self.ReferenceIonThermalVelocity()
+            * self.B0
+        )
+
     def IonElectronEnergyExchange(self, n, pe, pi):
         Te = pe / n
         pDiff = self.n0 * self.T0 * (pe - pi)

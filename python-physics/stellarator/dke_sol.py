@@ -35,7 +35,8 @@ def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity):
 
     Returns per-species `<particle_flux>` [m^-3 s^-1] and `<heat_flux>`
     [W m^-3], both the flux-surface average of the flux dotted with grad(rho),
-    and the radial current `J_rho` [A m^-3].
+    the radial current `J_rho` [A m^-3], and the bootstrap current `<J||B>`
+    [A T m^-2].
     """
     if evolveDensity:
         rtol, max_grids = 1e-2, 2
@@ -54,7 +55,12 @@ def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity):
         verbose=0,
         multigrid_options={"smooth_solver": "banded", "max_grids": max_grids},
     )
-    return sol.get("<particle_flux>"), sol.get("<heat_flux>"), sol.get("J_rho")
+    return (
+        sol.get("<particle_flux>"),
+        sol.get("<heat_flux>"),
+        sol.get("J_rho"),
+        sol.get("<J||B>"),
+    )
 
 
 def _normalized_fluxes(
@@ -83,13 +89,13 @@ def _normalized_fluxes(
     species = _species(state, params, evolveDensity)
 
     if not evolveDensity:
-        _, heat_flux, _ = moments(
+        _, heat_flux, _, _ = moments(
             species, jnp.array(0.0), field, pitchgrid, speedgrid, evolveDensity
         )
         flux = -heat_flux[0] * vp / c.HeatEquationNormalization()
         return [flux], []
 
-    particle, heat_flux, current = moments(
+    particle, heat_flux, current, bootstrap = moments(
         species, state.Er * c.T0eV, field, pitchgrid, speedgrid, evolveDensity
     )
 
@@ -116,7 +122,13 @@ def _normalized_fluxes(
 
     aux_g_out = current / c.CurrentNormalization()
 
-    return [particle_flux, heat_flux[0], heat_flux[1]], [aux_g_out]
+    # the bootstrap current is carried, not solved for: its row only sets the
+    # aux to what the solve gives, so it feeds nothing back
+    bootstrap_g_out = StellaratorState.bootstrap_of(
+        _state, params
+    ) - bootstrap / c.BootstrapCurrentNormalization()
+
+    return [particle_flux, heat_flux[0], heat_flux[1]], [aux_g_out, bootstrap_g_out]
 
 
 # we keep this function pure and not dependent on class data so jax can save it in persistent cache
@@ -236,8 +248,13 @@ def test_flux(
         electron_heat_flux = vp * _TEST_D * state.dTedrho
 
         aux_g_out = 0.0 * vp
+        # no bootstrap current: the row holds the aux at zero
+        bootstrap_g_out = StellaratorState.bootstrap_of(_state, params) + 0.0 * vp
 
-        return [particle_flux, ion_heat_flux, electron_heat_flux], [aux_g_out]
+        return [particle_flux, ion_heat_flux, electron_heat_flux], [
+            aux_g_out,
+            bootstrap_g_out,
+        ]
 
     def constant_density(state, x, t, field, vp, vpp, *args):
         return [vp * _TEST_D * state.dTidrho], []
@@ -311,6 +328,9 @@ _MOCK_B_REF = 5.0  # [T]
 _MOCK_T_EXPONENT = 1.5
 _MOCK_N_EXPONENT = -1.0
 _MOCK_D2_OVER_D1 = 3.5
+# <J||B> = -C sum_s p_s' / a, the shape of a bootstrap current driven by the
+# pressure gradient, with C a trapped fraction's order of magnitude
+_MOCK_BOOTSTRAP = 0.5
 _ELEMENTARY_CHARGE = 1.60217663e-19
 
 
@@ -336,7 +356,13 @@ def physical_test_moments(species, Erho, field, pitchgrid, speedgrid, evolveDens
         heat.append(q)
     particle, heat = jnp.stack(particle), jnp.stack(heat)
     charges = jnp.stack([s.species.charge for s in species])
-    return particle, heat, jnp.sum(charges * particle)
+    # Pa per unit rho over a metre is A T m^-2
+    dpdrho = sum(
+        _ELEMENTARY_CHARGE * (s.temperature * s.dndrho + s.density * s.dTdrho)
+        for s in species
+    )
+    bootstrap = -_MOCK_BOOTSTRAP * dpdrho / field.a_minor
+    return particle, heat, jnp.sum(charges * particle), bootstrap
 
 
 def physical_test_flux(
