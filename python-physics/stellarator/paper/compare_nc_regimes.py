@@ -1,9 +1,12 @@
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
-from numpy import expand_dims
+import numpy as np
+import netCDF4
 from yancc import Field, UniformPitchAngleGrid, solve_mdke
 from yancc.species import Electron, _nustar, _Estar, LocalMaxwellian
 import desc.io
+from desc.grid import LinearGrid
+import manta
 import jax
 from jax.sharding import PartitionSpec, NamedSharding
 import equinox as eqx
@@ -34,6 +37,50 @@ def load_and_rescale(name):
 
 eqs_high = desc.io.load("eq4_all_equilibria.h5")
 eqs_low = desc.io.load("eq5_all_equilibria.h5")
+
+# The MaNTA run behind each optimisation: desc-optimize-stored-energy.py's
+# first run, <fname>_acc.nc, on the family's initial equilibrium, which is
+# therefore the one V' is taken from; and the Normalization it was run with
+# (n0 in m^-3, T0 in eV)
+manta_runs = {
+    "A": ("stellarator_opteq4_acc.nc", eqs_high[0], {"n0": 1e19, "T0": 1000.0}),
+    "B": ("stellarator_opteq5_acc.nc", eqs_low[0], {"n0": 1e19, "T0": 1000.0}),
+}
+
+
+def manta_local_state(nc_file, eq, rho, normalization):
+    """Electron density [m^-3], temperature [eV] and E_rho [V] at rho, last
+    time slice.
+
+    The transported variables are V' n and (3/2) V' n T_e, with
+    V' = V_r(rho) / V(rho_last) and rho_last the last MaNTA node, as the
+    drivers build it (objective_from_user_fun), so T_e needs no V' and n
+    takes it from `eq`. Er is in T0/e per unit rho: under ErModel = Diffusive
+    the variable V' Er (an "Er" group), otherwise the auxiliary Er itself (a
+    top-level variable). It reaches yancc as Er * T0, as in dke_sol.py.
+    """
+    with netCDF4.Dataset(nc_file) as d:
+        x = d["x"][:]
+        Vn = np.interp(rho, x, d["Density/u"][-1, :])
+        Vue = np.interp(rho, x, d["ElectronEnergy/u"][-1, :])
+        if "Er" in d.groups:
+            Er, Er_has_Vp = np.interp(rho, x, d["Er/u"][-1, :]), True
+        else:
+            Er, Er_has_Vp = np.interp(rho, x, d["Er"][-1, :]), False
+        nodes = manta.getNodes(
+            np.asarray(d["Grid/CellBoundaries"][:]), int(d["Grid/PolyOrder"][...])
+        )
+
+    def at(rho_, key):
+        grid = LinearGrid(rho=np.array([rho_]), M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP)
+        return float(grid.compress(eq.compute(key, grid=grid)[key])[0])
+
+    Vp = at(rho, "V_r(r)") / at(nodes[-1], "V(r)")
+    n = Vn / Vp * normalization["n0"]
+    Te = 2.0 / 3.0 * Vue / Vn * normalization["T0"]
+    Erho = (Er / Vp if Er_has_Vp else Er) * normalization["T0"]
+    return n, Te, Erho
+
 
 # example_equilibria = ["precise_QH", "W7-X"]
 example_equilibria = []
@@ -86,7 +133,7 @@ def compute_Dij(nu, field, species, Er=-1e3):
 nuhats = jax.device_put(jnp.logspace(-7, 0, 20), data_sharding)
 
 fun = eqx.filter_jit(
-    eqx.filter_vmap(compute_Dij, in_axes=(0, None, None), out_axes=(0, 0))
+    eqx.filter_vmap(compute_Dij, in_axes=(0, None, None, None), out_axes=(0, 0))
 )
 
 rhos = [0.5, 0.9]
@@ -105,12 +152,30 @@ for rho, i in zip(rhos, range(0, len(rhos))):
     for e, n, c in zip(eqs, names, colors):
         print(f"Solving mdke for {n}")
         field = Field.from_desc(e, rho, 25, 47)
-        d11, d31 = fun(nuhats, field, species)
+        local = None
+        if n in manta_runs:
+            # the electrons MaNTA reached at this rho: their Er drives the
+            # mdke, and their nu* places the line. Neither reads the
+            # gradients
+            nc_file, run_eq, normalization = manta_runs[n]
+            ne, Te, Erho = manta_local_state(nc_file, run_eq, rho, normalization)
+            print(
+                f"{n}: n_e = {ne:.3e} m^-3, T_e = {Te:.1f} eV, "
+                f"E_rho = {Erho:.3e} V at rho={rho}"
+            )
+            local = LocalMaxwellian(
+                Electron, temperature=Te, density=ne, dTdrho=0.0, dndrho=0.0
+            )
+            d11, d31 = fun(nuhats, field, [local], Erho)
+        else:
+            d11, d31 = fun(nuhats, field, species, -1e3)
         axs[0].loglog(nuhats, d11, label=n, color=c)
         axs[1].loglog(nuhats, jnp.abs(d31), label=n, color=c)
-        axs[0].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
-        axs[1].axvline(_nustar(species[0], field, 1.0), color=c, linestyle="--")
-    
+        if local is not None:
+            nustar = _nustar(local, field, 1.0)
+            axs[0].axvline(nustar, color=c, linestyle="--")
+            axs[1].axvline(nustar, color=c, linestyle="--")
+
     subfigs[i].suptitle(rf"$\rho={rho}$", x=0.5, fontsize=10)
     axs[0].set_ylabel(r"$\hat{D}_{11}$")
     axs[1].set_ylabel(r"$|\hat{D}_{31}|$")
