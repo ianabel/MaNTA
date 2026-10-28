@@ -18,7 +18,8 @@ or into a gitignored `CMakeUserPresets.json`.
 
 ```sh
 cmake --preset default    # configure into build/ (Release; also: debug, coverage, portable)
-cmake --build build -j    # solver + libmanta.so + the Python module + the unit tests
+cmake --build build -j4   # solver + libmanta.so + the Python module + the unit tests;
+                          # never a bare -j: unbounded -O3 -flto jobs exhaust RAM
 ctest --test-dir build    # all three suites
 
 cmake --build build --target MaNTA        # the solver only, at build/MaNTA
