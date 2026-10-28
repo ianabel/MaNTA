@@ -262,3 +262,79 @@ class ObjectiveFromUserWithParams(ObjectiveFromUser):
             **self._compute_kwargs,
         )
         return self._fun(constants["transforms"]["grid"], data, params)
+
+
+class ObjectiveHistory:
+    """Record one sub-objective's value at every concrete evaluation.
+
+    DESC's `optimize` returns the iterates (`result["history"]`) but not the
+    objective at each one, and its own optimizer wrappers pass no callback.
+    This wraps `term.compute` -- for an ObjectiveFromUser, the user function's
+    return value, before target, weight and normalisation -- and keeps
+    `(params, value)` whenever the value is concrete rather than a tracer, so
+    the JVPs of a gradient are not counted. Every evaluation of the full
+    objective reaches it, under ProximalProjection at the re-solved
+    equilibrium. `_unjit` never replaces `compute`, so a rebuild by the
+    projection keeps the wrapper.
+
+    `evaluations` holds every evaluation, rejected trial steps included;
+    `attach(result)` adds the accepted steps' values to an optimize result.
+    Nothing is evaluated again: a MaNTA solve per iterate is the cost this
+    exists to avoid.
+    """
+
+    def __init__(self, term):
+        self.term = term
+        self.evaluations = []
+        inner = term.compute
+
+        def compute(params, constants=None):
+            f = inner(params, constants)
+            if not isinstance(f, jax.core.Tracer):
+                x = term.things[0].pack_params(params)
+                self.evaluations.append((np.asarray(x), np.asarray(f)))
+            return f
+
+        term.compute = compute
+        # as _unjit does for the methods it replaces: not a pytree leaf
+        if "compute" not in term._static_attrs:
+            term._static_attrs += ["compute"]
+
+    def _value_at(self, params):
+        """The latest recorded value at the parameters `params`."""
+        x = np.asarray(self.term.things[0].pack_params(params))
+        for xe, f in reversed(self.evaluations):
+            if xe.shape == x.shape and np.allclose(xe, x, rtol=1e-12, atol=1e-14):
+                return f
+        return None
+
+    def attach(self, result, key="objective_history"):
+        """Add `result[key]`, one row per optimizer iteration, 0 the initial state.
+
+        Each step holds one params dict per optimised thing, in an order
+        `result` does not record, so the term's own is found by matching each
+        against the evaluations. NaN where a step was never evaluated
+        concretely (each accepted step is a trial step first, so it should
+        have been). Returns `result`.
+        """
+        rows = []
+        for step in result["history"]:
+            f = None
+            for params in step:
+                try:
+                    f = self._value_at(params)
+                except (KeyError, ValueError, TypeError):
+                    continue
+                if f is not None:
+                    break
+            rows.append(f)
+        # under a proximal optimizer history[0] is the equilibrium before the
+        # projection's build re-solves it, which nothing evaluates; dropping
+        # it makes entry i DESC's iteration i
+        if len(rows) > 1 and rows[0] is None and rows[1] is not None:
+            rows = rows[1:]
+        width = next((np.size(f) for f in rows if f is not None), 1)
+        result[key] = np.array(
+            [np.full(width, np.nan) if f is None else np.ravel(f) for f in rows]
+        ).squeeze()
+        return result

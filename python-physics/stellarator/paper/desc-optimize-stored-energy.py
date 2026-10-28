@@ -5,7 +5,7 @@ sys.path.append("..")
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective, ObjectiveFromUserWithParams
+from objective import make_objective, ObjectiveFromUserWithParams, ObjectiveHistory
 from itg_wrapper import make_itg_builder, itg_at, with_itg
 from config import rescale_config, field_norm_from_eq
 
@@ -592,6 +592,9 @@ objectives = [
 
 objective = ObjectiveFunction(objectives)
 objective.build(use_jit=False)
+# DESC returns the iterates but not the objective at each; record the MaNTA
+# term (objective_from_user_fun's 1/g) as it is evaluated
+stored_energy_history = ObjectiveHistory(objectives[-1])
 
 k = 5
 # #
@@ -650,6 +653,11 @@ eq, info_out = eq.optimize(
     verbose=3,
     copy=True,
 )
+stored_energy_history.attach(info_out, key="stored_energy_history")
+# objective_from_user_fun returns 1 / g
+info_out["stored_energy_history"] = 1.0 / info_out["stored_energy_history"]
+print("stored energy per iteration:", info_out["stored_energy_history"])
+np.save(eq_name + "_stored_energy_history.npy", info_out["stored_energy_history"])
 
 # %%
 
@@ -708,6 +716,15 @@ fig, ax = plot_boozer_surface(eqfam[-1], fieldlines=8)
 fig.savefig("figs/" + eq_name + "final_boozer_surface.png")
 fig, ax = plot_qs_error(eqfam[-1])
 fig.savefig("figs/" + eq_name + "final_qs_error.png")
+
+fig, ax = plt.subplots()
+W = info_out["stored_energy_history"]
+ax.plot(np.arange(len(W)), W, "o-")
+ax.set_xlabel("iteration")
+ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+ax.set_ylabel("stored energy $G$")
+ax.set_title("MaNTA objective over the optimisation")
+fig.savefig("figs/" + eq_name + "stored_energy_history.png", dpi=200)
 plt.show()
 
 #
