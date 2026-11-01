@@ -124,12 +124,15 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
     time_march_solver_config["restart"] = False
     time_march_solver_config["MaxRejectedSteps"] = 5
     grad_solver_config = solver_config.copy()
-    grad_solver_config["delta_t"] = grad_solver_config["delta_t"] / 10000.0
+    grad_solver_config["OutputFilename"] = solver_config["OutputFilename"] + "_acc"
+    grad_solver_config["RestartFile"] = solver_config["OutputFilename"] + ".restart.nc"
     grad_solver_config["restart"] = True
     grad_solver_config["solveAdjoint"] = True
     grad_solver_config["SteadyStateSolver"] = "Newton"
     grad_solver_config["SteadyStateTest"] = "Residual"
-    grad_solver_config["SteadyStateTolerance"] = 1.0
+    grad_solver_config["SteadyStateTolerance"] = (
+        1e10  # assume the run it's reading is in steady-state
+    )
 
     grad_config = {**config, "Solver": grad_solver_config}
 

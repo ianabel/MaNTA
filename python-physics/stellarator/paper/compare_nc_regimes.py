@@ -35,16 +35,16 @@ def load_and_rescale(name):
 
 # Magnetic field on a flux surface (here from a BOOZ_XFORM file).
 
-eqs_high = desc.io.load("eq4_all_equilibria.h5")
-eqs_low = desc.io.load("eq5_all_equilibria.h5")
+eqs_high = desc.io.load("eq6_all_equilibria.h5")
+eqs_low = desc.io.load("eq7_all_equilibria.h5")
 
 # The MaNTA run behind each optimisation: desc-optimize-stored-energy.py's
 # first run, <fname>_acc.nc, on the family's initial equilibrium, which is
 # therefore the one V' is taken from; and the Normalization it was run with
 # (n0 in m^-3, T0 in eV)
 manta_runs = {
-    "A": ("stellarator_opteq4_acc.nc", eqs_high[0], {"n0": 1e19, "T0": 1000.0}),
-    "B": ("stellarator_opteq5_acc.nc", eqs_low[0], {"n0": 1e19, "T0": 1000.0}),
+    "A": ("stellarator_opteq6.nc", eqs_high[0], {"n0": 1e19, "T0": 1000.0}),
+    "B": ("stellarator_opteq7.nc", eqs_low[0], {"n0": 1e19, "T0": 1000.0}),
 }
 
 
@@ -136,7 +136,7 @@ fun = eqx.filter_jit(
     eqx.filter_vmap(compute_Dij, in_axes=(0, None, None, None), out_axes=(0, 0))
 )
 
-rhos = [0.5, 0.9]
+rhos = [0.1, 0.5, 0.8]
 names = ["initial", "A", "B", "W7-X"] + example_equilibria
 eqs = [eq0, eq_high, eq_low, eq_w7x] + example_eqs
 colors = ["r", "b", "g", "c", "m"]
@@ -179,8 +179,8 @@ for rho, i in zip(rhos, range(0, len(rhos))):
     subfigs[i].suptitle(rf"$\rho={rho}$", x=0.5, fontsize=10)
     axs[0].set_ylabel(r"$\hat{D}_{11}$")
     axs[1].set_ylabel(r"$|\hat{D}_{31}|$")
-    for a in axs:    
-        a.legend() 
+    for a in axs:
+        a.legend()
         a.set_box_aspect(1)
 
     if i == len(rhos) - 1:
@@ -189,21 +189,5 @@ for rho, i in zip(rhos, range(0, len(rhos))):
 
 print("done")
 
-# for i in range(0, len(rhos)):
-#     ax[i, 0].set_title(rf"$\rho=${rhos[i]}", loc="right")
-
-
-# for a in ax_flat:
-#     a.legend()
-#     a.set_box_aspect(1)
-# for a in ax_flat[-2:]:
-#     a.set_xlabel(r"$\nu^*$")
-# for a in ax_flat[0::2]:
-#     a.set_ylabel(r"$\hat{D}_{11}$")
-# for a in ax_flat[1::2]:
-#     a.set_ylabel(r"$|\hat{D}_{31}|$")
-
-# fig.set_figheight(2.5 * len(rhos))
-# fig.set_figwidth(5.0)
 fig.savefig("figs/nc_mdke_compare.pdf", dpi=500)
 plt.show()

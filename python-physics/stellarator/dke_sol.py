@@ -38,9 +38,9 @@ def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity):
     and the radial current `J_rho` [A m^-3].
     """
     if evolveDensity:
-        rtol, max_grids = 1e-2, 2
+        rtol, max_grids = 1e-4, 3
     else:
-        rtol, max_grids = 1e-3, 3
+        rtol, max_grids = 1e-5, 3
 
     sol, info = solve_dke(
         field,
@@ -102,19 +102,15 @@ def _normalized_fluxes(
         state,
     )
 
-    # The fluxes are already per unit rho ([m^-3 s^-1], [W m^-3]), the units of
-    # dn/dt and dp/dt, so they normalise exactly as the sources do. (yancc's
-    # docs site still says per m^2, from before its move to rho in 980ae59;
-    # see radial_magnetic_drift, which computes v_m . grad(rho).) Had they been
-    # per m^2, the conversion would be a division by the device's field.a_minor,
-    # never a factor of the normalising length constants.a.
+    # in theory the ion and electron particle flux should be equal, but try an average
     particle_flux = (
         -particle[1] * vp / c.DensityEquationNormalization()
     ) + extra_diffusion
 
     heat_flux = -heat_flux * vp / c.HeatEquationNormalization()
 
-    aux_g_out = current / c.CurrentNormalization()
+    # when the electric field diffusion equation is used, this becomes a source
+    aux_g_out = vp * current / c.CurrentNormalization()
 
     return [particle_flux, heat_flux[0], heat_flux[1]], [aux_g_out]
 
@@ -210,7 +206,7 @@ def dke_field_jac(
 Linear diffusion with the same signature as above for testing purposes
 """
 
-_TEST_D = 0.3
+_TEST_D = 0.2
 
 
 def test_flux(

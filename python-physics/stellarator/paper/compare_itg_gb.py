@@ -38,7 +38,7 @@ driver = os.path.abspath(
 family = os.path.abspath(
     sys.argv[2]
     if len(sys.argv) > 2
-    else os.path.join(here, "eq_itg_flux_all_equilibria.h5")
+    else os.path.join(here, "eq_itg_flux_no_nc_all_equilibria.h5")
 )
 outdir = here
 os.chdir(os.path.dirname(driver))
@@ -72,7 +72,7 @@ eq_final = fam[-1]
 st_config = ns["st_config"]
 itg_builder = make_itg_builder(st_config, eq_init, ns["rho_upper"])
 
-rho = jnp.linspace(0.05, 0.95, 37)
+rho = jnp.linspace(0.05, 0.9, 37)
 aLT_scan = jnp.linspace(*A_OVER_LT_RANGE, 291)
 
 
@@ -138,7 +138,7 @@ def solve(eq, name):
     return dict(Ti=np.asarray(s.Ti), aLT=np.asarray(aLT), crit=crit, Q=np.asarray(Q))
 
 
-res = {"initial": solve(eq_init, "initial"), "final": solve(eq_final, "final")}
+res = {"Initial": solve(eq_init, "Initial"), "Optimized": solve(eq_final, "Optimized")}
 
 for name, r in res.items():
     print(f"\n=== {name} ===")
@@ -162,5 +162,5 @@ for a in axs:
     a.legend(fontsize=7)
 fig.tight_layout()
 os.makedirs(os.path.join(outdir, "figs"), exist_ok=True)
-fig.savefig(os.path.join(outdir, "figs", "compute_itg_gb.pdf"), dpi=500)
+fig.savefig(os.path.join(outdir, "figs", "compute_itg_gb_no_nc.pdf"), dpi=500)
 # print("\nwrote", os.path.join(outdir, "figs", "marginal.png"))

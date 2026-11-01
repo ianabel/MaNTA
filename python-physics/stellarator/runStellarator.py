@@ -6,6 +6,8 @@ from stellarator_multichannel import StellaratorTransport
 from itg_wrapper import make_itg_builder, itg_at
 from objective import make_objective
 
+from config import rescale_config, field_norm_from_eq
+
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
 import matplotlib.pyplot as plt
@@ -22,45 +24,58 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-fname = "stellarator_opt_amb"
+fname = "W7-X"
 
 fac = 1.0
 st_config = {
-    "ParticleSourceCenter": 0.0,
-    "ParticleSourceHeight": fac * 0.02,
-    "ParticleSourceWidth": 0.4,
+    "ParticleSourceCenter": 0.4,
+    "ParticleSourceHeight": fac * 1.2,
+    "ParticleSourceWidth": 0.5,
     "NBICenter": 0.0,
-    "NBIPower": fac * 0.5,
-    "NBIWidth": 0.1,
+    "NBIPower": fac * 500.0,
+    "NBIWidth": 0.15,
     "ECHCenter": 0.0,
-    "ECHPower": fac * 25.0,
-    "ECHWidth": 0.05,
-    "EdgeTemperature": 0.5,
-    "EdgeDensity": 0.4,
-    "n0": 0.5,
-    "T0": 1.0,
-    "FusionFactor": 0.01,
+    "ECHPower": fac * 0.0,
+    "ECHWidth": 0.1,
+    "EdgeTemperature": 1.0,
+    "EdgeDensity": 1.0,
+    "ADCoefficient": 0.0,
+    "n0": 2.5,
+    "T0": 1.5,
+    "FusionFactor": 1.0,
     "evolveDensity": True,
+    # Er by current balance with a small diffusion rather than ambipolarity
+    # node by node, so that one root is chosen where J(Er) = 0 has several.
+    # Sized from an algebraic run of this case (stellarator_opteq4.dat): with
+    # J' ~ n D_i / T_i from its fluxes, D_E * |curvature of Er| / J' stays
+    # under 5% of Er out to rho ~ 0.98 only for D_E <~ 1e-6 -- Er's curvature
+    # grows four decades towards the edge while J' falls -- and the zero-flux
+    # edge layer, sqrt(D_E / J') ~ 3e-3, then sits inside the last cell.
+    # ErInertia keeps tau's stabilisation (an added diffusivity ~ ErInertia *
+    # tau * h) below D_E on the widest cell; see DiffusiveErFlux.
+    # "ErModel": "Diffusive",
+    "ErDiffusion": 1e-6,
+    "ErInertia": 5e-6,
     "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
-    "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
+    "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
     "useBatching": True,
-    "adaptiveGrid": False,
     "nchunks": 3,
 }
 
-
-rho_upper = 1.0
+rho_upper = 0.9
 rtol = 1e-2
-atol = 1e-10
-npoints = 8
-degree = 5
+atol = 1e-5
+npoints = 9
+degree = 4
 
 base = 1.8
-tau = 0.2
+tau = 0.5
 #
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 
-nodes = np.concatenate(([0, 0.01, 0.05, 0.2], nodes, [rho_upper]))
+nodes = np.concatenate(([0, 0.05, 0.1, 0.2], nodes, [rho_upper]))
+nodes = np.linspace(0, 0.99 * rho_upper, npoints)
+nodes = np.concatenate((nodes, [rho_upper]))
 solver_config = {
     "OutputFilename": fname,
     "PolynomialDegree": degree,
@@ -72,7 +87,7 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-2,
+    "initialTimestep": 0.1,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-4,
     "AggressiveTimesteps": False,
@@ -84,10 +99,10 @@ solver_config = {
     "SteadyStateSolver": "PseudoTransient",
     "SuppressAlgebraicError": True,
     "NewtonJacobianReuse": 5,
-    # "tauScaling": "Diffusive",
-    # "tauUpdate": "Residual",
+    "tauScaling": "Diffusive",
+    "tauUpdate": "Residual",
     "MaxRejectedSteps": 10,
-    "restart": True,
+    "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 1.0,
@@ -153,6 +168,23 @@ yancc_wrapper = yancc_data.from_eq(
     yancc_rho, eq=eq, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
 
+normalization = {"n0": 1e19, **field_norm_from_eq(eq)}
+print(f"Normalization from the initial equilibrium: {normalization}")
+
+
+def normalized(config):
+    return {**config, "Normalization": normalization}
+
+
+config = normalized(config)
+## %%
+
+#
+# # # %%
+# with jax.log_compiles(True):
+#
 itg_builder = make_itg_builder(st_config, eq, rho_upper)
-st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict))
+st = StellaratorTransport(
+    config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict)
+)
 st.run()

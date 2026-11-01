@@ -39,7 +39,7 @@ _eqs = desc.io.load("eq_amb5_all_equilibria.h5")
 fs = ["stellarator_opt0.nc", "stellarator_opt.nc"]
 eqs = [_eqs[0], _eqs[-1]]
 linspecs = ["--", ""]
-fig, ax = plt.subplots(1, 3)
+fig, ax = plt.subplots(1, 3, constrained_layout=True)
 
 for i in range(0, len(fs)):
     x, n, Ti, Te, Er = load(eqs[i], fs[i])
@@ -64,5 +64,5 @@ fig.suptitle("Profiles from optimized stellarator")
 fig.set_figwidth(5.5)
 fig.set_figheight(3.0)
 fig.tight_layout()
-fig.savefig("figs/optimized_profiles.png", dpi=300, bbox_inches="tight")
+fig.savefig("figs/optimized_profiles.pdf", dpi=500, bbox_inches="tight")
 plt.show()

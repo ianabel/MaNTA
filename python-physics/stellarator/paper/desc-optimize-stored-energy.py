@@ -43,7 +43,7 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-eq_name = "eq5"
+eq_name = "eq6"
 fname = "stellarator_opt" + eq_name
 
 #
@@ -78,7 +78,7 @@ def make_config(Spi=300.0, Sn=1.2):
         "ECHCenter": 0.0,
         "ECHPower": 0.0,
         "ECHWidth": 0.1,
-        "EdgeTemperature": 1.0,
+        "EdgeTemperature": 1.5,
         "EdgeDensity": 1.0,
         "ADCoefficient": 0.0,
         "n0": 3.0,
@@ -86,7 +86,7 @@ def make_config(Spi=300.0, Sn=1.2):
         "FusionFactor": 1.0,
         "evolveDensity": True,
         # Er by current balance with a small diffusion rather than ambipolarity
-        # node by node, so that one root is chosen where J(Er) = 0 has several.
+        # node by node, so that one root is chosen where J() = 0 has several.
         # Sized from an algebraic run of this case (stellarator_opteq4.dat): with
         # J' ~ n D_i / T_i from its fluxes, D_E * |curvature of Er| / J' stays
         # under 5% of Er out to rho
@@ -109,30 +109,32 @@ def make_config(Spi=300.0, Sn=1.2):
 # False reads them as numbers in the new units.
 keep_physics = False
 
-append = False
+append = True
 
 rho_upper = 0.9
 rtol = 1e-2
 atol = 1e-5
 # nodes = [0.0, 0.4, 0.6, 0.75, 0.95, 1.0]
-npoints = 8
-degree = 5
+npoints = 9
+degree = 4
 # base = 1.5
 # tau = 0.5
 #
 base = 1.8
-tau = 0.2
+tau = 0.5
 #
 # nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 2)
 
 # nodes = np.concatenate(
 #     ([0, 0.1], nodes, [rho_upper])
 # )  # nodes = np.concatenate(([0, 0.1], nodes, [0.98,1]))
-nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
+nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 5)
 
-nodes = np.concatenate(([0, 0.05, 0.1, 0.15], nodes, [rho_upper]))
+# nodes = np.concatenate(([0, 0.1, 0.15, 0.2, 0.25], nodes, [rho_upper]))
 
-# nodes = np.linspace(0, 1.0, npoints + 1)
+# nodes = np.linspace(0, 0.99 * rho_upper, npoints)
+# nodes = np.concatenate((nodes, [rho_upper]))
+nodes = np.linspace(0, rho_upper, npoints + 1)
 print(nodes)
 # # %%
 solver_config = {
@@ -146,7 +148,7 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-3,
+    "initialTimestep": 1e-2,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-5,
     # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
@@ -162,13 +164,14 @@ solver_config = {
     "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
-    "PseudoTransientSERRate": 1.0,
+    "PseudoTransientSERRate": 0.5,
     "PseudoTransientSERFloor": 2.0,
 }
 
 
+st_config = make_config()
 config = {
-    "Stellarator": make_config(),
+    "Stellarator": st_config,
     "Solver": solver_config,
 }
 points = MaNTA.getNodes(
@@ -239,7 +242,7 @@ if not append:
 else:
     eqs = desc.io.load(eq_name + "_all_equilibria.h5")
     eq = eqs[-1].copy()
-# eq.pressure = desc_pressure
+eq.pressure = desc_pressure
 
 eq_init = eq.copy()
 
@@ -281,8 +284,9 @@ itg_builder = make_itg_builder(config["Stellarator"], eq_init, rho_upper)
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
 )
-Sns = [1.1, 1.1]
-Spis = [350.0, 400.0]
+st.run()
+# Sns = [1.1, 0.9]
+# Spis = [350.0, 400.0]
 
 # if not append:
 #     st.run()
@@ -310,18 +314,18 @@ Spis = [350.0, 400.0]
 #         )
 #         st.run()
 
-st_config = make_config(Spis[-1], Sns[-1])
-config = {
-    "Stellarator": st_config,
-    "Solver": solver_config,
-}
-config = normalized(config)
-st = StellaratorTransport(
-    config,
-    yancc_wrapper=yancc_wrapper,
-    itg=itg_at(itg_builder, eq_init.params_dict),
-)
-st.run()
+# st_config = make_config()
+# config = {
+#     "Stellarator": st_config,
+#     "Solver": solver_config,
+# }
+# config = normalized(config)
+# st = StellaratorTransport(
+#     config,
+#     yancc_wrapper=yancc_wrapper,
+#     itg=itg_at(itg_builder, eq_init.params_dict),
+# )
+# st.run()
 
 
 #
@@ -437,7 +441,7 @@ config = normalized(
 # eq = eq2.copy()
 # #
 # # %%
-
+#
 
 manta_objective = make_objective(
     config, yancc_res=yancc_res, normalization=normalization
@@ -531,7 +535,10 @@ def pressure_constraint_fun(params):
 pi_edge = (
     st_config["EdgeTemperature"] * st_config["EdgeDensity"] * 1e20 * 1000 * 1.6e-19
 )
-pressure_constraint_target = jnp.array([0.0, pi_edge])
+if rho_upper == 1.0:
+    pressure_constraint_target = jnp.array([0.0, pi_edge])
+else:
+    pressure_constraint_target = jnp.array([0.0, 0.0])
 
 
 # Mirror ratio, manually computed from "|B|"
@@ -561,11 +568,11 @@ obj_mirror_ratio = ObjectiveFromUser(
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 1e-5)
 
 # pressure_error_weight = jnp.full(yancc_desc_grid.num_rho, 2e-6)
-stored_energy_weight = 10.0
+stored_energy_weight = 20.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 20
+max_it = 10
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -639,17 +646,17 @@ eq, info_out = eq.optimize(
     ftol=1e-4,  # stopping tolerance on the function value
     xtol=1e-5,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
-    options={
-        "max_trust_radius": 1.0,
-        # "initial_trust_radius": 0.1,
-        # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
-        #     # "solve_options": {
-        #     #     "ftol": 5e-3,
-        #     #     "xtol": 1e-6,
-        #     #     "gtol": 1e-6,
-        #     #     "verbose": 3,
-        # },  # for equilibrium subproblem
-    },
+    # options={
+    #     "max_trust_radius": 1.0,
+    #     # "initial_trust_radius": 0.1,
+    #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
+    #     #     # "solve_options": {
+    #     #     #     "ftol": 5e-3,
+    #     #     #     "xtol": 1e-6,
+    #     #     #     "gtol": 1e-6,
+    #     #     #     "verbose": 3,
+    #     # },  # for equilibrium subproblem
+    # },
     verbose=3,
     copy=True,
 )
