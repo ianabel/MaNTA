@@ -5,8 +5,8 @@
 physics: the same physical problem written in another set of them, by
 `config.rescale_config`, must reach the same steady state once unnormalised.
 That is what this checks. It solves one physical problem under several
-normalisations and compares density, temperatures and Er in SI units against
-the default normalisation's solution.
+normalisations and compares density, temperatures, Er and the bootstrap
+current in SI units against the default normalisation's solution.
 
 The drift-kinetic solve is replaced by `dke_sol.physical_test_flux`, a
 diffusive mock written in SI units that goes through the same normalisation
@@ -195,11 +195,25 @@ def worker(args):
                 er = np.asarray(nc.variables["Er"][-1, :])
                 er_x = np.asarray(nc.variables["x"][:])
             er = np.interp(points, er_x, er)
+        # the bootstrap current, through the runner; checked against the aux
+        # the netCDF output carries, a top-level variable like an algebraic Er
+        jbs = np.asarray(st.getBootstrapCurrent(points))
+        with Dataset(solver["OutputFilename"] + ".nc") as nc:
+            jbs_nc = np.asarray(nc.variables["BootstrapCurrent"][-1, :])
+            jbs_x = np.asarray(nc.variables["x"][:])
+        # at the file's own points: interpolating it onto the nodes instead
+        # costs 2.5e-4 here, which is the interpolation and not the runner
+        jbs_nc = jbs_nc * c.BootstrapCurrentNormalization()
+        jbs_at_nc = np.asarray(st.getBootstrapCurrent(jbs_x))
+        gap = np.max(np.abs(jbs_at_nc - jbs_nc)) / np.max(np.abs(jbs_nc))
+        print(f"getBootstrapCurrent against the netCDF output: {gap:.2e}")
+        assert gap < 1e-6, f"getBootstrapCurrent disagrees with the output by {gap}"
         out.update(
             n=n * c.n0,
             Ti=pi / n * c.T0eV,
             Te=pe / n * c.T0eV,
             Er=er * c.T0eV,
+            Jbs=jbs,
         )
     else:
         from stellarator_state import StellaratorState
@@ -243,7 +257,7 @@ def main(args):
     if base is None:
         sys.exit(f"the default normalisation failed; logs in {scratch}")
 
-    quantities = [q for q in ("n", "Ti", "Te", "Er") if q in base]
+    quantities = [q for q in ("n", "Ti", "Te", "Er", "Jbs") if q in base]
     print(f"\nmax |X - X_default| / max |X_default|, SI units ({len(base['x'])} nodes)")
     print(f"{'case':8s} " + " ".join(f"{q:>10s}" for q in quantities) + "  verdict")
     ok = bool(base["converged"])

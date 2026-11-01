@@ -163,6 +163,34 @@ def test_the_aux_constraint_is_satisfied_by_the_solution(tmp_path):
     assert err < 5e-4, f"max |u - reference| = {err}"
 
 
+def test_get_auxiliary_reads_a_equal_to_u_squared_at_the_nodes(tmp_path):
+    """The direct check the test above could not make: a = u^2 is enforced at
+    the nodes, so there getAuxiliary must return getSolution squared. Between
+    nodes each is its own degree-k interpolant and the two differ by the
+    interpolation error, which is why points=None and not XS."""
+    runner = MaNTA.Runner(AuxDiffusion())
+    runner.configure(aux_config(tmp_path))
+    runner.run(5.0)
+
+    u = np.asarray(runner.getSolution(0, None))
+    a = np.asarray(runner.getAuxiliary(0))
+    assert a.shape == u.shape, f"{a.shape} against {u.shape}"
+    # and not trivially: the steady u peaks near 0.13
+    assert np.max(a) > 1e-3, f"a looks unset: max {np.max(a)}"
+    assert np.allclose(a, u**2, rtol=1e-6, atol=1e-10), np.max(np.abs(a - u**2))
+
+
+def test_get_auxiliary_rejects_an_aux_index_the_system_does_not_have(tmp_path):
+    runner = MaNTA.Runner(AuxDiffusion())
+    runner.configure(aux_config(tmp_path))
+    runner.run(0.1)
+
+    with pytest.raises(IndexError, match="Auxiliary variable 1"):
+        runner.getAuxiliary(1)
+    with pytest.raises(IndexError):
+        runner.getAuxiliary(0, [1.5])
+
+
 def test_aux_hooks_are_all_reached(tmp_path):
     """Guard against the aux path being skipped rather than working.
 

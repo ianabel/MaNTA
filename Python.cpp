@@ -781,6 +781,10 @@ PYBIND11_MODULE(_manta, m) {
            "solve_adjoint() at this state.")
       .def("getSolution", &PyRunner::getSolution)
       .def("getDerivative", &PyRunner::getDerivative)
+      .def("getAuxiliary", &PyRunner::getAuxiliary, py::arg("aux"),
+           py::arg("points") = std::nullopt,
+           "Auxiliary variable `aux` after a run, at `points` or, if None, "
+           "at the nodes getSolution samples.")
       .def("getPostprocessedSolution", &PyRunner::getPostprocessedSolution)
       .def("getCellBoundaries", &PyRunner::getCellBoundaries)
       .def("get_address", [](const PyRunner &runner) // needed for xla interface

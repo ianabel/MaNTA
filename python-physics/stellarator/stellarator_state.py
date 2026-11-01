@@ -36,6 +36,15 @@ class Channel(enum.IntEnum):
     Er = 3
 
 
+class AuxChannel(enum.IntEnum):
+    """The aux variable order under ErModel = "Algebraic". Under "Diffusive"
+    Er is a variable instead and the bootstrap current is the only aux, at 0;
+    `StellaratorState.bootstrap_aux_index` says which."""
+
+    Er = 0
+    BootstrapCurrent = 1
+
+
 def StellaratorDecorator(func):
     def wrapper(self, state, x, t, field, vp, vpp, params):
         _state = StellaratorState.from_state(state, x, vp, vpp, params)
@@ -225,7 +234,20 @@ class StellaratorState(eqx.Module):
         variables."""
         if params.config.diffusiveEr:
             return StellaratorState.Vp_u_to_u(Channel.Er, state, x, vp, vpp)
-        return state.Aux
+        # sliced rather than indexed: Er has always reached yancc as a
+        # one-entry vector
+        return state.Aux[AuxChannel.Er : AuxChannel.Er + 1]
+
+    @staticmethod
+    def bootstrap_aux_index(params: StellaratorParams):
+        """Where the bootstrap current sits among the aux variables: after
+        Er when Er is one, first when Er is transported instead."""
+        return 0 if params.config.diffusiveEr else AuxChannel.BootstrapCurrent
+
+    @staticmethod
+    def bootstrap_of(state: State, params: StellaratorParams):
+        """The bootstrap current aux, <J||B> in BootstrapCurrentNormalization."""
+        return state.Aux[StellaratorState.bootstrap_aux_index(params)]
 
     @staticmethod
     def Vp_u_to_u(index, s, x, vp, vpp):
