@@ -239,7 +239,8 @@ class DiffusiveErFlux(eqx.Module):
     0.32 to 0.017 in the interior as eps went from 1 to 1e-4. So a small
     ErInertia is what lets a small ErDiffusion take effect.
 
-    The current comes back in the first auxiliary slot as the Er row's
+    The current comes back in the first auxiliary slot, already multiplied by
+    V', as the Er row's
     *source*, so the hooks move it from aux to sources; the bootstrap row
     behind it stays an aux. It stays a return of this function,
     rather than going into `compute_sources`, so that the drift-kinetic solve
@@ -270,8 +271,9 @@ class DiffusiveErFlux(eqx.Module):
         c = params.config
         dErdrho = StellaratorState.Vp_up_to_up(Channel.Er, state, x, vp, vpp)
         er_flux = vp * c.ErDiffusion / c.ErInertia * dErdrho
-        # J is one entry per point whatever shape the solve returned it in
-        er_source = -vp / c.ErInertia * jnp.reshape(aux[0], jnp.shape(er_flux))
+        # the flux's first aux is already V' J (dke_sol._normalized_fluxes), so
+        # no V' here; one entry per point whatever shape the solve returned it in
+        er_source = -1.0 / c.ErInertia * jnp.reshape(aux[0], jnp.shape(er_flux))
         return list(fluxes) + [er_flux], [er_source] + list(aux[1:])
 
 
