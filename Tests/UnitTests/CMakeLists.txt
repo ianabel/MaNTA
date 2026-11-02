@@ -50,6 +50,7 @@ set(MANTA_TEST_SOURCES
   FieldAdjointTests.cpp
   FieldDoFLayoutTests.cpp
   FieldJacobianTests.cpp
+  EquilibriumTests.cpp
   FieldModelSpecTests.cpp
   FieldRegistryTests.cpp
   GeometryDerivativeTests.cpp

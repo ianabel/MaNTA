@@ -356,6 +356,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
+    READ(FieldCoupling, std::string);
     READ(FieldSolve, std::string);
     READ(FieldSolveTolerance, double);
     READ(FieldSolveMaxSweeps, int);
@@ -393,6 +394,10 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
+
+    if (c.FieldCoupling != "coupled" && c.FieldCoupling != "consistent")
+        throw std::invalid_argument("FieldCoupling must be \"coupled\" or \"consistent\"; got \"" +
+                                    c.FieldCoupling + "\".");
 
     // The alias machinery warns that the *name* changed. It cannot know that the
     // *mesh* changed too, and it did: High_Grid_Boundary spaced its boundary-layer
@@ -1121,8 +1126,6 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
     else if (config.FieldSolve == "exact")
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
-    else if (config.FieldSolve == "consistent") // EXPERIMENT
-        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Consistent);
     else
         throw std::invalid_argument(
             "FieldSolve must be \"iterative\" or \"exact\"; got \"" + config.FieldSolve + "\".");

@@ -323,6 +323,13 @@ const std::vector<Entry> &table()
         // accepted and ignored.
         {"FieldModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
          "Name of a registered magnetic-field model to couple to; absent means no coupling."},
+        // How runManta attaches the FieldModel, so a ProblemSelection key for the
+        // same reason: a dict has no FieldModel for it to apply to.
+        {"FieldCoupling", {}, Type::String, Category::ProblemSelection, false, false,
+         std::string{"coupled"},
+         "How the FieldModel is coupled: coupled (its unknowns join the DAE and its "
+         "derivatives the Jacobian) or consistent (solved to convergence at each transport "
+         "state, as a black box, with no Jacobian coupling and no adjoint)."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,
          std::vector<std::string>{},
          "Shared objects to dlopen for their physics-case registrations."},

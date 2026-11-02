@@ -66,5 +66,10 @@ side at every resolution measured, 12x faster than exact at `nField = 132`. See
   * **`nScalars > 0` alongside a field model**, refused today for a reason
     recorded at `setFieldModel`.
   * **A Python or JAX field model.** `FieldModel` has no pybind11 class.
+    `EquilibriumModel` -- a field as a black box, `FieldCoupling = "consistent"`
+    -- is the natural first one, a function from the transport state to the
+    geometry; see `docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md`,
+    whose tiers -1 and 0 are built and whose tiers 1 and 2's automatic
+    selection are next.
   * A structural gap in the coupled adjoint: a field residual that depends on
     an adjoint parameter, in `TODO`.

@@ -48,6 +48,10 @@
 // as long as its destructor is instantiated where the type is complete, which
 // is ~SystemSolver in SystemSolver.cpp.
 class FieldModel;
+// Likewise, for symmetry with FieldModel rather than for toml11: a tier-0 model
+// and the opaque answer the solver caches from it.
+class EquilibriumModel;
+class Equilibrium;
 
 class SystemSolver
 {
@@ -1269,6 +1273,28 @@ class SystemSolver
         Index getFieldDOF() const { return nField; };
         Index getGeometrySlots() const { return nGeom; };
 
+        // Couple this solver to a magnetic equilibrium evaluated as a black box
+        // (tier 0, FieldCoupling = "consistent"): its geometry reaches the
+        // physics through State::geom exactly as a field model's does, but it
+        // adds no unknowns, no rows and no Jacobian coupling. The solver keeps
+        // the last equilibrium as a cache keyed on the transport state, solves
+        // a new one only when that state changes, and warm-starts it from the
+        // last; see equilibriumAt.
+        //
+        // The same refusals as setFieldModel, and one of the two at most: a
+        // solver has one source of geometry. Before initialize(), and nullptr
+        // detaches.
+        void setEquilibriumModel(std::shared_ptr<EquilibriumModel> model);
+        EquilibriumModel *getEquilibriumModel() const { return equilibriumModel.get(); };
+
+        // Equilibrium solves this run: one per distinct transport input.
+        long getEquilibriumSolves() const { return equilibriumSolves; };
+
+        // The geometry slots at x for the state Y, from whichever of the field
+        // model and the equilibrium is attached; empty with neither. What the
+        // case's diagnostics and the netCDF field group read.
+        void geometryAt(VectorRef out, DGSoln const &Y, Position x, Time t);
+
         // How the coupled Jacobian is solved once a field model is attached.
         // Iterative is block Gauss-Seidel and is the default; Exact is the
         // Schur complement onto psi, and is a verification tool rather than a
@@ -1283,9 +1309,6 @@ class SystemSolver
         {
             Iterative,
             Exact,
-            // EXPERIMENT: the field solved to consistency inside every residual,
-            // and left out of the Jacobian (A1 = A2 = 0, B = I).
-            Consistent,
         };
 
         void setFieldSolveMode(FieldSolveMode m) { fieldSolveMode = m; };
@@ -1349,8 +1372,9 @@ class SystemSolver
         // condition, so this is meaningful between the two phases as well.
         DGSoln const &getSolution() const { return yJac; };
 
-        // Fill the geometry rows of `states` from the field model, at the points
-        // those states were sampled on. A no-op with no model attached.
+        // Fill the geometry rows of `states` from the field model or the
+        // equilibrium, at the points those states were sampled on. A no-op with
+        // neither attached.
         //
         // Called once per residual and once per Jacobian update, never once per
         // variable: geometry does not depend on which equation is being
@@ -1803,12 +1827,6 @@ class SystemSolver
         long nResidualEvals = 0;
         long nJacBuilds = 0;
         long nJacSolves = 0;
-        // EXPERIMENT: comparison counters, zeroed per run.
-        long nTransportSolves = 0;
-        long nFieldConsistencySolves = 0, nFieldConsistencyIterations = 0;
-        mutable long physicsValuePoints = 0, physicsDerivativePoints = 0, geometryDerivativePoints = 0;
-        // EXPERIMENT: psi*(p) for the Consistent mode, solved with the transport state fixed.
-        Vector consistentField(DGSoln const &Y, Time t);
         long nAdjointSolves = 0;   // solveAdjointState calls, one objective each
         bool steadyDiagnostics = false;
         bool steadyStepDiagnostics = false;
@@ -2365,6 +2383,32 @@ class SystemSolver
         // Held by shared_ptr because the adjoint solve and the Python layer both
         // need to reach it and neither owns the solver.
         std::shared_ptr<FieldModel> fieldModel = nullptr;
+
+        // Tier 0: null unless setEquilibriumModel attached one, and never set
+        // together with fieldModel.
+        std::shared_ptr<EquilibriumModel> equilibriumModel = nullptr;
+
+        // The equilibrium for the transport state last asked about. `input` is
+        // that state's cell DOF -- sigma, q, u and aux, the prefix of the
+        // solution vector, which is everything the model is handed -- and `t`
+        // its time, so a repeat is recognised byte for byte. `eq` is also the
+        // next Solve's warm start. Cleared in initialize()'s unconditional part.
+        struct EquilibriumCache
+        {
+            std::vector<double> input;
+            Time t = 0.0;
+            std::shared_ptr<Equilibrium const> eq;
+        } equilibriumCache;
+        long equilibriumSolves = 0;
+
+        // The cached equilibrium if Y and t are the ones it was solved for, and
+        // a new one -- solved, cached and returned -- if not.
+        Equilibrium const &equilibriumAt(DGSoln const &Y, Time t);
+
+        // The refusals setFieldModel and setEquilibriumModel share: scalars,
+        // a case that reads no geometry, an output group colliding with a name
+        // the file already holds, and a second source of geometry.
+        void checkGeometrySource(std::string const &modelName, bool otherSourceAttached) const;
 
         // Iterative to match the FieldSolve default, so there is one default
         // rather than two that can drift. Read by solveJacEq and by

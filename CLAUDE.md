@@ -1333,6 +1333,27 @@ moves the answer by 3.2e-4. And `psi_round_trips_through_a_restart` uses a
 *values*, so an algebraic `psi` would be recomputed from the restored transport
 state and the case would pass without ever reading `psi` off disk.
 
+**A field can also be a black box: `EquilibriumModel`, `FieldCoupling =
+"consistent"`** (tier 0 of `docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md`,
+which has the as-built record and the measurements). It adds no unknowns: the
+solver holds the last `Equilibrium` as a cache keyed byte for byte on the
+solution vector's cell prefix and the time (`equilibriumAt`), solves a new one
+only when that changes, warm-starts it from the last, and fills `State::geom`
+from it in `evaluateGeometry`. `FieldModelEquilibrium` runs any `FieldModel`
+that way -- Newton on its rows alone -- and is what runManta attaches for
+`"consistent"`. Four things are load-bearing. **The cache is dropped in
+`initialize()`'s unconditional part**, the `RF_cellwise` trap again: deleting
+that moves a reused theta-pinch run by 1.6e-8, and
+`a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit` is the
+guard (the manufactured field's linear row lands on the same bits from any warm
+start, so `equilibrium_tests` alone cannot see it). **`IDACalcIC` runs with its
+line search off** at tier 0: the Jacobian carries no coupling, so its Newton
+direction need not descend `||F||`, and on the theta pinch at T = 0.9 the line
+search fails where full steps converge. **No adjoint** -- refused in
+`initialize()` and, for the on-demand paths, in `assembleAdjointOperator`. And
+**one source of geometry**: `setFieldModel` and `setEquilibriumModel` share
+`checkGeometrySource`, which refuses the second.
+
 **The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
 read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
 physics). Three things about it are load-bearing. Its pressure crosses as the

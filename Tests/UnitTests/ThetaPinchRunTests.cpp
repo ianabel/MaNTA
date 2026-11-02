@@ -6,6 +6,7 @@
 #include "CapturedOutput.hpp"
 #include "../../PhysicsCases/AutodiffAdjointProblem.hpp"
 #include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
+#include "../../FieldModelEquilibrium.hpp"
 #include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
 #include "../../SystemSolver.hpp"
 #include "../../Types.hpp"
@@ -48,6 +49,9 @@ struct Options
     Index k = 3;
     Index intervalsPerCell = 2;
     bool iterative = true;
+    // Tier 0: the same model through FieldModelEquilibrium, FieldCoupling =
+    // "consistent".
+    bool consistent = false;
     bool writeOutput = false;
     double cadence = 0.25;
     double t0 = 0.0;
@@ -84,9 +88,14 @@ Run makeRun(Options const &o, std::string const &stem,
     sys.setTolerances({1e-8}, 1e-6);
     sys.setWriteOutput(o.writeOutput);
     sys.setWriteDatFile(false);
-    sys.setFieldModel(r.field);
-    sys.setFieldSolveMode(o.iterative ? SystemSolver::FieldSolveMode::Iterative
-                                      : SystemSolver::FieldSolveMode::Exact);
+    if (o.consistent)
+        sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(r.field));
+    else
+    {
+        sys.setFieldModel(r.field);
+        sys.setFieldSolveMode(o.iterative ? SystemSolver::FieldSolveMode::Iterative
+                                          : SystemSolver::FieldSolveMode::Exact);
+    }
     return r;
 }
 
@@ -205,6 +214,117 @@ BOOST_AUTO_TEST_CASE(exact_and_iterative_field_solves_give_the_same_run)
                                  << "; max difference " << (a - b).cwiseAbs().maxCoeff() << " against max "
                                  << a.cwiseAbs().maxCoeff());
     BOOST_TEST((a - b).cwiseAbs().maxCoeff() < 1e-9 * a.cwiseAbs().maxCoeff());
+}
+
+/// N and B at five interior points of the final state, from either coupling.
+Vector sampleWithGeometry(SystemSolver &sys)
+{
+    Vector out(10), g(4);
+    for (Index i = 0; i < 5; ++i)
+    {
+        const double x = 0.1 + 0.2 * i;
+        out(i) = sys.getSolution().u(0)(x);
+        g.setZero();
+        sys.geometryAt(g, sys.getSolution(), x, 0.5);
+        out(5 + i) = g(ThetaPinchEquilibrium::Bfield);
+    }
+    return out;
+}
+
+BOOST_AUTO_TEST_CASE(a_tier_zero_theta_pinch_reaches_the_coupled_answer)
+{
+    // The same DAE, solved without differentiating through the field: Newton
+    // converges more slowly and IDA takes more steps, but each step is held to
+    // the same tolerances, so the two runs agree to the integration error.
+    auto coupled = makeRun({}, "theta_pinch_tier2");
+    auto tier0 = makeRun({.consistent = true}, "theta_pinch_tier0");
+    {
+        CapturedOutput quiet;
+        coupled.sys->runSolver(0.5);
+        tier0.sys->runSolver(0.5);
+    }
+    const Vector a = sampleWithGeometry(*coupled.sys), b = sampleWithGeometry(*tier0.sys);
+    const double dN = (a.head(5) - b.head(5)).cwiseAbs().maxCoeff() / a.head(5).cwiseAbs().maxCoeff();
+    const double dB = (a.tail(5) - b.tail(5)).cwiseAbs().maxCoeff();
+    BOOST_TEST_MESSAGE("tier 0 against coupled at t = 0.5: N " << dN << " relative, B " << dB
+                                                                << "; equilibrium solves "
+                                                                << tier0.sys->getEquilibriumSolves());
+    // Measured 8.8e-8 and 6.6e-9, at rtol 1e-6 / atol 1e-8.
+    BOOST_TEST(dN < 1e-6);
+    BOOST_TEST(dB < 1e-7);
+    // Not vacuous: the field has left the vacuum, B = 1.
+    BOOST_TEST((a.tail(5).array() - 1.0).abs().maxCoeff() > 1e-2);
+    BOOST_TEST(tier0.sys->getFieldDOF() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(a_tier_zero_steady_solve_reaches_the_coupled_answer)
+{
+    for (auto mode : {SystemSolver::SteadyMode::Newton, SystemSolver::SteadyMode::PseudoTransient})
+    {
+        auto coupled = makeRun({}, "theta_pinch_tier2_ss");
+        auto tier0 = makeRun({.consistent = true}, "theta_pinch_tier0_ss");
+        for (Run *r : {&coupled, &tier0})
+        {
+            r->sys->setSteadyStateTolerance(1e-8);
+            r->sys->setSteadyMode(mode);
+            CapturedOutput quiet;
+            r->sys->runSolver(0.5);
+        }
+        const Vector a = sampleWithGeometry(*coupled.sys), b = sampleWithGeometry(*tier0.sys);
+        const double dN = (a.head(5) - b.head(5)).cwiseAbs().maxCoeff() / a.head(5).cwiseAbs().maxCoeff();
+        BOOST_TEST_MESSAGE("steady tier 0 against coupled: N " << dN << " relative");
+        // Measured 3.6e-10 under Newton and 6.4e-13 under PseudoTransient.
+        BOOST_TEST(dN < 1e-8);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)
+{
+    // The adapter's Newton starts from the warm psi, and the theta pinch's rows
+    // are nonlinear, so a warm start leaking from the last run moves the answer:
+    // by 1.6e-8, measured with initialize()'s cache reset deleted.
+    auto fresh = makeRun({.consistent = true}, "theta_pinch_tier0_fresh");
+    auto reused = makeRun({.consistent = true}, "theta_pinch_tier0_reused");
+    {
+        CapturedOutput quiet;
+        fresh.sys->runSolver(0.5);
+        reused.sys->runSolver(0.5);
+        reused.sys->runSolver(0.5);
+    }
+    const Vector want = sampleWithGeometry(*fresh.sys), got = sampleWithGeometry(*reused.sys);
+    BOOST_TEST((want - got).cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
+}
+
+BOOST_AUTO_TEST_CASE(a_tier_zero_run_writes_its_geometry_and_no_unknowns)
+{
+    // The field group carries the geometry slots per output slice, from the
+    // cached equilibrium, and nothing for psi, which is not in the state.
+    const std::string stem = "theta_pinch_tier0_output";
+    {
+        auto run = makeRun({.consistent = true, .writeOutput = true}, stem);
+        CapturedOutput quiet;
+        run.sys->runSolver(0.5);
+    }
+    {
+        netCDF::NcFile file(stem + ".nc", netCDF::NcFile::FileMode::read);
+        netCDF::NcGroup group = file.getGroup("ThetaPinch");
+        BOOST_REQUIRE(!group.isNull());
+        for (char const *slot : {"Vprime", "dVprime_dx", "gradx2", "B"})
+            BOOST_TEST(!group.getVar(slot).isNull(), slot);
+        BOOST_TEST(group.getVar("C").isNull());
+
+        netCDF::NcVar B = group.getVar("B");
+        const size_t nt = B.getDim(0).getSize(), nx = B.getDim(1).getSize();
+        std::vector<double> b(nx);
+        B.getVar({nt - 1, 0}, {1, nx}, b.data());
+        BOOST_TEST(*std::min_element(b.begin(), b.end()) < 0.99);
+
+        int nField = -1;
+        netCDF::NcFile restart(stem + ".restart.nc", netCDF::NcFile::FileMode::read);
+        restart.getGroup("RestartData").getVar("nField").getVar(&nField);
+        BOOST_TEST(nField == 0);
+    }
+    removeOutput(stem);
 }
 
 BOOST_AUTO_TEST_CASE(a_restart_onto_another_degree_carries_psi)

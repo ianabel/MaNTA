@@ -134,6 +134,9 @@ struct SolverConfig
     // other three are plain solver options and go through applySolverConfig
     // like everything else.
     std::string              FieldModel;
+    // "coupled" or "consistent": also applied by runManta, which wraps the model
+    // in a FieldModelEquilibrium for the second.
+    std::string              FieldCoupling;
     std::string              FieldSolve;
     double                   FieldSolveTolerance;
     int                      FieldSolveMaxSweeps;

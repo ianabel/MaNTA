@@ -778,11 +778,12 @@ public:
 
   std::map<int, std::string> subVars = {{0, "u"}, {1, "q"}, {2, "sigma"}, {3, "S"}};
 
-  /// The geometry at x, from a field block psi. Set by the solver that runs this
-  /// case -- in initialize(), to the attached field model's Geometry, or cleared
-  /// when there is none -- so a case can fill State::geom outside the residual
-  /// path, where the solver fills it. Diagnostics are the one such place.
-  using GeometryProvider = std::function<void(VectorRef out, Vector const &psi, Position x, Time t)>;
+  /// The geometry at x for the state y. Set by the solver that runs this case --
+  /// in initialize(), to its own geometryAt when a field or equilibrium model is
+  /// attached, or cleared when there is none -- so a case can fill State::geom
+  /// outside the residual path, where the solver fills it. Diagnostics are the
+  /// one such place.
+  using GeometryProvider = std::function<void(VectorRef out, DGSoln const &y, Position x, Time t)>;
   void setGeometryProvider(Index nGeometry, GeometryProvider provider)
   {
     nGeometryProvided = provider ? nGeometry : 0;
@@ -790,14 +791,15 @@ public:
   }
 
 protected:
-  /// Fill s.geom() at x from y's field block, as the residual would. Leaves it
-  /// empty when no field model is attached, which is what the residual does too.
+  /// Fill s.geom() at x for the state y, as the residual would. Leaves it empty
+  /// when no field or equilibrium model is attached, which is what the residual
+  /// does too.
   void fillGeometry(State &s, DGSoln const &y, Position x, Time t) const
   {
     if (!geometryProvider)
       return;
     Vector g = Vector::Zero(nGeometryProvided);
-    geometryProvider(g, Vector(y.getField()), x, t);
+    geometryProvider(g, y, x, t);
     s.geom() = g;
   }
 

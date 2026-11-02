@@ -503,6 +503,72 @@ One limit is structural rather than untested: **a field model cannot depend on
 an adjoint parameter**, so :math:`\partial R/\partial p` is zero because there
 is no hook a model could fill. It is recorded in ``TODO``.
 
+.. _field-tier-0:
+
+A field model as a black box
+----------------------------
+
+``FieldCoupling = "consistent"`` runs a model without differentiating through
+it. What the transport needs from a field is one map, from the transport state
+to the geometry at the physics nodes, and an equilibrium code driven as a black
+box can supply that and nothing more: it has no residual in MaNTA's form and no
+derivatives. Such a model derives from ``EquilibriumModel``
+(``EquilibriumModel.hpp``) and supplies two things:
+
+.. code-block:: cpp
+
+   std::unique_ptr<Equilibrium> Solve(GlobalState const &states,
+                                      std::vector<Position> const &points,
+                                      Vector const &weights, Time t,
+                                      Equilibrium const *warm);
+   void Geometry(MatrixRef g, Equilibrium const &e,
+                 std::vector<Position> const &points);
+
+``Equilibrium`` is the model's own, opaque to the solver: a spline, a set of
+Fourier coefficients, a handle on a file. ``Solve`` is handed the transport
+state at the basis nodes, exactly as a field model's residual is, and ``warm``
+is its own last answer in this run. ``Geometry`` then gives the slots at
+whichever points the physics is about to be evaluated at, columns of ``g``.
+
+The solver holds the answer as a **cache, not as unknowns**:
+
+* Nothing joins the solution vector. The layout, the error weights and IDA's
+  Newton norms are the uncoupled run's, and the restart file's ``nField`` is 0.
+* The cache is **keyed on the transport state, byte for byte**, and on the
+  time. A residual evaluated again at the same state -- KINSOL's merit
+  function, a Jacobian build at the last residual's state -- costs no ``Solve``;
+  any other state, however close, is a new one. The trace values are not part of
+  the key, since a model is never handed them.
+* The last equilibrium is the next ``Solve``'s warm start, and is **dropped at
+  the start of every run**, with ``resetForRun`` called, so a solver reused for
+  a second run starts from the same cold state as a fresh one.
+* The **Jacobian carries no coupling**: the transport derivatives are taken at
+  the geometry of the build's state, held fixed. Newton therefore converges
+  linearly in the coupling rather than quadratically, which costs IDA steps
+  and residual evaluations -- see the measurements below.
+* ``initialize()`` hands the model a thousandth of the run's ``rtol`` and
+  smallest ``atol`` through ``setTolerances``. An equilibrium converged no
+  tighter than its own looser tolerance puts that error into every residual,
+  where IDA reads it as local error; a model that cannot meet them returns
+  ``false`` and is warned about, by name.
+* The geometry slots are written to the model's output group at every slice,
+  from the cached equilibrium at the slice's state.
+* **No adjoint** is solved through it, and a run asking for one -- or for the
+  ``"Objective"`` steady test, which needs one -- is refused. A gradient with
+  the field frozen would be wrong by the field's share: a third of the
+  closed-form gradient on the theta pinch.
+
+**Every field model can run this way**, through ``FieldModelEquilibrium``,
+which is what ``FieldCoupling = "consistent"`` attaches: its ``Solve`` is
+Newton on the model's own rows with the transport state fixed, through the
+model's ``updateFieldJacobian`` and ``solveB`` at :math:`\alpha = 0`, warm-started
+from the last :math:`\psi` and iterated to round-off. A model with a
+differential DOF is refused, since its field is not an instantaneous function
+of the transport state. So the theta pinch runs either way, and the two agree:
+on six cells at :math:`k = 3`, to :math:`8.8\times10^{-8}` in :math:`N` after a
+transient at ``rtol`` :math:`10^{-6}`, and to :math:`4\times10^{-10}` at a steady
+state.
+
 Current restrictions
 --------------------
 

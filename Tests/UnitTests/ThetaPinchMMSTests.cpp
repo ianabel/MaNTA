@@ -32,7 +32,6 @@
 #include <ida/ida.h>
 #include <nvector/nvector_serial.h>
 #include <algorithm>
-#include <chrono>
 #include <format>
 #include <memory>
 #include <vector>
@@ -197,10 +196,6 @@ struct Errors
 {
     double N, Vp, C;
     long steps = 0, solves = 0, fallbacks = 0;
-    // EXPERIMENT
-    long newton = 0, convFails = 0, resEvals = 0, jacBuilds = 0, jacSolves = 0, transportSolves = 0,
-         fieldIters = 0, sweeps = 0;
-    double seconds = 0.0;
 };
 
 constexpr double tFinal = 0.25;
@@ -230,22 +225,11 @@ Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
     sys.setWriteOutput(false);
     sys.setWriteDatFile(false);
     long steps = 0;
-    Errors x{}; // EXPERIMENT
     {
         CapturedOutput quiet;
-        const auto t0 = std::chrono::steady_clock::now();
         sys.initialize();
         sys.integrate(tFinal);
-        x.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         IDAGetNumSteps(sys.IDA_mem, &steps);
-        IDAGetNumNonlinSolvIters(sys.IDA_mem, &x.newton);
-        IDAGetNumNonlinSolvConvFails(sys.IDA_mem, &x.convFails);
-        IDAGetNumResEvals(sys.IDA_mem, &x.resEvals);
-        IDAGetNumLinSolvSetups(sys.IDA_mem, &x.jacBuilds);
-        x.jacSolves = sys.nJacSolves;
-        x.transportSolves = sys.nTransportSolves;
-        x.fieldIters = sys.nFieldConsistencyIterations;
-        x.sweeps = sys.getFieldSweepStats().iterations;
         sys.destroySundials();
     }
 
@@ -262,13 +246,7 @@ Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
         },
         [&](double x, double t) { return exact.Vp(x, t); }, grid, tFinal);
     const auto stats = sys.getFieldSweepStats();
-    x.N = Nerr;
-    x.Vp = Vperr;
-    x.C = std::abs(psi(psi.size() - 1) - exact.C(tFinal));
-    x.steps = steps;
-    x.solves = stats.solves;
-    x.fallbacks = stats.fallbacks;
-    return x;
+    return {Nerr, Vperr, std::abs(psi(psi.size() - 1) - exact.C(tFinal)), steps, stats.solves, stats.fallbacks};
 }
 
 std::string table(std::vector<Index> const &res, std::vector<Errors> const &e, const char *name)
@@ -434,30 +412,6 @@ BOOST_AUTO_TEST_CASE(intervals_per_cell_refine_the_field_at_fourth_order)
     BOOST_TEST(e[1].fallbacks == 0);
     BOOST_TEST(mms::localOrder(1, 2, e[0].Vp, e[1].Vp) >= 3.8);
     BOOST_TEST(mms::localOrder(1, 2, e[0].N, e[1].N) >= 3.8);
-}
-
-// EXPERIMENT: the coupled Jacobian against FieldSolve = "consistent" (the
-// field solved to consistency in every residual and left out of the Jacobian),
-// counted in steps, Newton iterations, transport solves and field Newton
-// iterations. Disabled, because the consistent mode stalls IDA at order one on
-// three of these four cases at 1e-9 / 1e-11 and runs for most of an hour; run
-// it by name. It is the reference the tier-0 equilibrium mode
-// (docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md) is to be
-// compared against, and goes when that mode replaces this one.
-BOOST_AUTO_TEST_CASE(compare_field_solves, *boost::unit_test::disabled())
-{
-    using M = SystemSolver::FieldSolveMode;
-    for (auto [k, n] : {std::pair<Index, Index>{3, 8}, {2, 32}, {4, 8}, {3, 32}})
-        for (auto [mode, name] : {std::pair<M, const char *>{M::Exact, "exact"}, {M::Iterative, "iterative"},
-                                  {M::Consistent, "consistent"}})
-        {
-            const Errors e = solveOnce(k, n, 1, mode);
-            BOOST_TEST_MESSAGE(std::format("k={} n={} {:10s} steps {:5} newton {:5} convfail {:4} res {:5} jac {:4} "
-                                           "jacsolves {:5} transport {:6} sweeps {:6} fieldNewton {:6} N {:.6e} "
-                                           "{:.2f} s",
-                                           k, n, name, e.steps, e.newton, e.convFails, e.resEvals, e.jacBuilds,
-                                           e.jacSolves, e.transportSolves, e.sweeps, e.fieldIters, e.N, e.seconds));
-        }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

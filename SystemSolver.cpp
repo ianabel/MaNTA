@@ -14,6 +14,7 @@
 #include <print>
 
 #include "FieldModel.hpp"
+#include "EquilibriumModel.hpp"
 #include "State.hpp"
 #include "Types.hpp"
 #include "gridStructures.hpp"
@@ -125,16 +126,18 @@ void SystemSolver::allocateJacobianStorage()
     dydtJac.Map(dydtJacMem);
 }
 
-void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
+// See the declaration. Everything here is knowable before anything is
+// allocated, so it is all refused before setFieldModel or setEquilibriumModel
+// moves a thing.
+void SystemSolver::checkGeometrySource(std::string const &modelName, bool otherSourceAttached) const
 {
-    // Not after initialise: the five DGSoln members change shape below and three
-    // of them are reallocated, so anything already mapping them -- IDA's Y and
-    // dYdt above all -- would be reading a vector of the wrong length with
-    // nothing to say so.
-    if (initialised)
+    // One source of geometry. The two would both fill State::geom, and nothing
+    // could say which the physics was meant to read.
+    if (otherSourceAttached)
         throw std::logic_error(
-            "setFieldModel must be called before the solver is initialised: the field "
-            "unknowns are part of the solution vector, whose length is fixed by then.");
+            "'" + modelName + "' cannot be attached: this solver already has a source of "
+            "geometry. A field model and an equilibrium model are alternatives; detach the "
+            "other first.");
 
     // Not alongside global scalars yet, and the reason is a disagreement between
     // two branches rather than a missing feature. dSources_dScalars_Mat builds
@@ -147,9 +150,9 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     // caused it. Refused here, at the earliest point where the combination is
     // known, rather than filled: filling is three lines but there is no fixture
     // in the tree that would exercise either branch of it.
-    if (model && nScalars > 0)
+    if (nScalars > 0)
         throw std::logic_error(
-            "A field model cannot yet be attached to a system with global scalars: the "
+            "'" + modelName + "' cannot be attached: a field model cannot yet be coupled to a system with global scalars: the "
             "scalar coupling's non-superconvergent branch evaluates dSources_dScalars on "
             "states that carry no geometry.");
 
@@ -158,9 +161,9 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     // field could not reach the solution: the run would pay for every field
     // solve and change nothing. That is a configuration mistake, and it is
     // knowable here, before anything is allocated.
-    if (model && !problem->spec().readsGeometry)
+    if (!problem->spec().readsGeometry)
         throw std::logic_error(
-            "The field model '" + model->getSpec().name +
+            "The field model '" + modelName +
             "' cannot be attached: the transport system does not read geometry "
             "(SystemSpec::readsGeometry is false), so the field could not reach the "
             "solution.");
@@ -176,34 +179,48 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     // Groups and variables share one namespace in netCDF-4 -- both are HDF5
     // links in the same parent -- so the reserved variables are collisions too,
     // not just the Grid and RestartData groups.
-    if (model)
     {
         auto refuse = [&](std::string const &what)
         {
             throw std::logic_error(
-                "The field model's output group is named '" + model->getSpec().name +
+                "The field model's output group is named '" + modelName +
                 "', which is already " + what +
                 " in the netCDF output. Rename it through FieldModelSpec::name.");
         };
 
         for (char const *reserved : {"Grid", "RestartData", "x", "t", "nVariables"})
-            if (model->getSpec().name == reserved)
+            if (modelName == reserved)
                 refuse("written by the solver itself");
 
         for (Index i = 0; i < nVars; ++i)
-            if (model->getSpec().name == problem->getVariableName(i))
+            if (modelName == problem->getVariableName(i))
                 refuse("the group of transport variable " + std::to_string(i));
 
         for (Index i = 0; i < nAux; ++i)
-            if (model->getSpec().name == problem->getAuxVarName(i))
+            if (modelName == problem->getAuxVarName(i))
                 refuse("auxiliary variable " + std::to_string(i));
 
         // Unreachable while the refusal above stands, and here for the day it
         // lifts rather than as a live check.
         for (Index i = 0; i < nScalars; ++i)
-            if (model->getSpec().name == problem->getScalarName(i))
+            if (modelName == problem->getScalarName(i))
                 refuse("scalar " + std::to_string(i));
     }
+}
+
+void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
+{
+    // Not after initialise: the five DGSoln members change shape below and three
+    // of them are reallocated, so anything already mapping them -- IDA's Y and
+    // dYdt above all -- would be reading a vector of the wrong length with
+    // nothing to say so.
+    if (initialised)
+        throw std::logic_error(
+            "setFieldModel must be called before the solver is initialised: the field "
+            "unknowns are part of the solution vector, whose length is fixed by then.");
+
+    if (model)
+        checkGeometrySource(model->getSpec().name, equilibriumModel != nullptr);
 
     // Before nField moves: the count of vectors to destroy is the old one.
     freeFieldWorkVectors();
@@ -248,37 +265,59 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     }
 }
 
-// EXPERIMENT: Newton on the field rows alone, the transport state held fixed,
-// warm-started from Y's psi. Converged when the step is below 1e-13 relative.
-Vector SystemSolver::consistentField(DGSoln const &Y, Time t)
+void SystemSolver::setEquilibriumModel(std::shared_ptr<EquilibriumModel> model)
 {
-    ++nFieldConsistencySolves;
-    const GlobalState states = Y.evalOnNodes();
-    const std::vector<Position> points = Y.getPoints();
-    const Vector &weights = integrator.integrationWeights(Y.getBasis(), grid);
-    Vector psi = Y.getField();
-    const Vector zero = Vector::Zero(nField);
-    GlobalStateMatrix dR(nField), dRdot(nField);
-    for (Index f = 0; f < nField; ++f)
+    // Not after initialise, for symmetry with setFieldModel and because
+    // initialize() is where a run's cache is cleared and its tolerances handed
+    // over: a model attached after that would start mid-run with neither.
+    if (initialised)
+        throw std::logic_error("setEquilibriumModel must be called before the solver is initialised.");
+
+    if (model)
+        checkGeometrySource(model->getSpec().name, fieldModel != nullptr);
+
+    // Nothing to reshape: an equilibrium adds no unknowns, so the layout, the
+    // error weights and every vector are exactly the uncoupled run's.
+    equilibriumModel = std::move(model);
+    nGeom = equilibriumModel ? equilibriumModel->nGeometry() : (fieldModel ? fieldModel->nGeometry() : 0);
+    equilibriumCache = {};
+}
+
+// See the declaration. The input is compared byte for byte, not to a tolerance:
+// a residual evaluated again at the same state is the case being saved, and any
+// other state -- however close -- is a different residual, whose geometry a
+// tolerance would get silently wrong by its size.
+Equilibrium const &SystemSolver::equilibriumAt(DGSoln const &Y, Time t)
+{
+    if (Y.data() == nullptr)
+        throw std::logic_error("equilibriumAt: the state has no memory mapped, so it cannot key the cache");
+
+    const size_t n = static_cast<size_t>(nCells) * static_cast<size_t>((3 * nVars + nAux) * (k + 1));
+    if (equilibriumCache.eq && equilibriumCache.t == t && equilibriumCache.input.size() == n &&
+        std::memcmp(equilibriumCache.input.data(), Y.data(), n * sizeof(double)) == 0)
+        return *equilibriumCache.eq;
+
+    ++equilibriumSolves;
+    std::shared_ptr<Equilibrium const> next =
+        equilibriumModel->Solve(Y.evalOnNodes(), Y.getPoints(),
+                                integrator.integrationWeights(Y.getBasis(), grid), t,
+                                equilibriumCache.eq.get());
+    equilibriumCache.input.assign(Y.data(), Y.data() + n);
+    equilibriumCache.t = t;
+    equilibriumCache.eq = std::move(next);
+    return *equilibriumCache.eq;
+}
+
+void SystemSolver::geometryAt(VectorRef out, DGSoln const &Y, Position x, Time t)
+{
+    if (fieldModel)
+        fieldModel->Geometry(out, Vector(Y.getField()), x, t);
+    else if (equilibriumModel)
     {
-        dR.add(nCells, k, nVars, nScalars, nAux);
-        dRdot.add(nCells, k, nVars, nScalars, nAux);
+        Matrix g = Matrix::Zero(nGeom, 1);
+        equilibriumModel->Geometry(g, equilibriumAt(Y, t), {x});
+        out = g.col(0);
     }
-    for (int it = 0; it < 50; ++it)
-    {
-        ++nFieldConsistencyIterations;
-        Vector R = Vector::Zero(nField);
-        fieldModel->FieldResidual(R, psi, zero, states, points, weights, t);
-        Matrix dRdpsi = Matrix::Zero(nField, nField), dRddpsidt = Matrix::Zero(nField, nField);
-        fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt, psi, zero, states, points, weights, t);
-        fieldModel->updateFieldJacobian(dRdpsi, dRddpsidt, 0.0);
-        Vector step(nField);
-        fieldModel->solveB(step, R);
-        psi -= step;
-        if (step.norm() <= 1e-13 * std::max(psi.norm(), 1.0))
-            return psi;
-    }
-    throw std::runtime_error("consistentField: the field rows did not converge");
 }
 
 // See the declaration for why this is once per residual rather than once per
@@ -286,7 +325,7 @@ Vector SystemSolver::consistentField(DGSoln const &Y, Time t)
 void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
                                     GlobalState &states, Time t_eval)
 {
-    if (!fieldModel)
+    if (!fieldModel && !equilibriumModel)
         return;
 
     // The states arrive from DGSoln::evalOnNodes or evalOnStarNodes, neither of
@@ -294,8 +333,16 @@ void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const
     // filled.
     states.setGeometrySlots(nGeom);
 
-    const Vector psi = fieldSolveMode == FieldSolveMode::Consistent ? consistentField(Y, t_eval)
-                                                                    : Vector(Y.getField());
+    if (equilibriumModel)
+    {
+        Matrix g = Matrix::Zero(nGeom, static_cast<Eigen::Index>(points.size()));
+        equilibriumModel->Geometry(g, equilibriumAt(Y, t_eval), points);
+        for (size_t j = 0; j < points.size(); ++j)
+            states.setGeometry(static_cast<Index>(j), g.col(static_cast<Eigen::Index>(j)));
+        return;
+    }
+
+    const Vector psi = Y.getField();
     Vector g(nGeom);
     for (size_t j = 0; j < points.size(); ++j)
     {
@@ -338,7 +385,6 @@ SystemSolver::evaluateFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
                                    integrator.integrationWeights(Y.getBasis(), grid),
                                    tEval);
 
-    geometryDerivativePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     // ---- A1, cell by cell: the chain through the case's geometry hooks. Does
     // not depend on alpha, so it is evaluated here, once, for whichever alpha
     // applyFieldCoupling is then given.
@@ -979,7 +1025,6 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
     // du/dt solved here is the one the u row reads back at t0.
     const Index physicsDoF = superconvergent ? k + 2 : k + 1;
     PhysicsNodes sourceNodes = physicsNodesAt(y, t);
-    physicsValuePoints += static_cast<long>(sourceNodes.points.size()); // EXPERIMENT
     auto Source_vals = problem->ComputePhysics(sourceNodes.states, sourceNodes.points, t)[1];
     for (Index var = 0; var < nVars; var++)
     {
@@ -1607,7 +1652,6 @@ Matrix SystemSolver::faceKappaOverH(FaceStates const &faces, Time tEval)
     }
     for (Index a = 0; a < nAux; a++)
         dAux_vals.add(nCells, 1, nVars, nScalars, nAux);
-    physicsDerivativePoints += static_cast<long>(faces.points.size()); // EXPERIMENT
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, faces.states,
                                        faces.points, tEval);
 
@@ -2127,7 +2171,6 @@ Vector SystemSolver::projectOntoTestSpace(Index cell, Interval const &I, Vector 
 void SystemSolver::assignSigmaFromFlux(DGSoln &Y, Time tEval)
 {
     PhysicsNodes nodes = physicsNodesAt(Y, tEval);
-    physicsValuePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     auto const physics = problem->ComputePhysics(nodes.states, nodes.points, tEval);
     std::vector<Values> const &sigmaHat = physics[0];
 
@@ -2203,7 +2246,6 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Ti
       dAux_vals.add(nCells, derivK, nVars, nScalars, nAux);
     }
 
-    physicsDerivativePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, nodes.states,
                                        nodes.points, tEval);
 
@@ -2676,7 +2718,7 @@ void SystemSolver::updateMatricesForJacSolve()
     if (nScalars > 0)
         rec.stateDot.assign(dydtJac.data(), dydtJac.data() + dydtJac.getDoF());
 
-    if (fieldModel && fieldSolveMode != FieldSolveMode::Consistent)
+    if (fieldModel)
     {
         rec.stateDot.assign(dydtJac.data(), dydtJac.data() + dydtJac.getDoF());
         rec.field = evaluateFieldCoupling(yJac, dydtJac, nodes, jt);
@@ -2746,15 +2788,6 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
     case FieldSolveMode::Iterative:
         solveCoupledJacIterative(res_g, delY);
         return;
-    case FieldSolveMode::Consistent:
-    {
-        // EXPERIMENT: B = I, no A1 or A2. solveTransportJac zeroes the field block.
-        DGSoln rhs(nVars, grid, k, N_VGetArrayPointer(res_g), nScalars, nAux, nField);
-        DGSoln out(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
-        solveTransportJac(res_g, delY);
-        out.getField() = rhs.getField();
-        return;
-    }
     }
 }
 
@@ -2769,7 +2802,6 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 // any of them would corrupt the Schur complement being built from them.
 void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
 {
-    ++nTransportSolves; // EXPERIMENT
     if (nScalars > 0)
     {
         // The working space for the Gaussian elimination of the scalar rows.
@@ -3401,7 +3433,6 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
     // *source's* view of the same vector.
     states.setVariableDot(variableTimeDerivatives(dYdt_h));
 
-    physicsValuePoints += static_cast<long>(points.size()); // EXPERIMENT
     auto values = problem->ComputePhysics(states, points, tres);
 
     assembleTransportResidual(Y_h, dYdt_h, values, res);
@@ -3432,11 +3463,8 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
 
         Vector fieldRes = Vector::Zero(nField);
-        if (fieldSolveMode == FieldSolveMode::Consistent) // EXPERIMENT
-            fieldRes = Vector(Y_h.getField()) - consistentField(Y_h, tres);
-        else
-            fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
-                                      fieldStates, Y_h.getPoints(), weights, tres);
+        fieldModel->FieldResidual(fieldRes, Vector(Y_h.getField()), Vector(dYdt_h.getField()),
+                                  fieldStates, Y_h.getPoints(), weights, tres);
         res.getField() = fieldRes;
     }
 
@@ -3620,7 +3648,6 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
     for (Index aux = 0; aux < nAux; aux++)
         rec.dAux.add(nCells, derivK, nVars, nScalars, nAux);
 
-    physicsDerivativePoints += static_cast<long>(nodes.points.size()); // EXPERIMENT
     problem->ComputePhysicsDerivatives({rec.dSigma, rec.dSource, rec.dAux}, nodes.states,
                                        nodes.points, tEval);
 
@@ -3799,6 +3826,13 @@ std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &obje
 // blocks some earlier evaluation left in src.
 void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
 {
+    // Every adjoint path comes through here, the on-demand ones included, so
+    // this is the one guard that cannot be routed around. initialize() refuses
+    // the configured cases earlier and with more to say.
+    if (equilibriumModel)
+        throw std::logic_error("No adjoint can be solved with an equilibrium model attached (FieldCoupling = "
+                               "\"consistent\"): it supplies no derivatives through the field.");
+
     // Rebuild rather than grow. Every container filled below is appended to, so
     // a second adjoint solve on one solver used to leave them holding 2 * nCells
     // entries with the stale ones at the front -- which is where every index
@@ -4347,8 +4381,6 @@ void SystemSolver::solveAdjointState()
     case FieldSolveMode::Iterative:
         solveCoupledAdjointIterative();
         return;
-    case FieldSolveMode::Consistent: // EXPERIMENT: no adjoint for this mode
-        throw std::logic_error("FieldSolve = consistent has no adjoint");
     }
 }
 
@@ -5219,10 +5251,6 @@ int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
     {
         double absTol = atol[0];
         ewt.Field(i) = ::sqrt(localDOF * nCells) / (rtol * abs(y.Field(i)) + absTol);
-        // EXPERIMENT: in the Consistent mode psi is a copy of psi*(p), not an
-        // unknown, so it carries no weight in IDA's tests (MANTA_PSI_WEIGHTED=1 restores it).
-        if (fieldSolveMode == FieldSolveMode::Consistent && !std::getenv("MANTA_PSI_WEIGHTED"))
-            ewt.Field(i) = 1e-20;
     }
 
     return 0;

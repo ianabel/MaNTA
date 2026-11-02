@@ -33,10 +33,8 @@ point: 1 for residual values, 2 for a derivative evaluation. Linear solves and
 field-model work are free by comparison -- assembling the transport matrices
 is the step that takes tens of minutes on GPUs for a GX-class flux. Measured on
 `ThetaPinchDiffusion` at k = 4 with an experimental build of tier 0
-(`FieldSolve = "consistent"`, the `EXPERIMENT`-marked code on
-`feat/theta-pinch-field`, kept until tier 0 replaces it and can be compared
-against it; `theta_pinch_mms_tests/compare_field_solves`, disabled by default,
-is the harness),
+(`FieldSolve = "consistent"`, which kept `psi` in the state vector; removed once
+tier 0 was built and reproduced its counts -- see "As built" below),
 values + 2 x derivatives, with the coupled modes' `dflux/dgeometry` calls shown
 separately as `+2g`:
 
@@ -119,10 +117,9 @@ spline, Fourier coefficients, a file handle). The solver's side:
 * **The field is a cache, not an unknown.** It is refreshed at every
   `physicsNodesAt`, so the residual, every Jacobian build and both
   initial-condition sweeps see the geometry of the current input. Nothing about
-  it enters the DOF layout, the error test or IDA's Newton norms. That last part
-  is not cosmetic: the experimental build kept `psi` in the state vector with
-  rows `psi - psi*`, and zeroing its error weights changed `IDACalcIC`'s line
-  search enough to fail at T = 0.9 where the weighted version completed.
+  it enters the DOF layout, the error test or IDA's Newton norms. (This
+  paragraph said that zeroing the experimental build's `psi` weights was what
+  made `IDACalcIC` fail at T = 0.9. It was not; see "As built".)
 * **Memoised on the input.** The residual is evaluated repeatedly at one state
   (KINSOL's merit function, a Jacobian build at the last residual's state), so
   the cache is keyed on the input bytes and a repeat costs nothing.
@@ -203,8 +200,7 @@ Required for:
   now.
 
 **Every tier-2 model is a tier-1 and a tier-0 model, by an adapter.** Its Newton
-on the field rows alone is tier 0's `Solve` (the experimental `consistentField`,
-moved), and `-B^-1 A2` applied to `dp` then mapped through `dg/dpsi` is tier 1's
+on the field rows alone is tier 0's `Solve` (`FieldModelEquilibrium`), and `-B^-1 A2` applied to `dp` then mapped through `dg/dpsi` is tier 1's
 `applyResponse`. So the theta pinch runs in every mode, which keeps every
 comparison between tiers on one problem.
 
@@ -263,6 +259,70 @@ choosing among the coupled solves (`iterative`, `exact`, `krylov`).
 6. Python: tier 0 is the natural first Python field model -- a function from
    the pressure to the geometry -- and the Python phase of the theta-pinch work
    should start there rather than at the tier-2 interface.
+
+## As built
+
+### Tier -1 (`ca25f7d`)
+
+As designed. `PlainDiffusion` in `CoupledResidualTests.cpp` declares
+`readsGeometry` while reading nothing, so the field-machinery tests can keep
+the transport rows blind; `PlainDiffusion(false)` is the refusal's fixture.
+
+### Tier 0
+
+* `Solve` returns `std::unique_ptr<Equilibrium>` rather than filling an `out`
+  the solver would have had to allocate without knowing its type.
+  `setTolerances(relative, absolute)` returns whether the model can meet them.
+* The cache key is the solution vector's cell prefix (sigma, q, u, aux) and the
+  time. The trace is not in it: a model is never handed lambda.
+* Selected by `FieldCoupling = "coupled" | "consistent"` (default `coupled`),
+  which runManta applies by wrapping the `FieldModel` in
+  `FieldModelEquilibrium`. `auto` comes with step 3. There is no registry of
+  native `EquilibriumModel`s yet: the adapter is the only route from a config,
+  and a native model is attached with `setEquilibriumModel`.
+* The geometry provider a case's diagnostics read now takes the state rather
+  than `psi`, so it serves both a field model and an equilibrium.
+
+**`IDACalcIC` runs with its line search off at tier 0, and the design's
+diagnosis of the T = 0.9 failure was wrong.** Tier 0 has no `psi` in the state
+at all, and failed at T = 0.9 exactly as the unweighted experiment had
+(`IDA_LINESEARCH_FAIL`). The cause is the Jacobian, not the weights: with no
+coupling in it, the Newton direction need not descend `||F||` when the coupling
+is strong, and a backtracking line search cannot recover from a direction that
+is not a descent direction. The *weighted* experiment only completed because its
+`psi - psi*` rows went into the line search's merit function and every Newton
+direction shrinks them, which hid the transport rows' growth. With the line
+search off, full steps converge within `IDACalcIC`'s default 10 iterations at
+T = 0.9, at 5 and 32 cells; at T = 0.3, where the line search succeeds, the run
+is bit for bit the same either way.
+
+**Compared against the experiment before it was removed** (k = 4, rtol 1e-6,
+atol 1e-8, `t_final` 1; physics points, values + 2 x derivatives):
+
+| | tier 0 | experiment | coupled (exact / iterative) |
+|---|---|---|---|
+| 5 cells, T = 0.3, Newton | 400 | 400 | 325 |
+| 5 cells, T = 0.3, PTC | 775 | 775 | 775 |
+| 5 cells, T = 0.9, Newton | 550 | 550 | 325 |
+| 5 cells, T = 0.9, PTC | 850 | 850 | 775 |
+| 32 cells, T = 0.3, Newton | 3,040 | 3,040 | 2,080 |
+| 32 cells, T = 0.9, PTC | 5,440 | 5,440 | 4,960 |
+| 32 cells, T = 0.3, transient | 117,920 | 115,200 | 56,160 |
+| 5 cells, T = 0.3, transient | 36,125 | 18,700 | 7,950 / 7,225 |
+| 5 cells, T = 0.9, transient | 37,225 | fails (unweighted) | 8,975 |
+| 32 cells, T = 0.9, transient | 241,920 | fails (unweighted) | 62,240 / 61,760 |
+
+The steady solves are identical point for point. The transients agree within
+the scatter of a crawl: the 5-cell, T = 0.3 tier-0 run's 1112 steps is an
+outlier, and at rtol 0.9e-6 to 1.2e-6 it takes 425-594 steps against the
+experiment's 366-519. So the measurements the design rests on stand, and the
+experiment was removed. Tier 0's transient answers sit 1.4e-7 to 5.3e-6 (relative,
+in N at x = 0.1) from the exact coupled run's at this rtol; on the 6-cell k = 3 test fixture the
+gap is 8.8e-8, and 4e-10 at a steady state.
+
+Not yet run at tier 0: the coupled MMS order study. At its 1e-9 / 1e-11
+tolerances the experiment crawled for most of an hour on three of four cases,
+and tier 0 is the same method.
 
 ## Not in this work
 
