@@ -62,7 +62,8 @@ public:
     GeometricAuxDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .aux = {{"phi", "an auxiliary quantity", ""}}})
+                           .aux = {{"phi", "an auxiliary quantity", ""}},
+                           .readsGeometry = true})
     {
     }
 
@@ -132,7 +133,8 @@ class GeometricDiffusion : public TransportSystem
 public:
     GeometricDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true})
     {
     }
 
@@ -625,7 +627,8 @@ class ManufacturedCoupledDiffusion : public TransportSystem
 public:
     ManufacturedCoupledDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true})
     {
     }
 

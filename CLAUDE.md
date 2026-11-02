@@ -1415,7 +1415,12 @@ because the adjoint always runs at `cj = 0`, where the coupling is stiffest.
 neither is implemented.
 
 The refusals, each at the earliest point the combination is known:
-`nScalars > 0` with a field model (`setFieldModel` — the non-superconvergent
+a field model on a case whose `SystemSpec::readsGeometry` is false
+(`setFieldModel` — the geometry slots are the field's only channel, so it
+could not reach the solution; `PlainDiffusion` in `CoupledResidualTests.cpp`
+declares it while reading nothing, on purpose, to hold the transport rows blind
+for the layout tests, and `PlainDiffusion(false)` is what the refusal is tested
+against); `nScalars > 0` with a field model (`setFieldModel` — the non-superconvergent
 `dSources_dScalars` branch builds its `State` from `DGSoln::evalOnNode`, which
 has no geometry rows, so a case reading geometry there would work with
 `Superconvergent = true` and read out of bounds with it off); a field DOF

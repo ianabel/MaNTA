@@ -153,6 +153,18 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
             "scalar coupling's non-superconvergent branch evaluates dSources_dScalars on "
             "states that carry no geometry.");
 
+    // Not to a case that reads no geometry. The geometry slots are the field's
+    // only channel into the transport physics, so attached to such a case the
+    // field could not reach the solution: the run would pay for every field
+    // solve and change nothing. That is a configuration mistake, and it is
+    // knowable here, before anything is allocated.
+    if (model && !problem->spec().readsGeometry)
+        throw std::logic_error(
+            "The field model '" + model->getSpec().name +
+            "' cannot be attached: the transport system does not read geometry "
+            "(SystemSpec::readsGeometry is false), so the field could not reach the "
+            "solution.");
+
     // The model's output group must not collide with anything else at the top
     // level of the netCDF file. FieldModelSpec::validate() cannot see this --
     // it knows nothing about the physics case -- and neither can NetCDFIO,

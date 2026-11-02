@@ -13,7 +13,8 @@ SystemSpec thetaPinchSpec()
     return {.variables = {{"N", "particles per unit flux per unit length, V' n", "n0 a^2",
                            BoundaryKind::Neumann, BoundaryKind::Dirichlet}},
             .aux = {{"p", "pressure, in units where 2 mu0 = 1", "B0^2"}},
-            .regrid = RegridPolicy::InPlace};
+            .regrid = RegridPolicy::InPlace,
+            .readsGeometry = true};
 }
 } // namespace
 

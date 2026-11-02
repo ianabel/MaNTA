@@ -96,6 +96,13 @@ The geometry slots are **not** unknowns. They are a function of
 same standing as :math:`\hat\sigma`. A physics case reads slot ``s`` through
 ``State::geom(s)``.
 
+A field model can be attached only to a case whose spec sets
+``readsGeometry = true`` (see :ref:`geometry-derivatives`). ``setFieldModel``
+refuses any other, naming the model: a field that cannot reach the solution
+would be solved for at every Newton iteration and change nothing. With no field
+model attached the declaration changes nothing — no geometry rows, no geometry
+evaluation — which is what keeps every uncoupled run bit for bit what it was.
+
 Writing a field model
 ---------------------
 
