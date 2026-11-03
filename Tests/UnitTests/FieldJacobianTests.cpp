@@ -18,6 +18,8 @@
 #include "MMSHarness.hpp"
 #include "ManufacturedFields.hpp"
 #include "../../SystemSolver.hpp"
+#include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
+#include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
 #include "../../Types.hpp"
 
 #include <nvector/nvector_serial.h>
@@ -28,6 +30,7 @@
 #include <memory>
 #include <numbers>
 #include <string>
+#include <format>
 #include <vector>
 
 namespace
@@ -59,7 +62,8 @@ public:
     GeometricAuxDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .aux = {{"phi", "an auxiliary quantity", ""}}})
+                           .aux = {{"phi", "an auxiliary quantity", ""}},
+                           .readsGeometry = true})
     {
     }
 
@@ -129,7 +133,8 @@ class GeometricDiffusion : public TransportSystem
 public:
     GeometricDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true})
     {
     }
 
@@ -369,6 +374,27 @@ CoupledSolver multiDofFixture(Index nCells, Index k, double strength = 1.0)
 /// converges to |lambda_max|. Built from the same four calls
 /// solveCoupledJacIterative makes, in the same order, rather than from a second
 /// implementation that could agree with a wrong original.
+/// The registered pair: ThetaPinchDiffusion reading ThetaPinchEquilibrium.
+/// The pressure is high enough (T = 0.3, central density 1) that the field is
+/// far from vacuum, so the coupling blocks are not evaluated at a degenerate
+/// point; the field block's size is nCells * intervalsPerCell + 4.
+CoupledSolver thetaPinchFixture(Index nCells, Index k, Index intervalsPerCell, bool superconvergent = false,
+                                double cj = 1.7)
+{
+    using namespace toml::literals::toml_literals;
+    static const toml::value config = u8R"(
+        [ThetaPinchDiffusion]
+        Temperature = 0.3
+        D0 = 0.5
+        Gamma = 2.0
+    )"_toml;
+    const Grid grid(0.0, 1.0, nCells);
+    return makeCoupledSolverAtState(
+        nCells, k, std::make_unique<ThetaPinchDiffusion>(config, grid),
+        std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{.intervalsPerCell = intervalsPerCell}, grid),
+        superconvergent, /*tau=*/0.75, cj);
+}
+
 double spectralRadius(CoupledSolver const &solver, int iterations = 60)
 {
     const Index nField = solver->getFieldDOF();
@@ -546,6 +572,38 @@ double relativeDifference(N_Vector a, N_Vector b)
     return (va - vb).norm() / std::max(va.norm(), std::numeric_limits<double>::min());
 }
 
+/// ||v|| in the error-weighted RMS norm the iterative sweep stops in: the
+/// solver's own error weights at the state its Jacobian was built at.
+double weightedNorm(SystemSolver &sys, N_Vector v)
+{
+    N_Vector yAt = N_VMake_Serial(N_VGetLength(v), sys.yJacMem, sys.ctx);
+    N_Vector ewt = N_VClone(v);
+    sys.getErrorWeights(yAt, ewt);
+    const double out = N_VWrmsNorm(v, ewt);
+    N_VDestroy(yAt);
+    N_VDestroy(ewt);
+    return out;
+}
+
+double weightedDifference(SystemSolver &sys, N_Vector a, N_Vector b)
+{
+    N_Vector d = N_VClone(a);
+    N_VLinearSum(1.0, a, -1.0, b, d);
+    const double out = weightedNorm(sys, d);
+    N_VDestroy(d);
+    return out;
+}
+
+/// What the sweep's stopping test bounds: an iterative solve within
+/// FieldSolveTolerance error-weight units of the exact one, or within a
+/// millionth of the increment when that is larger -- see
+/// solveCoupledJacIterative.
+bool withinSweepTolerance(SystemSolver &sys, N_Vector exact, N_Vector iterative)
+{
+    return weightedDifference(sys, exact, iterative) <=
+           std::max(sys.getFieldSolveTolerance(), 1e-6 * weightedNorm(sys, exact));
+}
+
 // A local copy of CoupledResidualTests.cpp's manufactured coupled problem --
 // same exact solution, u = sin(pi x)(1+t) and psi = Int u dx = (2/pi)(1+t) --
 // kept here rather than shared, the way this file's own configureQuietly
@@ -569,7 +627,8 @@ class ManufacturedCoupledDiffusion : public TransportSystem
 public:
     ManufacturedCoupledDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true})
     {
     }
 
@@ -922,10 +981,10 @@ BOOST_AUTO_TEST_CASE(selecting_the_exact_solve_warns)
 
 BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_with_the_exact_one)
 {
-    // Not to roundoff: the iterative path stops at FieldSolveTolerance, so the
-    // agreement is to that tolerance and no better. What this pins is that the
-    // two are solving the same system -- a sign error in either path's use of
-    // A1 or A2 separates them immediately.
+    // Not to roundoff: the iterative path stops at FieldSolveTolerance, in the
+    // error-weighted norm, so the agreement is to that tolerance in that norm and
+    // no better. What this pins is that the two are solving the same system -- a
+    // sign error in either path's use of A1 or A2 separates them by far more.
     auto solver = singleDofFixture(/*nCells=*/6, /*k=*/2);
     N_Vector g = randomRHS(*solver);
 
@@ -933,9 +992,11 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_with_the_exact_one)
     solver->solveCoupledJacExact(g, exact);
     solver->solveCoupledJacIterative(g, iterative);
 
-    const double diff = relativeDifference(exact, iterative);
-    BOOST_TEST_MESSAGE("single-DOF field, iterative vs exact: relative difference = " << diff);
-    BOOST_CHECK_SMALL(diff, 1e-6);
+    const double diff = weightedDifference(*solver, exact, iterative);
+    BOOST_TEST_MESSAGE("single-DOF field, iterative vs exact: weighted difference = " << diff
+                       << ", relative " << relativeDifference(exact, iterative));
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
 
     N_VDestroy(g);
     N_VDestroy(exact);
@@ -951,44 +1012,82 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_for_a_multi_dof_block_too)
     solver->solveCoupledJacExact(g, exact);
     solver->solveCoupledJacIterative(g, iterative);
 
-    const double diff = relativeDifference(exact, iterative);
-    BOOST_TEST_MESSAGE("5-DOF field, iterative vs exact: relative difference = " << diff);
-    BOOST_CHECK_SMALL(diff, 1e-6);
+    const double diff = weightedDifference(*solver, exact, iterative);
+    BOOST_TEST_MESSAGE("5-DOF field, iterative vs exact: weighted difference = " << diff
+                       << ", relative " << relativeDifference(exact, iterative));
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
 
     N_VDestroy(g);
     N_VDestroy(exact);
     N_VDestroy(iterative);
 }
 
-BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_at_the_scale_a_newton_step_lives_at)
+BOOST_AUTO_TEST_CASE(the_sweep_stops_at_an_absolute_bound_or_a_millionth_of_the_increment)
 {
-    // The two tests above use a RHS whose converged |dpsi| happens to land
-    // above 1, so `tol * max(1, |dpsi|)` and `tol * |dpsi|` coincide there and
-    // neither test would have caught the defect this one exists for: the
-    // original stopping criterion used `max(1, |dpsi|)` rather than `|dpsi|` alone, which
-    // is an *absolute* magnitude test of `FieldSolveTolerance` whenever the
-    // converged |dpsi| is below 1 -- exactly the regime a real Newton
-    // correction lives in, where it declared convergence after the raw first
-    // iterate regardless of how wrong that iterate was (measured at 38.6%
-    // relative error on this same fixture before the fix). Scaling the RHS down
-    // so |dpsi| is far below 1 is what exercises that regime; this is the
-    // guard against reintroducing it.
+    // The stopping test is the change one sweep makes to the whole increment,
+    // in the run's error-weighted norm, against FieldSolveTolerance or a
+    // millionth of the increment, whichever is larger. The two arms are for two
+    // regimes, and both are exercised here on one right-hand side scaled into
+    // each: a Newton correction of about one error-weight unit, where the
+    // absolute bound governs, and IDACalcIC's first step, ~4e8 units at
+    // cj ~ 1e9, where 1e-4 absolute would be 1e-13 relative and twenty sweeps
+    // could not reach it.
+    //
+    // What the norm's *shape* buys -- the reason it covers the transport
+    // block -- only shows on Newton's own right-hand sides, where the old test
+    // (a relative 2-norm change in psi alone) left an error in sigma and q near
+    // the axis worth O(1) error-weight units and held IDA at order one for
+    // twenty thousand steps. Random right-hand sides at a fixture state do not
+    // concentrate there, so that is pinned by the runs themselves:
+    // ThetaPinchMMSTests.cpp's the_iterative_solve_does_not_stall_ida, and
+    // ThetaPinchRunTests.cpp's exact_and_iterative_field_solves_give_the_same_run.
+    //
+    // On the five-unknown block, because a single field unknown cannot show
+    // it: Irons-Tuck is exact for a scalar affine map, so that sweep reaches
+    // roundoff in three whatever the bound.
+    auto probe = multiDofFixture(/*nCells=*/6, /*k=*/2);
+    N_Vector g0 = randomRHS(*probe), x0 = N_VClone(g0);
+    probe->solveCoupledJacExact(g0, x0);
+    const double unit = 1.0 / weightedNorm(*probe, x0);
+    N_VDestroy(x0);
+
+    for (double size : {1.0, 4e8})
+    {
+        auto solver = multiDofFixture(/*nCells=*/6, /*k=*/2);
+        N_Vector g = N_VClone(g0);
+        N_VScale(size * unit, g0, g);
+        N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+        solver->solveCoupledJacExact(g, exact);
+        solver->solveCoupledJacIterative(g, iterative);
+
+        const double diff = weightedDifference(*solver, exact, iterative);
+        BOOST_TEST_MESSAGE("increment of " << weightedNorm(*solver, exact) << " error-weight units: "
+                           << solver->fieldSweepIterations << " sweeps, weighted difference " << diff);
+        BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+        if (size == 1.0)
+            BOOST_TEST(diff <= solver->getFieldSolveTolerance());
+        else
+        {
+            BOOST_TEST(diff > solver->getFieldSolveTolerance()); // the relative arm is the one in force
+            BOOST_TEST(diff <= 1e-6 * weightedNorm(*solver, exact));
+        }
+
+        N_VDestroy(g);
+        N_VDestroy(exact);
+        N_VDestroy(iterative);
+    }
+    N_VDestroy(g0);
+
+    // ...and an increment already below the tolerance is accepted after one
+    // sweep, which is right: it moves the state by less than Newton could see.
     auto solver = singleDofFixture(/*nCells=*/6, /*k=*/2);
     N_Vector g = randomRHS(*solver);
     N_VScale(1e-9, g, g);
-
     N_Vector exact = N_VClone(g), iterative = N_VClone(g);
     solver->solveCoupledJacExact(g, exact);
     solver->solveCoupledJacIterative(g, iterative);
-
-    // relativeDifference's floor is the smallest positive double, not 1 -- see
-    // its own comment -- so this is a genuine relative check even down here.
-    BOOST_REQUIRE_GT(fdjac::toVector(exact).norm(), 0.0);
-    const double diff = relativeDifference(exact, iterative);
-    BOOST_TEST_MESSAGE("single-DOF field, RHS scaled by 1e-9, iterative vs exact: "
-                       "relative difference = "
-                       << diff);
-    BOOST_CHECK_SMALL(diff, 1e-6);
+    BOOST_TEST(solver->fieldSweepIterations == 1);
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
 
     N_VDestroy(g);
     N_VDestroy(exact);
@@ -1084,7 +1183,7 @@ BOOST_AUTO_TEST_CASE(acceleration_converges_a_sweep_that_plainly_diverges)
     // The agreement is necessary but not sufficient -- solveCoupledJacIterative
     // now escalates to solveCoupledJacExact, so this line passes with the
     // acceleration deleted. The fallback count is the assertion that matters.
-    BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
     BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
     BOOST_TEST_MESSAGE("sweeps taken: " << solver->fieldSweepIterations);
     BOOST_CHECK_LE(solver->fieldSweepIterations, 12);
@@ -1151,9 +1250,8 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     //
     // **Measured, it does not.** At strength 10 the iteration matrix has
     // rho = 1.57 -- within 3% of the 1.611 measured on RichGeometricDiffusion --
-    // and the accelerated sweep still reaches FieldSolveTolerance, in 13 to 38
-    // sweeps depending on the right-hand side against a plain sweep that
-    // diverges. The secant is rank one per *step*, but the steps are not the
+    // and the accelerated sweep still reaches FieldSolveTolerance against a
+    // plain sweep that diverges. The secant is rank one per *step*, but the steps are not the
     // same rank-one direction, so the iteration is not confined to a
     // two-dimensional subspace the way the pessimistic argument assumes. Scanned
     // over strengths from 1 to 1e5 -- rho saturating just under 2 -- and over six
@@ -1162,9 +1260,7 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     // So both halves are asserted. The guarantee, first, because it is true by
     // construction and survives any change to the accelerator: whichever way
     // solveCoupledJacIterative got there, the answer is the exact one, which is
-    // what makes iterative safe as a default. Then the measurement, with a cap
-    // that has room for the observed spread -- the default 20 does *not*, which
-    // is why this raises it rather than pretending otherwise.
+    // what makes iterative safe as a default. Then the measurement.
     auto probe = multiDofFixture(6, 2, 10.0);
     const double rho = spectralRadius(probe);
     BOOST_TEST_MESSAGE("five-DOF, strength 10: rho(M) = " << rho
@@ -1172,9 +1268,9 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     BOOST_REQUIRE_GT(maxAbsA1(probe), 0.0);
     BOOST_CHECK_GT(rho, 1.2);
 
-    // Six right-hand *directions* -- see randomRHS on why scaling would not do.
-    // The sweep count varies by a factor of three across them, which is the
-    // whole reason one right-hand side is not a measurement.
+    // Six right-hand *directions*: the sweep count varies by a factor of two
+    // across them, which is the whole reason one right-hand side is not a
+    // measurement.
     int convergedAtDefault = 0, escalatedAtDefault = 0;
     std::string atDefault, atSixty;
 
@@ -1191,7 +1287,7 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
         // whichever route the solve took, and the only claim here that survives
         // any change to the accelerator.
         solver->solveCoupledJacIterative(g, iterative);
-        BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+        BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
 
         const long sweeps = solver->fieldSweepIterations;
         const long fellBack = solver->fieldSweepFallbacks;
@@ -1203,7 +1299,7 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
         solver->setFieldSolveMaxSweeps(60);
         solver->solveCoupledJacIterative(g, iterative);
         BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks - fellBack, 0);
-        BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+        BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
         atSixty += " " + std::to_string(solver->fieldSweepIterations - sweeps);
 
         N_VDestroy(g);
@@ -1214,25 +1310,19 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     BOOST_TEST_MESSAGE("five-DOF sweeps by right-hand side, cap 20 (* = escalated):"
                        << atDefault << "\n  the same at cap 60:" << atSixty);
 
-    // Read these 13-38 sweeps beside MMSFieldTests.cpp, which measures 2.5 to 3.6
-    // sweeps per Jacobian solve over four full integrations and never escalates
-    // once. The two are not in tension and the contrast is the point: a *random*
-    // right-hand side is the hard case, while Newton's are small, smooth
-    // corrections about a nearby state, and that is why the shipped cap of 20 is
-    // adequate in a real run despite being provably inadequate here. Neither
-    // number means anything about the cap on its own.
-
-    // The accelerator does cope with five divergent field unknowns -- every
-    // right-hand side converges once there is room for it.
+    // The accelerator copes with five divergent field unknowns -- every
+    // right-hand side converges once there is room for it...
     BOOST_CHECK_EQUAL(escalatedAtDefault + convergedAtDefault, 6);
 
-    // ...but FieldSolveMaxSweeps = 20 is **not enough** for half of them, and
+    // ...but FieldSolveMaxSweeps = 20 is **not enough** for all of them, and
     // that is a statement about the shipped default rather than about this
-    // fixture. Asserted as a tripwire, deliberately: if the accelerator is ever
-    // improved to the point where all six fit in twenty sweeps, this fails, and
-    // the right response is to update it together with the TODO entry that
-    // records the same measurement -- not to have the default quietly become
-    // adequate with nothing saying so.
+    // fixture: 10-23 sweeps, one of six over the cap. Asserted as a tripwire,
+    // both ways, and recorded with the TODO entry that holds the same
+    // measurement, so that a change to the accelerator, the stopping test or
+    // the default has to update both. Read it beside MMSFieldTests.cpp's few
+    // sweeps per Jacobian solve over whole integrations: a *random* right-hand
+    // side is the hard case, while Newton's are small, smooth corrections about
+    // a nearby state, so neither says the cap is wrong in a real run.
     BOOST_TEST_MESSAGE("of six right-hand sides, " << escalatedAtDefault
                        << " needed more than the default cap of 20");
     BOOST_CHECK_GT(convergedAtDefault, 0);
@@ -1292,36 +1382,6 @@ BOOST_AUTO_TEST_CASE(the_accepted_iterate_leaves_the_field_row_exact)
     N_VDestroy(out);
 }
 
-BOOST_AUTO_TEST_CASE(the_accelerated_sweep_is_still_scale_equivariant)
-{
-    // A property of the plain sweep, re-run rather than assumed to survive the
-    // acceleration: mu is a ratio of inner
-    // products of quantities that all scale with the right-hand side, so
-    // Irons-Tuck is homogeneous and solve(c g) == c solve(g) should survive it.
-    // The scale that broke the old criterion was 1e-9; use it again.
-    auto solver = everySlotFixture(6, 2, 2.0);
-    N_Vector g = randomRHS(*solver), gSmall = N_VClone(g);
-    N_VScale(1e-9, g, gSmall);
-
-    N_Vector big = N_VClone(g), small = N_VClone(g);
-    solver->solveCoupledJacIterative(g, big);
-    solver->solveCoupledJacIterative(gSmall, small);
-    N_VScale(1e9, small, small);
-
-    // Neither solve may have escalated: the fallback is the exact solve, which
-    // is scale-equivariant by construction, so a fallback would make this a
-    // statement about the LU factorisation rather than about the sweep.
-    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
-    const double diff = relativeDifference(big, small);
-    BOOST_TEST_MESSAGE("scale equivariance at 1e-9: relative difference " << diff);
-    BOOST_CHECK_SMALL(diff, 1e-8);
-
-    N_VDestroy(g);
-    N_VDestroy(gSmall);
-    N_VDestroy(big);
-    N_VDestroy(small);
-}
-
 BOOST_AUTO_TEST_CASE(the_end_of_run_report_counts_the_sweeps_and_names_the_fallbacks)
 {
     // The only signal a user has that the coupling is not converging, and the
@@ -1339,8 +1399,9 @@ BOOST_AUTO_TEST_CASE(the_end_of_run_report_counts_the_sweeps_and_names_the_fallb
     h.sys->setFieldModel(h.field);
     h.sys->resetCoeffs();
 
-    // One sweep can never satisfy a relative increment test from a zero start, so
-    // every Jacobian solve escalates -- IDACalcIC's included, which is why the
+    // One sweep is accepted only when the whole increment is already below the
+    // tolerance, so the Jacobian solves of the transient escalate -- IDACalcIC's
+    // included, which is why the
     // cap is set before initialize() rather than after: the two runs below have
     // to be configured identically for their counts to be comparable.
     h.sys->setFieldSolveMaxSweeps(1);
@@ -1402,6 +1463,77 @@ BOOST_AUTO_TEST_CASE(a_coupled_run_on_the_iterative_path_reaches_the_manufacture
 
     BOOST_CHECK_SMALL(eu, 1e-4);
     BOOST_CHECK_SMALL(epsi, 1e-5);
+}
+
+// The first registered field model, on the same checks the manufactured ones
+// get. Its A2 reaches the transport through the pressure's aux column only, and
+// its A1 through all four geometry slots, so this is the fixture that runs the
+// aux half of A2 and a multi-slot A1 together.
+BOOST_AUTO_TEST_CASE(the_theta_pinch_exact_solve_inverts_its_finite_differenced_jacobian)
+{
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervalsPerCell=*/1, superconvergent);
+
+            // Not vacuous: both coupling blocks carry something.
+            BOOST_REQUIRE_GT(maxAbsA1(solver), 1e-3);
+            DGSoln a2Map(solver->nVars, *solver.grid, 3, N_VGetArrayPointer(solver->a2[0]),
+                         solver->nScalars, solver->nAux, solver->getFieldDOF());
+            BOOST_REQUIRE_GT(maxAbs(a2Map.Aux(0), 5), 1e-3);
+
+            for (int trial = 0; trial < 2; ++trial)
+            {
+                const SolveReport r = checkExactSolve(solver, trial);
+                BOOST_TEST_MESSAGE("theta pinch, k = 3, nCells = 5, one interval per cell, trial "
+                                   << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                                   << ", ||J dy* - g||/||g|| = " << r.residual << " ("
+                                   << r.nDirichlet << " Dirichlet components excluded)");
+                BOOST_TEST(r.nDirichlet == 1);
+                BOOST_TEST(r.solutionError < 1e-6);
+                BOOST_TEST(r.residual < 1e-7);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_theta_pinch_iterative_solve_agrees_with_the_exact_one)
+{
+    auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervalsPerCell=*/2);
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    const double diff = weightedDifference(*solver, exact, iterative);
+    BOOST_TEST_MESSAGE("theta pinch, two intervals per cell, iterative vs exact: weighted difference = "
+                       << diff << ", relative " << relativeDifference(exact, iterative));
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
+
+
+// The theta pinch's block Gauss-Seidel iteration contracts at every cj,
+// steady (cj = 0, where the adjoint always runs) to stiff, and at every field
+// resolution: measured 0.10 to 0.19. So a sweep on it that fails to converge is
+// a defect in the sweep, not a property of the coupling -- which is how the
+// alignment guard in ironsTuck was found.
+BOOST_AUTO_TEST_CASE(the_theta_pinch_sweep_contracts_at_every_cj)
+{
+    for (double cj : {0.0, 1.7, 100.0, 1e4})
+        for (Index m : {1, 4})
+        {
+            auto solver = thetaPinchFixture(6, 3, m, false, cj);
+            const double rho = spectralRadius(solver, 200);
+            BOOST_TEST_MESSAGE("cj = " << cj << ", " << m << " intervals per cell: rho = " << rho);
+            BOOST_TEST(rho < 0.3);
+        }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

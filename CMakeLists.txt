@@ -68,6 +68,7 @@ set(MANTA_CORE_SOURCES
   DegreeAdaptation.cpp
   ErrorChecker.cpp
   FieldModel.cpp
+  FieldModelEquilibrium.cpp
   MaNTA.cpp
   Matrices.cpp
   MeshAdaptation.cpp
@@ -216,7 +217,9 @@ set(MANTA_INSTALL_HEADERS
   DGSoln.hpp
   ErrorChecker.hpp
   EvaluationPlan.hpp
+  EquilibriumModel.hpp
   FieldModel.hpp
+  FieldModelEquilibrium.hpp
   FieldModelSpec.hpp
   Logging.hpp
   NetCDFIO.hpp

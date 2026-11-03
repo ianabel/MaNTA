@@ -51,12 +51,19 @@ using std::numbers::pi;
 // the layout test below say "the field row moved and nothing else did", which is
 // only a statement about the layout if the transport rows have no way of seeing
 // psi at all.
+//
+// It still *declares* readsGeometry by default, because a field model may only be
+// attached to a case that does: the declaration says the case may read geometry,
+// not that it must, and this one exercises the field machinery with the transport
+// rows held blind on purpose. `PlainDiffusion(false)` is the honest declaration,
+// and is what the tier -1 refusal is tested against.
 class PlainDiffusion : public TransportSystem
 {
 public:
-    PlainDiffusion()
+    explicit PlainDiffusion(bool declaresGeometry = true)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = declaresGeometry})
     {
     }
 
@@ -87,7 +94,8 @@ class GeometryProbeCase : public TransportSystem
 public:
     GeometryProbeCase()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true})
     {
     }
 
@@ -140,6 +148,59 @@ private:
     static inline std::vector<Position> points;
 };
 
+// Plain diffusion, run with no field model, that records how many geometry rows
+// every state it is handed carries -- in the batched flux, which the residual
+// calls, and in the pointwise derivatives, which the Jacobian build calls. A
+// member rather than a static, since the test runs two of them.
+class GeometryWidthProbe : public TransportSystem
+{
+public:
+    explicit GeometryWidthProbe(bool declaresGeometry)
+        : TransportSystem({.variables = {{"u", "the diffused quantity", "",
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = declaresGeometry})
+    {
+    }
+
+    long fluxStates = 0, derivativeStates = 0;
+    Eigen::Index widestGeometry = 0;
+
+    Values SigmaFn(Index, GlobalState const &states, std::vector<Position> const &, Time) override
+    {
+        Values out(states.size());
+        for (size_t j = 0; j < states.size(); ++j)
+        {
+            const State s = states[j];
+            note(s);
+            ++fluxStates;
+            out(static_cast<Eigen::Index>(j)) = s.q(0);
+        }
+        return out;
+    }
+    Value SigmaFn(Index, const State &s, Position, Time) override { return s.q(0); }
+    Value Sources(Index, const State &, Position, Time) override { return 0.0; }
+
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        note(s);
+        ++derivativeStates;
+        v[0] = 1.0;
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+
+    Value InitialValue(Index, Position x) const override { return x * (1.0 - x); }
+    Value InitialDerivative(Index, Position x) const override { return 1.0 - 2.0 * x; }
+
+    Value LowerBoundary(Index, Time) const override { return 0.0; }
+    Value UpperBoundary(Index, Time) const override { return 0.0; }
+
+private:
+    void note(State const &s) { widestGeometry = std::max(widestGeometry, s.geom().size()); }
+};
+
 // The manufactured coupled problem.
 //
 //     u_t - d_x[ g(x; psi) u_x ] = S ,   g = 1 + psi c(x) ,   R = psi - Int u dx
@@ -172,7 +233,8 @@ class ManufacturedCoupledDiffusion : public TransportSystem
 public:
     ManufacturedCoupledDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true})
     {
     }
 
@@ -655,6 +717,72 @@ BOOST_AUTO_TEST_CASE(an_output_group_colliding_with_a_solver_group_is_refused)
     configureQuietly(sys, "coupled_group_reserved");
 
     BOOST_CHECK_THROW(sys.setFieldModel(std::make_shared<GridNamedField>()), std::logic_error);
+}
+
+BOOST_AUTO_TEST_CASE(a_field_model_on_a_case_that_reads_no_geometry_is_refused)
+{
+    // Tier -1. The geometry slots are a field's only channel into the transport
+    // physics, so a model attached to a case that reads none could not reach the
+    // solution, and the run would pay for every field solve to change nothing.
+    Grid grid(0.0, 1.0, 4);
+    PlainDiffusion blind(/*declaresGeometry=*/false);
+    SystemSolver sys(grid, 2, &blind);
+    configureQuietly(sys, "coupled_blind_case");
+
+    try
+    {
+        sys.setFieldModel(std::make_shared<ManufacturedField>(toml::value{}, scratchGrid()));
+        BOOST_FAIL("a field model was attached to a case that reads no geometry");
+    }
+    catch (std::logic_error const &e)
+    {
+        const std::string what = e.what();
+        BOOST_TEST(what.find("readsGeometry") != std::string::npos, what);
+    }
+    // Refused before anything moved: the solver is still uncoupled.
+    BOOST_CHECK_EQUAL(sys.getFieldDOF(), 0);
+    BOOST_CHECK_EQUAL(sys.getGeometrySlots(), 0);
+
+    // Discriminating: the same case declaring geometry takes the same model.
+    PlainDiffusion declared(/*declaresGeometry=*/true);
+    SystemSolver accepted(grid, 2, &declared);
+    configureQuietly(accepted, "coupled_declared_case");
+    BOOST_CHECK_NO_THROW(
+        accepted.setFieldModel(std::make_shared<ManufacturedField>(toml::value{}, scratchGrid())));
+}
+
+BOOST_AUTO_TEST_CASE(with_no_field_model_a_case_is_handed_no_geometry_whatever_it_declares)
+{
+    // The other two tier -1 rows. With no model the solver allocates no geometry
+    // rows and evaluates nothing, and declaring readsGeometry changes neither: a
+    // case that declares it and has no model supplies its own fixed geometry, as
+    // ThetaPinchDiffusion's VacuumGeometry does. Checked over a whole run --
+    // IDACalcIC, the residuals and the Jacobian builds -- rather than one
+    // residual, since every one of them builds states.
+    for (bool declares : {false, true})
+    {
+        BOOST_TEST_CONTEXT("readsGeometry = " << declares)
+        {
+            Grid grid(0.0, 1.0, 4);
+            GeometryWidthProbe probe(declares);
+            SystemSolver sys(grid, 2, &probe);
+            configureQuietly(sys, declares ? "uncoupled_declared" : "uncoupled_blind");
+            sys.setOutputCadence(0.1);
+            sys.resetCoeffs();
+            {
+                CapturedOutput quiet;
+                sys.initialize();
+                sys.integrate(0.1);
+                sys.destroySundials();
+            }
+
+            BOOST_CHECK_EQUAL(sys.getGeometrySlots(), 0);
+            BOOST_CHECK_EQUAL(probe.widestGeometry, 0);
+            // Not vacuous: both kinds of evaluation happened.
+            BOOST_CHECK_GT(probe.fluxStates, 0);
+            BOOST_CHECK_GT(probe.derivativeStates, 0);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(a_correctly_declared_algebraic_field_dof_is_not_refused)

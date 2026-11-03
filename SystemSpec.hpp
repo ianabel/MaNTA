@@ -162,6 +162,19 @@ struct SystemSpec
     // every existing `{.variables = ...}` initialiser keeps its meaning.
     RegridPolicy regrid = RegridPolicy::Fixed;
 
+    // Whether the flux, sources or aux rows may read State::geom -- the only
+    // channel by which a field model reaches the transport physics. A field
+    // model can be attached only to a case that sets it (SystemSolver::
+    // setFieldModel refuses any other), since its field could not reach the
+    // solution and the run would pay for it to change nothing. Without a model
+    // it changes nothing at all: a case setting it then supplies its own fixed
+    // geometry, as ThetaPinchDiffusion's VacuumGeometry does, and the solver
+    // still allocates no geometry rows and evaluates nothing.
+    //
+    // A permission, not an obligation: a case may set it and read nothing.
+    // Trailing and defaulted for the same reason as `regrid`.
+    bool readsGeometry = false;
+
     /// Does any variable's source read du/dt?
     ///
     /// Asked once per run rather than per node: it gates a whole evaluation

@@ -306,10 +306,12 @@ prints one extra line beside the step and Jacobian counts at the end::
 
 The ratio is what to read. A sweep is one transport solve; the exact Schur
 complement is :math:`\texttt{nField}+1` of them. So the iterative path is
-*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`, and
-on every fixture in this tree it is not — see :doc:`field_coupling` for the
-numbers. Measured in a real integration the sweep runs 2.5 to 3.6 iterations per
-Jacobian solve.
+*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`.
+Whether it is depends on the coupling: the theta pinch runs about 3.7 sweeps per
+Jacobian solve at every resolution, so iterative wins from
+:math:`\texttt{nField} = 12` up, while the small manufactured fixtures run 2.0
+to 2.8 against an :math:`\texttt{nField}+1` of 2 to 6 and lose — see
+:doc:`field_coupling` for the numbers.
 
 .. important::
 
@@ -335,9 +337,8 @@ makes ``FieldSolve`` a cost choice and never an accuracy one. The adjoint has it
 own cap, ``FieldSolveMaxAdjointSweeps``, defaulting to 100 against the forward
 20: the transposed iteration has the same spectrum — it *is* the transpose — but
 always runs at :math:`c_j = 0`, where the spectral radius is largest, so it is
-strictly the harder direction. Five field unknowns have been measured needing
-13–38 sweeps on isolated right-hand sides, which is why inheriting the forward
-cap would under-serve it.
+strictly the harder direction, and inheriting the forward cap would
+under-serve it.
 
 .. note::
 
@@ -1548,6 +1549,110 @@ nothing.
    there are.
 
 .. _suppress-algebraic-error:
+
+.. _error-weights:
+
+Error weights
+-------------
+
+IDA's error test, its Newton test, the field sweep's stopping test and the
+``NewtonStep`` steady test all measure in one weighted norm, with weight
+:math:`1 / (\mathrm{rtol}\,|y_i| + \tau_i)` on every unknown. The relative part
+is pointwise in every scheme; ``ErrorWeights`` chooses the absolute part
+:math:`\tau_i`, class by class:
+
+``AlgebraicMax`` (the default)
+   ``u`` and ``lambda`` at ``Absolute_tolerance``; ``sigma``, ``q`` and the
+   auxiliary variables at the larger of that and ``Relative_tolerance`` times
+   the variable's largest magnitude on the grid.
+``Pointwise``
+   ``Absolute_tolerance`` for everything.
+``AllMax``
+   ``AlgebraicMax``, with ``u`` and ``lambda`` floored the same way.
+``Derivative``
+   ``q`` held to what ``u``'s tolerance implies across the cell,
+   :math:`(\mathrm{rtol}\max|u| + \mathrm{atol}) / h`, and ``sigma`` to that
+   times :math:`\max|\sigma| / \max|q|`.
+``DerivativeLocal``
+   ``Derivative``, with ``sigma``'s tolerance propagated through the local
+   :math:`\partial\hat\sigma/\partial q` and :math:`\partial\hat\sigma/\partial u`
+   that the last Jacobian build recorded -- no extra physics call, and lagging
+   the state by however many steps ago that build was. Before the first build
+   it is ``Derivative``.
+``Hybrid``, ``HybridLocal``
+   The stricter, per cell, of ``Derivative`` (or ``DerivativeLocal``) and
+   ``AlgebraicMax``.
+
+``SuppressAlgebraicError``, below, is a separate key and composes with any of
+these.
+
+**Why the default is not** ``Pointwise``. A pointwise absolute tolerance holds
+``sigma`` and ``q``, wherever they pass near zero, to ``Absolute_tolerance`` in
+absolute terms. Next to a Dirichlet wall that goes wrong in a specific way: the
+Chebyshev nodes crowd against the wall, the diffusive mode there is stiff, and
+backward Euler puts a stiff component on its slow manifold with a lag of about
+:math:`h\,\mathrm{d}g/\mathrm{d}t`. The lag is small in ``u``, but ``q`` and
+``sigma`` are derivatives of it across the node spacing, and the weights demand
+near-``atol`` precision of them. IDA then reads as local error something that is
+constant while ``h`` is and jumps when ``h`` doubles: a step at ``h`` passes
+with ``dsm`` 0.003, the doubled attempt fails with 1.6, and the order never
+leaves one. Measured on the manufactured theta pinch at ``k = 5, 6`` with two
+field intervals per cell, ``rtol`` 1e-9: under ``Pointwise``, 5 runs in 80
+(10 ``rtol`` jitters of 1e-4, both field solves, two compilers) crawled at
+~25000 steps against ~200, under the exact field solve as well as the
+iterative one, at any ``FieldSolveTolerance``, and which runs crawled was set by
+round-off -- a different compiler or BLAS picked different ones. Under every
+other scheme, none did:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 12 16 50
+
+   * - ``ErrorWeights``
+     - crawls
+     - steps
+     - work against accuracy, regression configs
+   * - ``Pointwise``
+     - 5 / 80
+     - 175–260
+     - the baseline
+   * - ``AlgebraicMax``
+     - 0 / 80
+     - 111–132
+     - identical where nothing is near zero; better on ``AuxVarTest``,
+       ``AuxVarADTest``, ``MatTestAlpha``; 1.3–2.5x the error at matched cost on
+       ``ThetaPinch``; monotone in the tolerance everywhere
+   * - ``AllMax``
+     - 0 / 80
+     - 110–126
+     - worse on ``AuxVarTest`` (5x) and ``MatTest``
+   * - ``Derivative``
+     - 0 / 40
+     - 92–95
+     - best on ``ThetaPinch`` and ``AuxVarTest``; worse on ``LinearDiffusion``,
+       ``nonlin``, ``MatTest``, ``MatTestAlpha``; error *rises* 6x as
+       ``AuxVarADTest``'s tolerance tightens
+   * - ``DerivativeLocal``
+     - 0 / 80
+     - 88–93
+     - the best ``ThetaPinch`` point; local kappa helps where kappa varies
+       (``nonlin``, 3.5x), but still loses on the same four
+   * - ``Hybrid``, ``HybridLocal``
+     - 0 / 80
+     - 111–132
+     - as ``AlgebraicMax``, but not monotone on ``AuxVarTest``
+
+The regression column compares each scheme at a config's own tolerances and at
+ten times tighter against a run a thousand times tighter under ``Pointwise``,
+cost counted as residual evaluations plus twice the Jacobian builds; six
+configs gave usable references. ``AlgebraicMax`` is the default because it is
+the one scheme that ends the crawl without ever making a tolerance mean less.
+The ``Derivative`` family shows what is right about the wall layer -- ``q``'s
+tolerance follows from ``u``'s -- but :math:`\mathrm{tol}_u / h` is too loose in
+general, since on a diffusion problem ``q`` drives the flux that drives ``u``.
+``SuppressAlgebraicError``, measured on the same grid, also ends the crawl at a
+third of the steps, and stops controlling the error: tightening
+``AuxVarADTest``'s tolerance tenfold leaves its error where it was.
 
 Dropping the algebraic rows from the error test
 -----------------------------------------------

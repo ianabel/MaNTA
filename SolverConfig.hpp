@@ -56,6 +56,7 @@ struct SolverConfig
     double                   delta_t;
     double                   t_initial;
     double                   Relative_tolerance;
+    std::string              ErrorWeights;
     std::vector<double>      Absolute_tolerance;
     double                   MinStepSize;
     double                   initialTimestep;
@@ -134,10 +135,14 @@ struct SolverConfig
     // other three are plain solver options and go through applySolverConfig
     // like everything else.
     std::string              FieldModel;
+    // "coupled" or "consistent": also applied by runManta, which wraps the model
+    // in a FieldModelEquilibrium for the second.
+    std::string              FieldCoupling;
     std::string              FieldSolve;
     double                   FieldSolveTolerance;
     int                      FieldSolveMaxSweeps;
     int                      FieldSolveMaxAdjointSweeps;
+    double                   FieldSolveAdjointTolerance;
 
     // Presence, not value, carries the meaning for these two.
     //

@@ -10,6 +10,7 @@
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -301,6 +302,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(delta_t, double);
     READ(t_initial, double);
     READ(Relative_tolerance, double);
+    READ(ErrorWeights, std::string);
     READ(Absolute_tolerance, std::vector<double>);
     READ(MinStepSize, double);
     READ(initialTimestep, double);
@@ -356,10 +358,12 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
+    READ(FieldCoupling, std::string);
     READ(FieldSolve, std::string);
     READ(FieldSolveTolerance, double);
     READ(FieldSolveMaxSweeps, int);
     READ(FieldSolveMaxAdjointSweeps, int);
+    READ(FieldSolveAdjointTolerance, double);
 #undef READ
 
     // Those whose presence, rather than value, is the signal.
@@ -392,6 +396,10 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
+
+    if (c.FieldCoupling != "coupled" && c.FieldCoupling != "consistent")
+        throw std::invalid_argument("FieldCoupling must be \"coupled\" or \"consistent\"; got \"" +
+                                    c.FieldCoupling + "\".");
 
     // The alias machinery warns that the *name* changed. It cannot know that the
     // *mesh* changed too, and it did: High_Grid_Boundary spaced its boundary-layer
@@ -962,6 +970,20 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     // surfaces at once, where the same slip used to affect one.
     system.setOutputCadence(config.delta_t);
     system.setTolerances(config.Absolute_tolerance, config.Relative_tolerance);
+    {
+        using W = SystemSolver::ErrorWeights;
+        static const std::map<std::string, W> schemes{
+            {"Pointwise", W::Pointwise},       {"AlgebraicMax", W::AlgebraicMax},
+            {"AllMax", W::AllMax},             {"Derivative", W::Derivative},
+            {"DerivativeLocal", W::DerivativeLocal}, {"Hybrid", W::Hybrid},
+            {"HybridLocal", W::HybridLocal}};
+        auto it = schemes.find(config.ErrorWeights);
+        if (it == schemes.end())
+            throw std::invalid_argument("ErrorWeights must be one of Pointwise, AlgebraicMax, AllMax, Derivative, "
+                                        "DerivativeLocal, Hybrid or HybridLocal; got \"" +
+                                        config.ErrorWeights + "\".");
+        system.setErrorWeights(it->second);
+    }
     system.setTau(config.tau);
     system.setMaxPhysicsBatch(config.MaxPhysicsBatch);
 
@@ -1127,6 +1149,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     system.setFieldSolveTolerance(config.FieldSolveTolerance);
     system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
     system.setFieldSolveMaxAdjointSweeps(config.FieldSolveMaxAdjointSweeps);
+    system.setFieldSolveAdjointTolerance(config.FieldSolveAdjointTolerance);
 
     if (config.PseudoTransientInitialStep > 0.0)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);

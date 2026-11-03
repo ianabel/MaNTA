@@ -447,7 +447,8 @@ class ManufacturedGeometricDiffusion : public TransportSystem
 public:
     explicit ManufacturedGeometricDiffusion(M const &model_)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}}),
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true}),
           model(model_)
     {
     }
