@@ -475,30 +475,23 @@ jobs:
             eigen3-devel \
             netcdf-devel netcdf-cxx4-devel \
             blas-devel lapack-devel \
-            python3.14 python3.14-devel
+            python3-devel python3-pip
           # Diagnostics only -- which Eigen Fedora shipped is the interesting
           # part, and it moved header between 3.4 and 5.0. `|| true` because run
           # steps use `bash -e` and grep exits non-zero on no match, which would
           # fail the step over a log line.
           echo "--- versions ---"
           g++ --version | head -1
-          python3.14 --version
+          python3 --version
           grep -rhE 'define EIGEN_(WORLD|MAJOR|MINOR|PATCH)_VERSION' \
             /usr/include/eigen3/Eigen/src/Core/util/Macros.h \
             /usr/include/eigen3/Eigen/Version 2>/dev/null || true
 
       # The suites need the same packages the ubuntu legs install. This is the one
-      # leg where the interpreter is the image's rather than setup-python's, so a
-      # requirements.txt pin with no wheel for Fedora's Python fails here first.
-      # That is a real risk and it is deliberate: it is the same class of thing
-      # this job exists to find.
-      #
-      # The interpreter is Fedora's python3.14, not its default python3. Fedora 45
-      # made the default 3.15, for which numpy, scipy, matplotlib and jaxlib at the
-      # pinned versions publish no wheels; pip then builds scipy from source and
-      # fails on a missing OpenBLAS. Fedora packages 3.14 alongside, so this holds
-      # the leg on the newest Python the pins support. Move it to python3 when
-      # requirements.txt does.
+      # leg where the interpreter is the image's rather than setup-python's, so the
+      # Python version moves when Fedora's does -- and a requirements.txt pin with
+      # no wheel for that version fails here first. That is a real risk and it is
+      # deliberate: it is the same class of thing this job exists to find.
       - name: Install Python dependencies
         run: |
           # A venv rather than `pip install` into the image's Python. Fedora marks
@@ -506,7 +499,7 @@ jobs:
           # it fails outright unless overridden -- and a .venv in the repo root is
           # one of the two CMake looks for unprompted, so this is the
           # configuration a developer on this distro would have.
-          python3.14 -m venv .venv
+          python3 -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install -r requirements.txt
           .venv/bin/python --version
