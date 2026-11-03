@@ -249,9 +249,12 @@ BOOST_AUTO_TEST_CASE(a_tier_zero_theta_pinch_reaches_the_coupled_answer)
     BOOST_TEST_MESSAGE("tier 0 against coupled at t = 0.5: N " << dN << " relative, B " << dB
                                                                 << "; equilibrium solves "
                                                                 << tier0.sys->getEquilibriumSolves());
-    // Measured 8.8e-8 and 6.6e-9, at rtol 1e-6 / atol 1e-8.
-    BOOST_TEST(dN < 1e-6);
-    BOOST_TEST(dB < 1e-7);
+    // At rtol 1e-6 / atol 1e-8, measured 2.9e-6 and 1.1e-7 under the default
+    // ErrorWeights, 8.8e-8 and 6.6e-9 under Pointwise: integration error either
+    // way, and which is smaller is a matter of which steps each run happened to
+    // take.
+    BOOST_TEST(dN < 1e-5);
+    BOOST_TEST(dB < 1e-6);
     // Not vacuous: the field has left the vacuum, B = 1.
     BOOST_TEST((a.tail(5).array() - 1.0).abs().maxCoeff() > 1e-2);
     BOOST_TEST(tier0.sys->getFieldDOF() == 0);

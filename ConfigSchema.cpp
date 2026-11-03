@@ -82,6 +82,10 @@ const std::vector<Entry> &table()
         {"Absolute_tolerance", {}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{1e-3},
          "IDA absolute error tolerance; one value, or one per variable."},
+        {"ErrorWeights", {}, Type::String, Category::Solver, false, false, std::string{"AlgebraicMax"},
+         "How IDA's error weights hold each class of unknown: AlgebraicMax (sigma, q and aux "
+         "floored at rtol times their largest magnitude), Pointwise, AllMax, Derivative, "
+         "DerivativeLocal, Hybrid or HybridLocal. See docs; SuppressAlgebraicError is separate."},
         {"MinStepSize", {}, Type::Double, Category::Solver, false, false, 1e-7,
          "Smallest timestep IDA may take before giving up."},
         {"initialTimestep", {}, Type::Double, Category::Solver, false, false, 0.0,

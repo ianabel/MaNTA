@@ -180,6 +180,17 @@ Two costs, neither of them free:
 
 Runtime went from 0.07 s to 0.15 s.
 
+**`AuxVarADTest.ref.nc` was regenerated for the same reason, and its config
+tightened the same way.** It is the same problem written on the autodiff layer,
+and it ran at `1e-2` too. Its closed-form comparison is at the final time, where
+it is two orders inside the suite's tolerance, but the reference comparison is at
+every output, and at `t = 1` the `1e-2` answer was 1.46% from converged. Changing
+the default error weights to `AlgebraicMax` moved that answer to 0.49% from
+converged -- three times *closer* -- and failed the comparison at 1.95%. At
+`1e-6 / 1e-8` (and `MinStepSize = 1e-12`, without which it dies on the first
+step) both weight schemes are within 8.4e-7 of a rtol = 1e-10 run at every
+output, and the new reference is that run.
+
 Earlier references are kept out of the tree; recover one from
 `git show <commit>:Tests/RegressionTests/AuxVarTest.ref.nc` if a comparison ever
 needs repeating.

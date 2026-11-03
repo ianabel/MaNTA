@@ -56,6 +56,7 @@ struct SolverConfig
     double                   delta_t;
     double                   t_initial;
     double                   Relative_tolerance;
+    std::string              ErrorWeights;
     std::vector<double>      Absolute_tolerance;
     double                   MinStepSize;
     double                   initialTimestep;

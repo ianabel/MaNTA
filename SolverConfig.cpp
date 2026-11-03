@@ -10,6 +10,7 @@
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -301,6 +302,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(delta_t, double);
     READ(t_initial, double);
     READ(Relative_tolerance, double);
+    READ(ErrorWeights, std::string);
     READ(Absolute_tolerance, std::vector<double>);
     READ(MinStepSize, double);
     READ(initialTimestep, double);
@@ -968,6 +970,20 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     // surfaces at once, where the same slip used to affect one.
     system.setOutputCadence(config.delta_t);
     system.setTolerances(config.Absolute_tolerance, config.Relative_tolerance);
+    {
+        using W = SystemSolver::ErrorWeights;
+        static const std::map<std::string, W> schemes{
+            {"Pointwise", W::Pointwise},       {"AlgebraicMax", W::AlgebraicMax},
+            {"AllMax", W::AllMax},             {"Derivative", W::Derivative},
+            {"DerivativeLocal", W::DerivativeLocal}, {"Hybrid", W::Hybrid},
+            {"HybridLocal", W::HybridLocal}};
+        auto it = schemes.find(config.ErrorWeights);
+        if (it == schemes.end())
+            throw std::invalid_argument("ErrorWeights must be one of Pointwise, AlgebraicMax, AllMax, Derivative, "
+                                        "DerivativeLocal, Hybrid or HybridLocal; got \"" +
+                                        config.ErrorWeights + "\".");
+        system.setErrorWeights(it->second);
+    }
     system.setTau(config.tau);
     system.setMaxPhysicsBatch(config.MaxPhysicsBatch);
 

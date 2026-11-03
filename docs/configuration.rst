@@ -280,7 +280,15 @@ Time integration
    * - ``Absolute_tolerance``
      - ``1e-3``
      - IDA's absolute tolerance. Either a single value or an array with one
-       entry per variable.
+       entry per variable; any other length is refused.
+   * - ``ErrorWeights``
+     - ``"AlgebraicMax"``
+     - How that absolute tolerance is applied to each class of unknown in IDA's
+       error weights: ``AlgebraicMax`` (``sigma``, ``q`` and the auxiliary
+       variables floored at ``Relative_tolerance`` times their largest
+       magnitude on the grid), ``Pointwise``, ``AllMax``, ``Derivative``,
+       ``DerivativeLocal``, ``Hybrid`` or ``HybridLocal``. See
+       :ref:`error-weights`.
    * - ``MinStepSize``
      - ``1e-7``
      - Steps smaller than this end the run.

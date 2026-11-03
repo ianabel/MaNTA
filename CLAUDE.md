@@ -587,6 +587,22 @@ Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
 
+**IDA's error weights are `ErrorWeights = "AlgebraicMax"` by default, not
+pointwise**, and that is a measurement (`docs/running.rst`, "Error weights", has
+the table). `getErrorWeights` gives every unknown `1/(rtol |y_i| + tau_i)`;
+the default floors `tau` for sigma, q and aux at `rtol` times the variable's
+largest magnitude on the grid, where `Pointwise` uses `atol` everywhere. Under
+`Pointwise`, sigma and q next to a Dirichlet wall -- crowded Chebyshev nodes, a
+stiff diffusive mode, backward Euler lagging its slow manifold by ~h dg/dt --
+were held to ~atol absolutely, and IDA read that lag as local error that jumps
+when h doubles: an order-one limit cycle, ~25000 steps for ~200, on the coupled
+theta pinch, under *both* field solves and at *any* FieldSolveTolerance. Which
+runs fell in was set by round-off, so it showed up as a CI leg timing out on
+one compiler and BLAS and not another -- and a green run proved nothing. The
+weights are also the norm of IDA's Newton test, the field sweep's stopping test
+and the NewtonStep steady test, so a change here moves all four.
+`SuppressAlgebraicError` is separate and composes with any scheme.
+
 **The three can be run again on the same object**, and a reused solver gives the
 same answer as a fresh one *bit for bit*. That is pinned by
 `a_second_integration_on_one_solver_matches_a_fresh_one`, at exactly zero

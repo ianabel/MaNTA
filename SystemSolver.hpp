@@ -836,10 +836,59 @@ class SystemSolver
             min_step_size = dt_min;
         };
 
+        // The absolute part of IDA's error weights, class by class; the
+        // relative part is rtol |y_i| pointwise in every scheme. These are the
+        // weights of IDA's error test *and* its Newton test, of the field
+        // sweep's stopping test and of the NewtonStep steady test.
+        //
+        //   Pointwise          atol for every unknown -- the weights before
+        //                      this option existed.
+        //   AlgebraicMax       sigma, q and aux floored at rtol times that
+        //                      variable's largest magnitude on the grid; u and
+        //                      lambda as Pointwise. The default.
+        //   AllMax             AlgebraicMax, and u and lambda floored too.
+        //   Derivative         q held to u's tolerance over the cell width,
+        //                      sigma to q's times max|sigma| / max|q|.
+        //   DerivativeLocal    Derivative with sigma's from the last Jacobian
+        //                      build's local dsigma/dq and dsigma/du.
+        //   Hybrid(Local)      the stricter of Derivative(Local) and AlgebraicMax.
+        //
+        // Taking the algebraic unknowns out of the error test altogether is the
+        // separate, orthogonal setSuppressAlgebraicError; it composes with any
+        // of these.
+        //
+        // Why AlgebraicMax: pointwise weights hold sigma and q, wherever they
+        // pass near zero, to ~atol absolutely, and next to a Dirichlet wall --
+        // where the Chebyshev nodes crowd and the diffusive mode is stiff --
+        // backward Euler's lag behind the slow manifold, ~ h dg/dt, shows up in
+        // them amplified by the node spacing. IDA reads that as local error that
+        // jumps when h doubles and holds order one indefinitely: the "crawl" on
+        // the coupled theta pinch, ~25000 steps for ~200, under either field
+        // solve and at any FieldSolveTolerance. docs/running.rst has the study.
+        enum class ErrorWeights
+        {
+            Pointwise,
+            AlgebraicMax,
+            AllMax,
+            Derivative,
+            DerivativeLocal,
+            Hybrid,
+            HybridLocal
+        };
+        void setErrorWeights(ErrorWeights w) { errorWeights = w; };
+        ErrorWeights getErrorWeightScheme() const { return errorWeights; };
+
         void setTolerances(std::vector<double> a, double r)
         {
             if (r <= 0)
                 throw std::logic_error("Cannot set tolerance to non-positive value");
+            // One absolute tolerance for every variable, or one each. Any other
+            // length used to fall through getErrorWeights to a hard-coded 1e-8,
+            // silently -- a far tighter solve than was asked for.
+            if (a.size() != 1 && a.size() != static_cast<size_t>(nVars))
+                throw std::invalid_argument("Absolute_tolerance has " + std::to_string(a.size()) +
+                                            " entries; it takes one, or one per variable (" +
+                                            std::to_string(nVars) + ").");
             atol = a;
             rtol = r;
         };
@@ -2606,6 +2655,7 @@ class SystemSolver
         // test fixtures that build a Jacobian directly -- still has error weights.
         double rtol = 1e-3;
         std::vector<double> atol{1e-3};
+        ErrorWeights errorWeights = ErrorWeights::AlgebraicMax;
 
         NetCDFIO nc_output;
         NetCDFIO restart_file;

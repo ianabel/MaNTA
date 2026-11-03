@@ -293,6 +293,10 @@ BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_wit
     TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
     SystemSolver sys(grid, 1, &problem);
     BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative));
+
+    // And the error weights: the schema's default name is the solver's own.
+    BOOST_TEST(c.ErrorWeights == "AlgebraicMax");
+    BOOST_TEST((sys.getErrorWeightScheme() == SystemSolver::ErrorWeights::AlgebraicMax));
     BOOST_TEST(sys.getFieldSolveTolerance() == 1e-4);
     BOOST_TEST(sys.getFieldSolveAdjointTolerance() == 1e-8);
     BOOST_TEST(sys.getFieldSolveMaxSweeps() == 20);
@@ -367,6 +371,28 @@ BOOST_AUTO_TEST_CASE(estimate_discretisation_error_reaches_the_solver_and_what_i
         SystemSolver other(grid, 1, &problem);
         BOOST_CHECK_THROW(applySolverConfig(load(minimal + extra), other), std::invalid_argument);
     }
+}
+
+BOOST_AUTO_TEST_CASE(every_error_weight_scheme_reaches_the_solver_by_name)
+{
+    using W = SystemSolver::ErrorWeights;
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    for (auto [name, scheme] : {std::pair<char const *, W>{"Pointwise", W::Pointwise},
+                                {"AlgebraicMax", W::AlgebraicMax},
+                                {"AllMax", W::AllMax},
+                                {"Derivative", W::Derivative},
+                                {"DerivativeLocal", W::DerivativeLocal},
+                                {"Hybrid", W::Hybrid},
+                                {"HybridLocal", W::HybridLocal}})
+    {
+        SystemSolver sys(grid, 1, &problem);
+        applySolverConfig(load(minimal + "ErrorWeights = \"" + name + "\"\n"), sys);
+        BOOST_TEST((sys.getErrorWeightScheme() == scheme), name);
+    }
+    SystemSolver other(grid, 1, &problem);
+    BOOST_CHECK_THROW(applySolverConfig(load(minimal + "ErrorWeights = \"Pointwize\"\n"), other),
+                      std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(the_objective_tolerances_reach_the_solver_from_either_source)

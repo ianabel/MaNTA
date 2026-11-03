@@ -5190,51 +5190,110 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
     std::println(out, ""); // Two blank lines needed to make gnuplot happy
 }
 
+// See the ErrorWeights declaration for what each scheme is, and
+// docs/running.rst ("Error weights") for the measurements that chose the
+// default. The relative part, rtol |y_i|, is pointwise in every scheme; what
+// differs is the absolute part each class of unknown is held to.
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 {
     DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux, nField);
     DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux, nField);
+
+    using W = ErrorWeights;
+    const W scheme = errorWeights;
+    const bool derived = scheme == W::Derivative || scheme == W::DerivativeLocal || scheme == W::Hybrid ||
+                         scheme == W::HybridLocal;
+    const bool hybrid = scheme == W::Hybrid || scheme == W::HybridLocal;
+    // sigma, q and aux floored at rtol times their largest magnitude on the
+    // grid; AllMax floors u and lambda the same way.
+    const bool floorAlgebraic = scheme == W::AlgebraicMax || scheme == W::AllMax || derived;
+    const bool floorAll = scheme == W::AllMax;
+    // The local kappa is the last Jacobian build's dsigma/dq and dsigma/du at
+    // the physics nodes, so it costs no physics call. Before the first build
+    // there is none, and DerivativeLocal falls back to Derivative's ratio.
+    const bool localKappa = (scheme == W::DerivativeLocal || scheme == W::HybridLocal) &&
+                            jacobianDerivatives.valid && jacobianDerivatives.dSigma.size() == nVars;
+    const Index nPhys = physicsNodesPerCell();
+
+    auto atolOf = [&](Index v) { return atol.size() == static_cast<size_t>(nVars) ? atol[v] : atol[0]; };
+
+    std::vector<double> maxU(nVars, 0.0), maxQ(nVars, 0.0), maxS(nVars, 0.0), maxL(nVars, 0.0), maxA(nAux, 0.0);
+    if (floorAlgebraic)
+    {
+        for (Index i = 0; i < nCells; ++i)
+        {
+            for (Index v = 0; v < nVars; ++v)
+            {
+                maxU[v] = std::max(maxU[v], y.u(v).getCoeff(i).second.cwiseAbs().maxCoeff());
+                maxQ[v] = std::max(maxQ[v], y.q(v).getCoeff(i).second.cwiseAbs().maxCoeff());
+                maxS[v] = std::max(maxS[v], y.sigma(v).getCoeff(i).second.cwiseAbs().maxCoeff());
+            }
+            for (Index a = 0; a < nAux; ++a)
+                maxA[a] = std::max(maxA[a], y.Aux(a).getCoeff(i).second.cwiseAbs().maxCoeff());
+        }
+        for (Index v = 0; v < nVars; ++v)
+            maxL[v] = y.lambda(v).cwiseAbs().maxCoeff();
+    }
+    auto floored = [&](double absTol, double scale, bool on) { return on ? std::max(absTol, rtol * scale) : absTol; };
+
     for (Index i = 0; i < nCells; ++i)
     {
-        double absTol = 1e-8;
+        // The aux rows take the last variable's absolute tolerance, as they
+        // always have; with one atol, which is every config in the tree, that
+        // is atol[0].
+        double absTol = atolOf(nVars - 1);
         for (Index v = 0; v < nVars; ++v)
         {
-            if (atol.size() == 1)
+            absTol = atolOf(v);
+            double tolU = floored(absTol, maxU[v], floorAll);
+            double tolQ = floored(absTol, maxQ[v], floorAlgebraic);
+            double tolS = floored(absTol, maxS[v], floorAlgebraic);
+
+            if (derived)
             {
-                absTol = atol[0];
-            }
-            else if (atol.size() == nVars)
-            {
-                absTol = atol[v];
+                // q held to what u's tolerance implies across this cell, and
+                // sigma to q's times kappa: the run's sigma/q scale, or locally
+                // the propagation of u's and q's tolerances through the last
+                // build's dsigma/du and dsigma/dq, at the worst node of the cell.
+                const double h = grid[i].h();
+                const double scaleU = rtol * maxU[v] + absTol;
+                double dQ = scaleU / h;
+                double dS = maxQ[v] > 0.0 ? dQ * maxS[v] / maxQ[v] : dQ;
+                if (localKappa)
+                {
+                    GlobalState const &dSigma = jacobianDerivatives.dSigma[v];
+                    double worst = 0.0;
+                    for (Index j = 0; j < nPhys; ++j)
+                    {
+                        const Index node = i * nPhys + j;
+                        double t = 0.0;
+                        for (Index w = 0; w < nVars; ++w)
+                        {
+                            const double scaleUw = rtol * maxU[w] + atolOf(w);
+                            t += std::abs(dSigma.Derivative()(w, node)) * (scaleUw / h) +
+                                 std::abs(dSigma.Variable()(w, node)) * scaleUw;
+                        }
+                        worst = std::max(worst, t);
+                    }
+                    dS = std::max(worst, absTol);
+                }
+                // The hybrids take the stricter of this and AlgebraicMax's floor.
+                tolQ = hybrid ? std::min(dQ, tolQ) : dQ;
+                tolS = hybrid ? std::min(dS, tolS) : dS;
             }
 
-            ewt.u(v).getCoeff(i).second = 1.0 / (rtol * abs(y.u(v).getCoeff(i).second.array()) + absTol);
-            ewt.q(v).getCoeff(i).second = 1.0 / (rtol * abs(y.q(v).getCoeff(i).second.array()) + absTol);
-            ewt.sigma(v).getCoeff(i).second = 1.0 / (rtol * abs(y.sigma(v).getCoeff(i).second.array()) + absTol);
+            ewt.u(v).getCoeff(i).second = 1.0 / (rtol * abs(y.u(v).getCoeff(i).second.array()) + tolU);
+            ewt.q(v).getCoeff(i).second = 1.0 / (rtol * abs(y.q(v).getCoeff(i).second.array()) + tolQ);
+            ewt.sigma(v).getCoeff(i).second = 1.0 / (rtol * abs(y.sigma(v).getCoeff(i).second.array()) + tolS);
         }
 
         for (Index a = 0; a < nAux; ++a)
-        {
-
-            ewt.Aux(a).getCoeff(i).second = 1.0 / (rtol * abs(y.Aux(a).getCoeff(i).second.array()) + absTol);
-        }
+            ewt.Aux(a).getCoeff(i).second =
+                1.0 / (rtol * abs(y.Aux(a).getCoeff(i).second.array()) + floored(absTol, maxA[a], floorAlgebraic));
     }
 
     for (Index v = 0; v < nVars; ++v)
-    {
-
-        double absTol = 1e-8;
-
-        if (atol.size() == 1)
-        {
-            absTol = atol[0];
-        }
-        else if (atol.size() == nVars)
-        {
-            absTol = atol[v];
-        }
-        ewt.lambda(v) = 1.0 / (rtol * abs(y.lambda(v).array()) + absTol);
-    }
+        ewt.lambda(v) = 1.0 / (rtol * abs(y.lambda(v).array()) + floored(atolOf(v), maxL[v], floorAll));
 
     for (Index i = 0; i < nScalars; ++i)
     {
