@@ -346,15 +346,27 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_does_not_stall_ida)
 {
     const Errors iterative = solveOnce(3, 8, 1, SystemSolver::FieldSolveMode::Iterative);
     const Errors exact = solveOnce(3, 8, 1, SystemSolver::FieldSolveMode::Exact);
+    const PinchExact pinch;
+    const double normN = mms::l2ErrorAgainst([](double) { return 0.0; },
+                                             [&](double x, double t) { return pinch.N(x, t); },
+                                             Grid(0.0, 1.0, 8), tFinal);
     BOOST_TEST_MESSAGE(std::format("k = 3, 8 cells: iterative {} steps, N error {:.6e}; exact {} steps, "
-                                   "N error {:.6e}",
-                                   iterative.steps, iterative.N, exact.steps, exact.N));
+                                   "N error {:.6e}; they differ by {:.2e} against rtol ||N|| {:.2e}",
+                                   iterative.steps, iterative.N, exact.steps, exact.N,
+                                   std::abs(iterative.N - exact.N), mms::Tolerances{}.relative * normN));
     BOOST_TEST(iterative.fallbacks == 0);
     // Step sequences at these tolerances move by tens of percent under any
     // perturbation of the corrections -- 201 to 426 over the variants of the
     // test that were measured -- while the stall was a factor of a hundred.
     BOOST_TEST(iterative.steps < 2 * exact.steps);
-    BOOST_TEST(std::abs(iterative.N - exact.N) <= 1e-6 * exact.N);
+    // Both runs are IDA solutions at rtol 1e-9, so they agree to the run's
+    // integration error and no better, and round-off moves that as much as the
+    // field solve does. Measured, against an rtol ||N|| of 4.4e-9: 3e-11 to
+    // 6e-11 on g++-15 and g++-16 with three BLAS and on clang++-19 against
+    // libstdc++ 16, 2e-10 to 4e-10 on CI's clang++-19 to 21 against libstdc++
+    // 14; two *exact* runs on different BLAS already differ by 3e-11. The N
+    // error itself is 7.6e-5, spatial, and the same in both.
+    BOOST_TEST(std::abs(iterative.N - exact.N) <= mms::Tolerances{}.relative * normN);
 }
 
 // Every local order, not a fitted slope, with the measured table in the
