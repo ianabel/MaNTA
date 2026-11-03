@@ -96,6 +96,13 @@ The geometry slots are **not** unknowns. They are a function of
 same standing as :math:`\hat\sigma`. A physics case reads slot ``s`` through
 ``State::geom(s)``.
 
+A field model can be attached only to a case whose spec sets
+``readsGeometry = true`` (see :ref:`geometry-derivatives`). ``setFieldModel``
+refuses any other, naming the model: a field that cannot reach the solution
+would be solved for at every Newton iteration and change nothing. With no field
+model attached the declaration changes nothing — no geometry rows, no geometry
+evaluation — which is what keeps every uncoupled run bit for bit what it was.
+
 Writing a field model
 ---------------------
 
@@ -237,13 +244,81 @@ A run selects one by name:
    [configuration]
    FieldModel = "Equilibrium"
 
-.. note::
+The theta pinch
+~~~~~~~~~~~~~~~
 
-   **No field model is registered in this tree.** The two that exist
-   (``ManufacturedField`` and ``ManufacturedFieldVector``) are test fixtures
-   under ``Tests/UnitTests`` and are deliberately unregistered, so there is
-   nothing for ``FieldModel`` to name in the shipped binary yet. The whole
-   coupling is exercised by the unit suite instead; see ``Tests/README.md``.
+``ThetaPinchEquilibrium`` is the field model registered in this tree, and
+``ThetaPinchDiffusion`` the transport case written against it. Together they
+are a diamagnetic theta pinch in a flux-conserving wall:
+``docs/superpowers/specs/2026-10-19-theta-pinch-field-model-design.md`` is the
+design.
+
+* The transport label is the normalised axial flux :math:`x = \Phi/\Phi_a`, so
+  surfaces move in :math:`r` while their labels do not, and the equilibrium
+  reaches the transport purely as metric coefficients on a fixed grid.
+* Force balance is :math:`p + B^2 = C` on every surface (units with
+  :math:`2\mu_0 = 1`, so :math:`p` is the local beta), and the wall fixes the
+  area it encloses, :math:`\int_0^1 V' \,\mathrm{d}x = \pi a^2`. That
+  integral is what determines :math:`C`.
+* The unknowns are :math:`V' = \mathrm{d}A/\mathrm{d}x` as a :math:`C^2` cubic
+  B-spline whose knots are the transport mesh's faces, each cell split into
+  ``IntervalsPerCell`` equal intervals (default 1), plus :math:`C`; the rows are
+  Galerkin against the same splines. The geometry slots are :math:`V'`,
+  :math:`\mathrm{d}V'/\mathrm{d}x`, :math:`\langle|\nabla x|^2\rangle` and
+  :math:`B`.
+* The pressure crosses as an auxiliary variable of the transport case, named
+  by index (``PressureAux``), so the model knows nothing else about the
+  transport. The case evolves :math:`N = V' n`, which keeps continuity exactly
+  conservative while :math:`V'` moves.
+* The block is banded with a one-row, one-column border, and the model
+  overrides all four ``B`` operations with Eigen's ``SparseLU``. ``nField`` is
+  :math:`n_\text{cells} \times` ``IntervalsPerCell`` :math:`+ 4`: independent
+  of the transport's degree, so a restart onto another degree carries
+  :math:`\psi` verbatim, but not of its mesh, so a restart onto another mesh is
+  refused by name.
+
+**Why the knots follow the transport mesh, and why the spline stays smooth
+across it.** The pressure arrives as the transport's piecewise polynomial
+:math:`p_h`, which the rows integrate exactly cell by cell, and :math:`p_h`
+jumps by :math:`O(h^{k+1})` at every transport face. A spline much finer than
+the mesh resolves those jumps, which puts spikes of about the jump over the knot
+spacing into :math:`\mathrm{d}V'/\mathrm{d}x` at the transport nodes beside
+each face -- and :math:`\mathrm{d}V'/\mathrm{d}x` goes straight into the flux.
+Measured on the manufactured theta pinch (``ThetaPinchMMSTests.cpp``):
+
+* one or two intervals per cell converge at :math:`k+1` in :math:`N` for
+  :math:`k = 1, 2, 3`, and four per cell at :math:`k = 1` drops to order
+  :math:`k`;
+* IDA stalls at order one -- under ``FieldSolve = exact`` as much as
+  ``iterative`` -- at two per cell on 64 cells at :math:`k = 3`, and at sixteen
+  per cell on 8 at :math:`k = 6`; at one per cell the exact solve never has;
+* letting :math:`V'` break where :math:`p_h` does (repeated knots at the faces)
+  is worse at every :math:`k`, about order :math:`k`: :math:`V'` then inherits
+  :math:`p_h`'s derivative error, :math:`O(h^k)`, cell by cell, where a smooth
+  spline averages it away.
+
+So one interval per cell is the default, and ``IntervalsPerCell`` is for a
+high-degree run in which the spline's own :math:`O(h^4)` is what limits the
+answer.
+
+.. code-block:: toml
+
+   [configuration]
+   TransportSystem = "ThetaPinchDiffusion"
+   FieldModel = "ThetaPinchEquilibrium"
+
+   [ThetaPinchEquilibrium]
+   IntervalsPerCell = 1  # nField = cells * IntervalsPerCell + 4
+   PressureAux = 0
+
+   [ThetaPinchDiffusion]
+   Temperature = 0.3
+   D0 = 0.5
+   Gamma = 2.0           # D = D0 (Bref / B)^Gamma
+
+The two manufactured models under ``Tests/UnitTests`` (``ManufacturedField``
+and ``ManufacturedFieldVector``) remain deliberately unregistered: they exist to
+be checked against closed forms, not to be run.
 
 .. _field-solve:
 
@@ -262,8 +337,43 @@ How the coupled Jacobian is solved
 
 ``iterative`` (the default)
    Block Gauss–Seidel between the transport and field blocks, with Irons–Tuck
-   acceleration, at one transport solve per sweep. It stops once the relative
-   change in :math:`\psi` is below ``FieldSolveTolerance``.
+   acceleration, at one transport solve per sweep. It stops once a sweep changes
+   the whole increment -- transport and field together -- by less than
+   ``FieldSolveTolerance`` (default :math:`10^{-4}`) in the run's error-weighted
+   RMS norm, the one IDA's tests are in, where its Newton iteration stops at
+   0.33; or by less than a millionth of the increment, when that is larger.
+
+**What that test is measured in, and against what, were both settled by what
+each costs IDA**, on the manufactured theta pinch at :math:`10^{-9}/10^{-11}`
+and on the theta pinch in ``ThetaPinchRunTests.cpp`` at
+:math:`10^{-6}/10^{-8}`.
+
+* *In the run's weights, over the whole increment.* A relative 2-norm test on
+  :math:`\psi` alone leaves an error in the transport block, through
+  :math:`A^{-1} A_1 \delta\psi`, that is negligible in the 2-norm and not in
+  IDA's: :math:`\sigma` and :math:`q` near the axis sit near zero, where the
+  weights are about ``1/atol``. Newton then converges only linearly, the
+  leftover lands in IDA's local error estimate, and it holds order one at a
+  tiny step: the manufactured theta pinch at :math:`k = 3`, 8 cells and
+  :math:`10^{-9}/10^{-11}` took more than 20000 steps against the exact solve's
+  213, and tightening that test to :math:`10^{-11}` did not cure it.
+* *Absolute, and well inside Newton's own tolerance.* IDA estimates Newton's
+  rate as :math:`\|\delta_m\| / \|\delta_0\|` in the same norm, fails a step
+  above 0.9, and accepts a corrector after one iteration on the strength of the
+  last rate, so the solve's error has to be small against a late update and
+  against the first. At :math:`10^{-2}` the run test took 658 steps against the
+  exact solve's 166. A bound relative to the increment does not fix that: at
+  :math:`10^{-3}` of the increment a first update of size ~2 carries an error of
+  :math:`2\times10^{-3}`, and :math:`k = 4` on 8 cells held order one for 29000
+  steps against 214. At :math:`10^{-4}` absolute every case measured takes steps
+  comparable to the exact solve's -- 166 against 166, 221 against 213, 278
+  against 214 -- with the same answers.
+* *...or a millionth of the increment.* ``IDACalcIC``'s first step, at
+  :math:`c_j \sim 10^9`, has an increment of about :math:`4\times10^8`
+  error-weight units, where :math:`10^{-4}` is :math:`10^{-13}` of it and
+  twenty sweeps cannot reach it: every run escalated to the exact solve exactly
+  once. The relative arm governs only above 100 units, where an error of
+  :math:`10^{-6}` relative moves Newton's rate estimate by nothing it can see.
 
 .. important::
 
@@ -280,13 +390,58 @@ The break-even is
    \#\text{sweeps} < \texttt{nField} + 1
 
 because a sweep costs one transport solve and the exact solve costs
-:math:`\texttt{nField}+1`, and **no fixture in this tree is on the winning side
-of it**: iterative is about 1.5× more expensive than exact at
-:math:`\texttt{nField} = 1` and 2.2–6.3× at :math:`\texttt{nField} = 5`, for the
-same answer. The iterative path is a bet on the regime this feature exists for,
-:math:`N_\text{magnetics} \gg N_\text{HDG}`, where the exact solve's
-:math:`\texttt{nField}+1` transport solves and its :math:`O(\texttt{nField}^3)`
-dense factorisation are hopeless. Nothing in the tree exercises that regime yet.
+:math:`\texttt{nField}+1`, plus an :math:`O(\texttt{nField}^3)` dense
+factorisation of its Schur complement. Which side of it a problem is on is a
+property of the coupling, and the tree has both:
+
+* The manufactured fixtures, with :math:`\texttt{nField}` of 1 and 5, are on
+  the losing side: they run 2.0–2.8 sweeps per Jacobian solve against an
+  :math:`\texttt{nField}+1` of 2 to 6.
+* The theta pinch is on the winning side at every resolution measured, because
+  its sweep contracts strongly (spectral radius 0.10–0.19 at every
+  :math:`c_j`) and takes about 3.7 sweeps per Jacobian solve whatever
+  :math:`\texttt{nField}` is. Its field unknowns follow the transport mesh, so
+  :math:`\texttt{nField}` grows with the cell count, and the exact solve's
+  :math:`\texttt{nField}+1` transport solves grow with it. ``ThetaPinch.conf``
+  at :math:`k = 4` and one interval per cell, one BLAS thread, best of three:
+
+  .. list-table::
+     :header-rows: 1
+
+     * - cells
+       - ``nField``
+       - ``exact``
+       - ``iterative``
+       - speed-up
+     * - 8
+       - 12
+       - 151 ms
+       - 103 ms
+       - 1.5×
+     * - 32
+       - 36
+       - 1288 ms
+       - 338 ms
+       - 3.8×
+     * - 128
+       - 132
+       - 24553 ms
+       - 2076 ms
+       - 12×
+
+  with the same step sequence in both modes and no fallbacks. The exact path
+  costs :math:`O(n_\text{cells}^2)` per Jacobian solve and the sweep
+  :math:`O(n_\text{cells})`, so the gap widens with the mesh.
+
+The Irons–Tuck step extrapolates along the last increment, which is exact once
+the sweep has settled into its dominant eigendirection and unjustified before.
+A strongly non-normal iteration matrix can amplify and turn an increment several
+times over before contracting -- the theta pinch's adjoint sweep grows its first
+increment tenfold, at a cosine of :math:`-0.27` to the one before, while its
+spectral radius is 0.14 -- so the step is taken only when two consecutive
+increments are aligned to :math:`|\cos| \ge 0.9`, and the plain sweep
+otherwise. The divergent couplings the acceleration exists for give
+:math:`|\cos| > 0.99`.
 
 Adjoints
 --------
@@ -305,9 +460,10 @@ accommodated. ``FieldSolveMaxAdjointSweeps`` is separate from
 ``FieldSolveMaxSweeps`` and defaults larger — 100 against 20 — because the
 adjoint always runs at :math:`c_j = 0`, where the coupling is stiffest.
 
-``FieldSolveTolerance``, though, is shared, and it does not mean the same thing
-in the two directions. Forward it bounds the relative *change* in :math:`\psi`
-between sweeps; here it bounds a relative *backward error*. The field row above
+The tolerance is separate too, ``FieldSolveAdjointTolerance`` (default
+:math:`10^{-8}`), because the two directions measure different things. Forward
+there is IDA's error test to measure against; here there is a gradient and no
+error test, and the tolerance bounds a relative *backward error*. The field row above
 holds identically at every iterate, so the residual of the pair the sweep
 returns is exactly :math:`A_2^T \, \delta z_\psi` in the first row and nothing in
 the second — which makes :math:`\|A_2^T \delta z_\psi\|`, compared against the
@@ -317,17 +473,101 @@ it. That derivation is why the iterate *accepted* has to be the unaccelerated
 field row off by :math:`B^T \mu \, \delta`, and the stopping test silently
 becomes an estimate.
 
-Two limits are structural rather than untested, and both are zero today by
-construction rather than by assumption:
+**An objective may read the geometry.** :math:`\psi` reaches nothing outside
+the field rows except through the geometry slots, so the explicit share of
+:math:`G = \sum_j w_j\, g(\text{geom}(\psi, x_j))` is
 
-* **An objective whose integrand reads ``State::geom`` directly loses its
-  :math:`\mathrm{d}G/\mathrm{d}\psi` term.** ``AdjointProblem`` reports
-  :math:`\partial g/\partial u`, :math:`\partial q`, :math:`\partial\sigma` and
-  :math:`\partial\phi`, and geometry is not among them.
-* **A field model cannot depend on an adjoint parameter**, so
-  :math:`\partial R/\partial p` is zero.
+.. math::
 
-Both are recorded in ``TODO`` and beside ``G_field`` in ``SystemSolver.hpp``.
+   \frac{\partial G}{\partial \psi_m} = \sum_j w_j \sum_s
+     \left(\frac{\partial g}{\partial g_s}\right)_j
+     \frac{\partial g_s}{\partial \psi_m}(x_j)
+
+over the nodes :math:`G` is summed on, with the weights it is summed with. An
+objective reports :math:`\partial g/\partial g_s` pointwise, through
+``dgFn_dgeom`` or the geometry rows of ``dg``'s output -- the solver owns the
+weights and ``dGeometry_dpsi``, so a case reports a derivative of :math:`g` and
+never of :math:`G`. An objective that reads no geometry leaves them zero, which
+is the right answer. ``AutodiffAdjointProblem::addGWithGeometry`` takes an
+objective of :math:`(x, u, q, \sigma, \phi, \text{geom})` and differentiates
+it for itself.
+
+On a coupled run the solver evaluates :math:`G`, and its explicit
+:math:`\partial G/\partial p`, on its own geometry-filled physics-node states
+(``AdjointProblem::GFnAtNodes`` and ``dGFndpAtNodes``), since nothing else can
+fill their geometry rows. The objective estimate and the ``"Objective"`` steady
+test carry :math:`G_\psi \cdot \delta\psi` beside the cells' and the
+scalars' shares.
+
+One limit is structural rather than untested: **a field model cannot depend on
+an adjoint parameter**, so :math:`\partial R/\partial p` is zero because there
+is no hook a model could fill. It is recorded in ``TODO``.
+
+.. _field-tier-0:
+
+A field model as a black box
+----------------------------
+
+``FieldCoupling = "consistent"`` runs a model without differentiating through
+it. What the transport needs from a field is one map, from the transport state
+to the geometry at the physics nodes, and an equilibrium code driven as a black
+box can supply that and nothing more: it has no residual in MaNTA's form and no
+derivatives. Such a model derives from ``EquilibriumModel``
+(``EquilibriumModel.hpp``) and supplies two things:
+
+.. code-block:: cpp
+
+   std::unique_ptr<Equilibrium> Solve(GlobalState const &states,
+                                      std::vector<Position> const &points,
+                                      Vector const &weights, Time t,
+                                      Equilibrium const *warm);
+   void Geometry(MatrixRef g, Equilibrium const &e,
+                 std::vector<Position> const &points);
+
+``Equilibrium`` is the model's own, opaque to the solver: a spline, a set of
+Fourier coefficients, a handle on a file. ``Solve`` is handed the transport
+state at the basis nodes, exactly as a field model's residual is, and ``warm``
+is its own last answer in this run. ``Geometry`` then gives the slots at
+whichever points the physics is about to be evaluated at, columns of ``g``.
+
+The solver holds the answer as a **cache, not as unknowns**:
+
+* Nothing joins the solution vector. The layout, the error weights and IDA's
+  Newton norms are the uncoupled run's, and the restart file's ``nField`` is 0.
+* The cache is **keyed on the transport state, byte for byte**, and on the
+  time. A residual evaluated again at the same state -- KINSOL's merit
+  function, a Jacobian build at the last residual's state -- costs no ``Solve``;
+  any other state, however close, is a new one. The trace values are not part of
+  the key, since a model is never handed them.
+* The last equilibrium is the next ``Solve``'s warm start, and is **dropped at
+  the start of every run**, with ``resetForRun`` called, so a solver reused for
+  a second run starts from the same cold state as a fresh one.
+* The **Jacobian carries no coupling**: the transport derivatives are taken at
+  the geometry of the build's state, held fixed. Newton therefore converges
+  linearly in the coupling rather than quadratically, which costs IDA steps
+  and residual evaluations -- see the measurements below.
+* ``initialize()`` hands the model a thousandth of the run's ``rtol`` and
+  smallest ``atol`` through ``setTolerances``. An equilibrium converged no
+  tighter than its own looser tolerance puts that error into every residual,
+  where IDA reads it as local error; a model that cannot meet them returns
+  ``false`` and is warned about, by name.
+* The geometry slots are written to the model's output group at every slice,
+  from the cached equilibrium at the slice's state.
+* **No adjoint** is solved through it, and a run asking for one -- or for the
+  ``"Objective"`` steady test, which needs one -- is refused. A gradient with
+  the field frozen would be wrong by the field's share: a third of the
+  closed-form gradient on the theta pinch.
+
+**Every field model can run this way**, through ``FieldModelEquilibrium``,
+which is what ``FieldCoupling = "consistent"`` attaches: its ``Solve`` is
+Newton on the model's own rows with the transport state fixed, through the
+model's ``updateFieldJacobian`` and ``solveB`` at :math:`\alpha = 0`, warm-started
+from the last :math:`\psi` and iterated to round-off. A model with a
+differential DOF is refused, since its field is not an instantaneous function
+of the transport state. So the theta pinch runs either way, and the two agree:
+on six cells at :math:`k = 3`, to :math:`8.8\times10^{-8}` in :math:`N` after a
+transient at ``rtol`` :math:`10^{-6}`, and to :math:`4\times10^{-10}` at a steady
+state.
 
 Current restrictions
 --------------------

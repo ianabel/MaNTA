@@ -82,6 +82,10 @@ const std::vector<Entry> &table()
         {"Absolute_tolerance", {}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{1e-3},
          "IDA absolute error tolerance; one value, or one per variable."},
+        {"ErrorWeights", {}, Type::String, Category::Solver, false, false, std::string{"AlgebraicMax"},
+         "How IDA's error weights hold each class of unknown: AlgebraicMax (sigma, q and aux "
+         "floored at rtol times their largest magnitude), Pointwise, AllMax, Derivative, "
+         "DerivativeLocal, Hybrid or HybridLocal. See docs; SuppressAlgebraicError is separate."},
         {"MinStepSize", {}, Type::Double, Category::Solver, false, false, 1e-7,
          "Smallest timestep IDA may take before giving up."},
         {"initialTimestep", {}, Type::Double, Category::Solver, false, false, 0.0,
@@ -297,8 +301,13 @@ const std::vector<Entry> &table()
         {"FieldSolve", {}, Type::String, Category::Solver, false, false, std::string{"iterative"},
          "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default) "
          "or exact (Schur complement onto the field block; a verification tool, see docs)."},
-        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
-         "Convergence tolerance for FieldSolve = iterative."},
+        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-4,
+         "Convergence tolerance for FieldSolve = iterative: the change one sweep makes to the "
+         "Newton increment, in the error-weighted RMS norm IDA's tests use (where its Newton "
+         "iteration stops at 0.33); a millionth of the increment governs when larger."},
+        {"FieldSolveAdjointTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
+         "Convergence tolerance for the coupled adjoint sweep: its backward error relative to "
+         "the right-hand side."},
         {"FieldSolveMaxSweeps", {}, Type::Int, Category::Solver, false, false, 20,
          "Sweep cap for FieldSolve = iterative."},
         {"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,
@@ -318,6 +327,13 @@ const std::vector<Entry> &table()
         // accepted and ignored.
         {"FieldModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
          "Name of a registered magnetic-field model to couple to; absent means no coupling."},
+        // How runManta attaches the FieldModel, so a ProblemSelection key for the
+        // same reason: a dict has no FieldModel for it to apply to.
+        {"FieldCoupling", {}, Type::String, Category::ProblemSelection, false, false,
+         std::string{"coupled"},
+         "How the FieldModel is coupled: coupled (its unknowns join the DAE and its "
+         "derivatives the Jacobian) or consistent (solved to convergence at each transport "
+         "state, as a black box, with no Jacobian coupling and no adjoint)."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,
          std::vector<std::string>{},
          "Shared objects to dlopen for their physics-case registrations."},

@@ -499,6 +499,22 @@ slot by slot, exactly as ``u``, ``q``, ``sigma`` and ``phi`` do. Nothing else
 changes: geometry is a function of :math:`(\psi, x)` evaluated at the same
 nodes, cached per residual, in the same standing as :math:`\hat\sigma`.
 
+**A case that reads geometry declares it**, in its spec:
+
+.. code-block:: cpp
+
+   SystemSpec{.variables = {...}, .aux = {...}, .readsGeometry = true}
+
+A field model can be attached only to a case that does. Attached to any other
+it is refused, by name, when it is attached: the geometry slots are a field's
+only way into the transport physics, so the field could not reach the solution
+and the run would pay for every field solve to change nothing. The declaration
+is a permission rather than an obligation — a case may set it and read nothing —
+and with no field model attached it changes nothing at all: the solver allocates
+no geometry rows, ``State::geom()`` is empty, and a case that declares it
+supplies its own fixed geometry, as ``ThetaPinchDiffusion``'s
+``VacuumGeometry = true`` does.
+
 Reading it in a value hook is all that is needed for the *residual* to be
 right. For the *Jacobian* to be right, a case that reads geometry must also say
 how it depends on it:

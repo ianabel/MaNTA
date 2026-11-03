@@ -469,21 +469,21 @@ void SystemSolver::estimateObjectiveError(N_Vector correction)
     double worst = 0.0;
     for (Index g = 0; g < ng; ++g)
     {
-        // dG/dy has no trace or field block, so the cells contribute, and with
-        // global scalars the scalars' part of the correction through dG/dmu.
-        Vector Gmu;
+        // dG/dy has no trace block, so the cells contribute; with global scalars
+        // the scalars' part of the correction through dG/dmu, and with a field
+        // model the field's through dG/dpsi.
+        Vector Gmu, Gpsi;
         const std::vector<Vector> Gy =
-            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu);
+            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu, &Gpsi);
         double change = 0.0;
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             change += Gy[i].dot(Eigen::Map<const Vector>(d + i * cellDOF, cellDOF));
         if (nScalars > 0)
             change += Gmu.dot(correctionMap.Scalars());
+        if (nField > 0)
+            change += Gpsi.dot(Vector(correctionMap.getField()));
 
-        if (superconvergent)
-            postprocessor->computeUStar(state);
-        const double G = superconvergent ? adjointProblem->GFn(g, state, *postprocessor)
-                                         : adjointProblem->GFn(g, state);
+        const double G = objectiveValue(*adjointProblem, g, state, t0);
         nlsObjectiveError(g) = std::abs(change);
         nlsObjectiveTolerance(g) = objectiveAlgebraicTolerance(g, G);
         const double ratio = nlsObjectiveError(g) == 0.0

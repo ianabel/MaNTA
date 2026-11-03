@@ -154,9 +154,11 @@ allocateScalarWorkVectors() and rebuilt by setFieldModel when getDoF() changes.
   construction, so the same treatment applies -- a2 already demonstrates the
   pattern for an nField-sized array of full-length vectors.
 
-  Not done because no field model is registered anywhere in the tree, so this is
-  cold code with no fixture that would notice either the saving or a mistake in
-  it. Do it when a model lands, alongside a coupled regression case.
+  A model is registered now, and the theta pinch is a fixture that would notice:
+  under FieldSolve = exact at nField = 516 that is 518 full-length vectors made
+  and destroyed per Jacobian solve. The exact path is the verification tool,
+  though, and the iterative one allocates one, so it is a cost on the path
+  nobody should be timing.
 
 K_global is factorised densely, and it is 73-91% of a low-k run.
 Found 2026-08-25. FIXED the same day -- util/BandedMatrix.hpp, and the entry is
@@ -438,21 +440,8 @@ reason it was not made:
     Whatever is done for FieldResidual should follow the same two.
 
 
-  - The coupled adjoint has two structurally missing terms, both zero today by
-    construction rather than by assumption, and both named in code beside the
-    zero (SystemSolver.hpp, at G_field).
-
-    dG/dpsi. AdjointProblem reports dg/du, dg/dq, dg/dsigma and dg/dphi; there is
-    no dg/dgeometry. So the field row of the adjoint right-hand side, G_field, is
-    identically zero, and an objective whose integrand reads State::geom directly
-    loses that contribution -- a wrong gradient beside a good G. It is not
-    detectable from the solver: geometry is filled on the states the objective is
-    evaluated on (it has to be, or a *physics* hook reads a zero-length vector),
-    so a g that reads it gets a correct value and an incomplete derivative. The
-    fix has the shape dG/dmu took for the global scalars, which dg's Scalars
-    entry carries: a dG/dgeometry entry in dg, zero by default, read into
-    G_field. Wants an objective that genuinely depends on
-    geometry, checked against a closed form, written first.
+  - The coupled adjoint has one structurally missing term, zero by construction
+    rather than by assumption:
 
     d(field residual)/dp. FieldModel has no notion of an adjoint parameter, so
     dR/dp is zero because there is no hook a model author could fill -- not
@@ -474,57 +463,31 @@ reason it was not made:
     RichGeometricDiffusion: a property of the coupling, not of the time step.
     That fixture could not be integrated on FieldSolve = iterative at all before
     the acceleration -- IDA cut h to the floor over five attempts at the first
-    step, with Newton update norms of order 1e10 -- and now completes with zero
-    fallbacks over ~2000 Jacobian solves and reaches the finite-difference
+    step, with Newton update norms of order 1e10 -- and now completes with no
+    fallbacks over ~1900 Jacobian solves and reaches the finite-difference
     gradient to 1e-10.
 
     **Measured, the rank-one step copes better than the argument above predicts,
     and the successor is a scaling concern rather than a known gap.**
     ManufacturedFieldVector's five unknowns, scanned over coupling strengths from
     1 to 1e5 -- rho rising to just under 2 and never falling back within a cap
-    of 400 -- converge every time, in 13 to 38 sweeps depending on the
-    right-hand side. The steps are rank one individually but not the *same*
+    of 400 -- converge every time. The steps are rank one individually but not the *same*
     rank-one direction, so the iteration is not confined to the two-dimensional
     subspace the pessimistic argument assumes. No fixture has yet been found
     where the acceleration fails outright.
 
     What the spread does mean is that **FieldSolveMaxSweeps = 20 is not enough
-    for five field unknowns**: over six right-hand side *directions* at
-    strength 10 (rho = 1.57) the counts are 13, 33, 38, 21, 17, 19, so three of
-    the six escalate at the shipped default and all six converge at 60.
-    a_divergent_five_dof_coupling_is_still_solved_exactly measures exactly that
-    and asserts it, as a tripwire: it requires both some to converge and some to
-    escalate, so raising the default or improving the accelerator has to update
-    the test and this entry together. Note the counts cannot be varied by
-    *scaling* the right-hand side -- the solve is homogeneous -- so a
+    for five field unknowns on every right-hand side**: over six right-hand
+    side *directions* at strength 10 (rho = 1.57), with the sweep stopping at
+    1e-4 in the fixture's error weights or a millionth of the increment, the
+    counts are 10, 23, 10, 17, 13, 10, so one of the six escalates at the
+    shipped default and all six converge at 60. a_divergent_five_dof_coupling_is_still_solved_exactly measures exactly
+    that and asserts it, as a tripwire: it requires both some to converge and
+    some to escalate, so raising the default, changing the stopping test or
+    improving the accelerator has to update the test and this entry together.
+    The counts depend on the run's tolerances -- the stop is in its error
+    weights -- and on the right-hand side's direction, so a
     single-right-hand-side measurement of this is not a measurement.
-
-  - **The iterative path is a bet on a large field block, not a free
-    improvement, and the arithmetic should be stated before anyone reads the
-    fallback count as the only cost.** One sweep is one transport solve; the
-    exact Schur complement is nField + 1 of them plus a dense nField^3
-    factorisation. The break-even is therefore
-
-        #sweeps  <  nField + 1
-
-    and **no fixture in this tree is on the winning side of it.** At nField == 1
-    the sweep takes 3 against exact's 2 (1.5x worse); at nField == 5 it takes 13
-    to 38 against exact's 6 (2-6x worse), for the same answer, and an escalation
-    pays FieldSolveMaxSweeps *plus* the exact solve on top. The design target is
-    N_magnetics >> N_HDG, where exact's nField + 1 transport solves and its
-    O(nField^3) dense solve are hopeless and one sweep per iteration is the only
-    affordable option -- but nothing in the tree exercises that regime yet, so
-    every measurement available today says exact is cheaper.
-
-    Said in **five** places, which is three more than a fact needs and is worth
-    knowing before adding a sixth: solveCoupledJacIterative's escalation comment
-    (SystemSolver.cpp), the FieldSolve = iterative message initialize() logs,
-    CLAUDE.md's field section, docs/field_coupling.rst, and here.
-    docs/running.rst and FEATURES.md state it in a clause and point at
-    field_coupling for the arithmetic, which is the pattern to follow -- when
-    this entry is closed, or the measurement changes, all five have to move
-    together, and the count is here so that is a known cost rather than a
-    surprise.
 
   - Nothing latches the fallback. A genuinely divergent coupling pays
     FieldSolveMaxSweeps sweeps *and* the exact solve on every Jacobian solve for

@@ -34,8 +34,14 @@ What you implement
      - The integrand :math:`g`.
    * - ``dgFn_du``, ``dgFn_dq``, ``dgFn_dsigma``, ``dgFn_dphi``
      - Its derivatives with respect to each field.
+   * - ``dgFn_dgeom``
+     - Its derivative with respect to each geometry slot, for an objective that
+       reads ``State::geom`` on a coupled run. Optional: an objective reading no
+       geometry leaves it zero. See :doc:`field_coupling`.
    * - ``GFn(gIndex, DGSoln)``
-     - The objective value. Usually the integral of ``gFn``.
+     - The objective value. By default :math:`\sum_j w_j\, g(Z_j)` over the
+       basis nodes with their interpolatory weights -- the functional the
+       derivatives above differentiate -- and an override must keep it that.
    * - ``dGFndp(gIndex, pIndex, DGSoln)``
      - The *explicit* dependence of :math:`G` on a parameter — the part that does
        not come through the solution.

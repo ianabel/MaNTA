@@ -14,6 +14,7 @@
 
 #include "Types.hpp"
 #include "FieldModel.hpp"
+#include "EquilibriumModel.hpp"
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 // The field hooks are handed the same quadrature weights the scalar ones are,
@@ -66,6 +67,45 @@ void SystemSolver::initialize()
 	// initial dydt out of the previous run's final-time boundary data.
 	if (fieldModel)
 		fieldModel->resetForRun();
+
+	// The same for a tier-0 equilibrium, and for the solver's own cache of it,
+	// which is also the next Solve's warm start: a reused solver starts from the
+	// cold equilibrium a fresh one would.
+	equilibriumCache = {};
+	equilibriumSolves = 0;
+	if (equilibriumModel)
+	{
+		equilibriumModel->resetForRun();
+
+		// No adjoint through the field at tier 0. Run as a frozen-field gradient
+		// it would be wrong by the field's share -- a third of the closed-form
+		// gradient on the theta pinch -- so it is refused rather than run.
+		if (adjointProblem != nullptr || steadyTest == SteadyTest::Objective)
+			throw std::invalid_argument(
+				"An adjoint cannot be solved with FieldCoupling = \"consistent\": the equilibrium "
+				"supplies no derivatives, and a gradient with the field frozen would be wrong by "
+				"its share. Couple the field model to get gradients.");
+
+		// Well below the run's own tolerances: an equilibrium's error goes into
+		// every residual, where IDA reads it as local error.
+		const double absolute = 1e-3 * *std::min_element(atol.begin(), atol.end());
+		if (!equilibriumModel->setTolerances(1e-3 * rtol, absolute))
+			logmsg<LOG_LEVEL::WARNING>(
+				"The equilibrium model '{}' cannot resolve its geometry to {:g} relative, {:g} "
+				"absolute, a thousandth of the run's tolerances; its error will reach every residual.",
+				equilibriumModel->getSpec().name, 1e-3 * rtol, absolute);
+	}
+
+	// The case's route to geometry outside the residual (its diagnostics),
+	// installed by the solver that runs it and cleared by one with no field
+	// model, so a case reused under a different solver never keeps a stale one.
+	// Here rather than in setFieldModel or the constructor: the discretisation
+	// estimate builds a second solver on the same case that never initialises.
+	if (fieldModel || equilibriumModel)
+		problem->setGeometryProvider(nGeom, [this](VectorRef out, DGSoln const &Y, Position x, Time t)
+		                             { geometryAt(out, Y, x, t); });
+	else
+		problem->setGeometryProvider(0, {});
 
 	// Nor does the kappa a held nodal tau took from the last run's final
 	// Jacobian build.
@@ -125,7 +165,7 @@ void SystemSolver::initialize()
 	// was promised it would not get.
 	if (estimateDiscretisation && adjointProblem != nullptr)
 	{
-		if (nScalars > 0 || fieldModel || k < 1 || tauScaling != TauScaling::Constant)
+		if (nScalars > 0 || fieldModel || equilibriumModel || k < 1 || tauScaling != TauScaling::Constant)
 			throw std::invalid_argument(
 				"EstimateDiscretisationError cannot estimate this run: it needs "
 				"PolynomialDegree >= 1, a constant tau, and no global scalars or field model.");
@@ -253,13 +293,13 @@ void SystemSolver::initialize()
 			logmsg<LOG_LEVEL::INFO>(
 				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
 				"blocks with Irons-Tuck acceleration, one transport solve per sweep against "
-				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "
-				"FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
-				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
+				"exact's {} per Jacobian solve. Stops once a sweep changes the increment by less "
+				"than FieldSolveTolerance = {} in the error-weighted norm (or a millionth of the "
+				"increment), up to FieldSolveMaxSweeps = {} sweeps ({} for the adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
 				"mode costs more than exact in the worst case and never less accuracy. It is "
 				"only *cheaper* than exact when the sweep converges in fewer than {} sweeps, "
-				"which no test fixture in this tree manages -- it is a bet on a field block "
-				"far larger than the transport one, not a free improvement. Watch the "
+				"which depends on the coupling: the theta pinch does it in ~3.7 at any "
+				"resolution, while a strongly divergent coupling may not at all. Watch the "
 				"\"Coupled field sweeps\" line at the end of the run.",
 				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps,
 				nField + 1);
@@ -589,6 +629,16 @@ void SystemSolver::initialize()
 		//
 		// The first time integrate() actually asks for is t0 + dt: it sets `tout = t0`
 		// and the loop does `tout += dt` before the first IDASolve.
+		// Full Newton steps, with no line search, when the field is an
+		// equilibrium. The Jacobian then carries no coupling, so its Newton
+		// direction need not descend ||F|| at all where the coupling is strong,
+		// and IDACalcIC's backtracking cannot recover from that -- it fails with
+		// IDA_LINESEARCH_FAIL. Measured on the theta pinch at T = 0.9, 5 and 32
+		// cells: the line search fails, and full steps converge in IDACalcIC's
+		// default 10 iterations. At T = 0.3, where it succeeds, the full step
+		// was accepted every time and the run is bit for bit the same either way.
+		if (equilibriumModel)
+			IDASetLineSearchOffIC(IDA_mem, SUNTRUE);
 		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
 		if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
 		{

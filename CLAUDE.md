@@ -587,6 +587,22 @@ Every SUNDIALS handle is a member, not a local, so those three can be split.
 `ctx` is the exception: it belongs to the `SystemSolver`, not to a run, and
 `destroySundials` must not touch it.
 
+**IDA's error weights are `ErrorWeights = "AlgebraicMax"` by default, not
+pointwise**, and that is a measurement (`docs/running.rst`, "Error weights", has
+the table). `getErrorWeights` gives every unknown `1/(rtol |y_i| + tau_i)`;
+the default floors `tau` for sigma, q and aux at `rtol` times the variable's
+largest magnitude on the grid, where `Pointwise` uses `atol` everywhere. Under
+`Pointwise`, sigma and q next to a Dirichlet wall -- crowded Chebyshev nodes, a
+stiff diffusive mode, backward Euler lagging its slow manifold by ~h dg/dt --
+were held to ~atol absolutely, and IDA read that lag as local error that jumps
+when h doubles: an order-one limit cycle, ~25000 steps for ~200, on the coupled
+theta pinch, under *both* field solves and at *any* FieldSolveTolerance. Which
+runs fell in was set by round-off, so it showed up as a CI leg timing out on
+one compiler and BLAS and not another -- and a green run proved nothing. The
+weights are also the norm of IDA's Newton test, the field sweep's stopping test
+and the NewtonStep steady test, so a change here moves all four.
+`SuppressAlgebraicError` is separate and composes with any scheme.
+
 **The three can be run again on the same object**, and a reused solver gives the
 same answer as a fresh one *bit for bit*. That is pinned by
 `a_second_integration_on_one_solver_matches_a_fresh_one`, at exactly zero
@@ -1333,25 +1349,115 @@ moves the answer by 3.2e-4. And `psi_round_trips_through_a_restart` uses a
 *values*, so an algebraic `psi` would be recomputed from the restored transport
 state and the case would pass without ever reading `psi` off disk.
 
+**A field can also be a black box: `EquilibriumModel`, `FieldCoupling =
+"consistent"`** (tier 0 of `docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md`,
+which has the as-built record and the measurements). It adds no unknowns: the
+solver holds the last `Equilibrium` as a cache keyed byte for byte on the
+solution vector's cell prefix and the time (`equilibriumAt`), solves a new one
+only when that changes, warm-starts it from the last, and fills `State::geom`
+from it in `evaluateGeometry`. `FieldModelEquilibrium` runs any `FieldModel`
+that way -- Newton on its rows alone -- and is what runManta attaches for
+`"consistent"`. Four things are load-bearing. **The cache is dropped in
+`initialize()`'s unconditional part**, the `RF_cellwise` trap again: deleting
+that moves a reused theta-pinch run by 1.6e-8, and
+`a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit` is the
+guard (the manufactured field's linear row lands on the same bits from any warm
+start, so `equilibrium_tests` alone cannot see it). **`IDACalcIC` runs with its
+line search off** at tier 0: the Jacobian carries no coupling, so its Newton
+direction need not descend `||F||`, and on the theta pinch at T = 0.9 the line
+search fails where full steps converge. **No adjoint** -- refused in
+`initialize()` and, for the on-demand paths, in `assembleAdjointOperator`. And
+**one source of geometry**: `setFieldModel` and `setEquilibriumModel` share
+`checkGeometrySource`, which refuses the second.
+
+**The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
+read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
+physics). Three things about it are load-bearing. Its pressure crosses as the
+transport case's aux variable, so its `A2` lives *only* in aux columns and its
+`A1` runs through four geometry slots — the combination the manufactured
+fixtures never reach. Its spline's knots are the transport mesh's faces
+(`IntervalsPerCell`, default 1), so `nField` is independent of `k` -- which is
+what lets a degree-changing restart carry `psi` verbatim
+(`setInitialConditions`' projection path) -- and not of the mesh, so a restart
+onto another mesh is refused by its `nField`. The knots follow the mesh because
+`p_h` jumps at every face and a spline finer than the mesh resolves the jumps
+into spikes in `dV'/dx`, which the flux reads: four intervals per cell costs an
+order at `k = 1`, and more stalls IDA under either `FieldSolve`. The model's
+header has the measurements, and refuses an unknown key in its table rather
+than running on a default. And
+`ThetaPinchDiffusion` refuses to run without a field model unless
+`VacuumGeometry = true`, so a frozen-geometry run is a choice rather than a
+forgotten key.
+
+**Irons-Tuck accelerates only along aligned increments**, and that guard is
+the difference between converging and diverging on the theta pinch's adjoint.
+The step extrapolates along the last increment as though the sweep had settled
+into its dominant eigendirection. A non-normal iteration matrix amplifies and
+turns an increment before that — tenfold, at `cos = -0.27`, on the theta pinch
+at `cj = 0`, with a spectral radius of 0.14 — and extrapolating from that pair
+took the sweep to a backward error of 1e68, every gradient silently rescued by
+the exact fallback. `ironsTuck` now requires `|cos| >= 0.9`; the divergent
+fixtures it exists for give `|cos| > 0.99`. A fallback that always rescues is
+also a fallback that hides: `getFieldSweepStats().adjointFellBack` is what
+`the_objective_estimate_carries_the_field_share` asserts against.
+
 **`FieldSolve = iterative` is a cost choice, never an accuracy one.** The block
 Gauss-Seidel sweep escalates to the exact Schur solve when it exhausts its cap,
 in *both* the forward and the adjoint directions, so it can be slower than
 `exact` and can never be less accurate. The break-even is
 `#sweeps < nField + 1` — one transport solve per sweep against `nField + 1` for
-the exact solve — and **no fixture in this tree is on the winning side of it**:
-iterative is ~1.5x more expensive at `nField = 1` and 2.2-6.3x at `nField = 5`.
-It is a bet on `N_magnetics >> N_HDG`, which nothing here exercises. Note that
-isolated Jacobian solves with *random* right-hand sides needed 13-38 sweeps at
-`nField = 5`, while a real integration averages 2.5-3.6 and has never hit the
-cap; Newton's right-hand sides are far more benign than random vectors, and
-neither number says anything about the cap on its own.
+the exact solve, plus its dense `O(nField^3)` Schur factorisation — and which
+side a problem is on is a property of the coupling. The manufactured fixtures
+lose (2.0-2.8 sweeps per solve against an `nField + 1` of 2 to 6); the theta
+pinch wins at every resolution measured, from 1.5x at `nField = 12` to 12x at
+`nField = 132`, because its sweep contracts at 0.10-0.19 at every `cj` and
+takes ~3.7 sweeps per solve whatever `nField` is. `docs/field_coupling.rst` has
+the table. Note that isolated Jacobian solves with *random* right-hand sides
+need 10-23 sweeps at `nField = 5`, while a real integration averages 2.0-2.8
+and has never hit the cap; Newton's right-hand sides are far more benign than
+random vectors, and neither number says anything about the cap on its own.
+
+**The sweep has to stop in IDA's own terms, or "a cost choice" becomes a 100x
+cost, and it took three tests to learn which terms.** The forward sweep stops once one sweep
+changes the *whole* increment, transport and field, by less than
+`FieldSolveTolerance` (1e-4) in the run's error-weighted RMS norm -- absolute,
+in the norm IDA's Newton test is in -- or by less than a millionth of the
+increment, whichever is larger. Each alternative was measured failing, and
+the failure is never a wrong answer, only IDA stalling at order one with a tiny
+step, which looks like a hard problem rather than a solver defect:
+
+* a relative 2-norm test on `psi` alone (the original) leaves an error in
+  `sigma` and `q` near the axis, where values sit near zero and the weights are
+  ~1/atol, that is O(1) in IDA's norm: 20000+ steps against the exact solve's
+  213 on the manufactured theta pinch, uncured by tightening it to 1e-11;
+* an absolute bound of 1e-2 is too loose for IDA's Newton rate estimate,
+  `||del_m|| / ||del_0||`: 658 steps against 166;
+* a bound *relative to the increment* at 1e-3 lets a first Newton update of
+  size ~2 carry 2e-3: 29000 steps against 214 at `k = 4`;
+* and the absolute bound alone cannot be met on `IDACalcIC`'s first step,
+  whose increment at `cj ~ 1e9` is ~4e8 units: every run escalated to the exact
+  solve exactly once, which is what the millionth is for -- it governs only
+  above 100 units, where a 1e-6 relative error moves Newton's rate by nothing.
+
+`the_iterative_solve_does_not_stall_ida` (`ThetaPinchMMSTests.cpp`) and
+`exact_and_iterative_field_solves_give_the_same_run` (`ThetaPinchRunTests.cpp`)
+are the guards, and they have to be *runs*: a unit test with random right-hand
+sides at a fixture state cannot see any of the three, because the residue only
+concentrates where it hurts on Newton's own corrections. The adjoint sweep has
+no error test to measure against and keeps a relative backward error, under its
+own key, `FieldSolveAdjointTolerance`.
 `FieldSolveMaxAdjointSweeps` defaults to 100 against `FieldSolveMaxSweeps`'s 20
 because the adjoint always runs at `cj = 0`, where the coupling is stiffest.
 `TODO` records two candidate latches for a run that falls back on every solve;
 neither is implemented.
 
 The refusals, each at the earliest point the combination is known:
-`nScalars > 0` with a field model (`setFieldModel` — the non-superconvergent
+a field model on a case whose `SystemSpec::readsGeometry` is false
+(`setFieldModel` — the geometry slots are the field's only channel, so it
+could not reach the solution; `PlainDiffusion` in `CoupledResidualTests.cpp`
+declares it while reading nothing, on purpose, to hold the transport rows blind
+for the layout tests, and `PlainDiffusion(false)` is what the refusal is tested
+against); `nScalars > 0` with a field model (`setFieldModel` — the non-superconvergent
 `dSources_dScalars` branch builds its `State` from `DGSoln::evalOnNode`, which
 has no geometry rows, so a case reading geometry there would work with
 `Superconvergent = true` and read out of bounds with it off); a field DOF
@@ -2408,12 +2514,6 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   A coupled restart is not in that class either — `psi` is copied out of the
   file and, being differential, held fixed by `IDACalcIC`, so it round-trips
   bit for bit at whatever tolerance the run itself survives.
-* **No field model is registered anywhere in the tree**, so `FieldModel` has
-  nothing to name in the shipped binary and there is no coupled regression case.
-  The two models that exist are unregistered fixtures under `Tests/UnitTests`.
-  `Tests/README.md` names what this leaves uncovered: nothing exercises the
-  coupled path through a `.conf` file, so the config plumbing and the netCDF
-  group have unit-test cover only.
 * **A field model cannot be reached from Python.** `FieldModel` has no pybind11
   class and `FieldModel` is a `ProblemSelection` key, so it is an error in a
   `Runner.configure` dict. `PyRunner::configure` therefore *refuses* a restart

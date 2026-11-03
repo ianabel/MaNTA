@@ -8,6 +8,7 @@
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
 #include "FieldModel.hpp"
+#include "FieldModelEquilibrium.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
 #include "PhysicsInstance.hpp"
@@ -179,7 +180,18 @@ int runManta(std::string const &fname)
 			return 1;
 		}
 	}
-	const Index nField = fieldModel ? fieldModel->nFieldDOF() : 0;
+	else if (config.FieldCoupling != "coupled")
+		throw std::invalid_argument("FieldCoupling = \"" + config.FieldCoupling +
+									"\" was given without a FieldModel to couple.");
+
+	// FieldCoupling = "consistent" runs the same model as a black-box
+	// equilibrium: no unknowns in the state vector, so the restart check below
+	// sees none, and the wrapper refuses a model whose field has dynamics here,
+	// before anything else is built.
+	std::shared_ptr<EquilibriumModel> equilibrium;
+	if (fieldModel && config.FieldCoupling == "consistent")
+		equilibrium = std::make_shared<FieldModelEquilibrium>(fieldModel);
+	const Index nField = fieldModel && !equilibrium ? fieldModel->nFieldDOF() : 0;
 
 	if (config.restart)
 	{
@@ -282,7 +294,9 @@ int runManta(std::string const &fname)
 
 		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
 		// reshapes the solution vector and refuses once the solver is initialised.
-		if (fieldModel)
+		if (equilibrium)
+			system->setEquilibriumModel(equilibrium);
+		else if (fieldModel)
 			system->setFieldModel(fieldModel);
 
 		applySolverConfig(config, *system);

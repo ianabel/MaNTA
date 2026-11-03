@@ -105,6 +105,24 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
                 print("Error: L_2 norm ", diff, " ( ref is ", l2norm_ref, " ) at t = ",t_var[t_idx]," is greater than ",tolerance)
                 sys.exit( 1 )
     
+    # A coupled run's field group: psi as one time series per DOF, and each
+    # geometry slot on the output grid. Compared whole, relative to the
+    # reference's magnitude, because the transport's L_2 check above sees the
+    # field only through what it does to u.
+    for name in field_groups( nc_root_ref ):
+        if name not in nc_root.groups:
+            raise Exception( f"{filename} has no field group '{name}', which {ref_filename} has" )
+        print("  ... also checking field group", name)
+        for var in nc_root_ref.groups[name].variables:
+            got = np.array( nc_root.groups[name].variables[var][:] )
+            ref = np.array( nc_root_ref.groups[name].variables[var][:] )
+            scale = max( np.max( np.abs( ref ) ), 1e-12 )
+            diff = np.max( np.abs( got - ref ) ) / scale
+            if diff > tolerance:
+                print("Error: field variable", name + "/" + var, "differs from the reference by",
+                      diff, "relative, which is greater than", tolerance)
+                sys.exit( 1 )
+
     # Check if adjoints were computed, if so compare those too.
     # NOTE: this guard tests the freshly-generated file, which carries "ng" only
     # when its configuration sets WriteAdjoints = true. Warn loudly when the
@@ -158,6 +176,12 @@ def variable_groups( nc_root ):
     another run of the *same* case, so any consistent order will do.
     """
     return sorted( g for g, grp in nc_root.groups.items() if "u" in grp.variables )
+
+
+def field_groups( nc_root ):
+    """The groups a field model writes: psi and its geometry, marked by the
+    `label` attribute recording what the model's x means."""
+    return sorted( g for g, grp in nc_root.groups.items() if "label" in grp.ncattrs() )
 
 
 def test_analytic_soln( filename, soln_fn, tolerance ):
@@ -295,6 +319,8 @@ check_ref_case( "NeumannTestUpper" )
 # Every case above runs with Superconvergent unset, which is what keeps their
 # references valid across the addition of that option. This one turns it on.
 check_ref_case( "SuperconvergentADTest" )
+# The coupled case: the registered field model, its field group compared too.
+check_ref_case( "ThetaPinch" )
 
 
 # ---------------------------------------------------------------- restarts --
@@ -471,6 +497,13 @@ print( "Checking Restart Round Trips" )
 check_restart_round_trip( "LinearDiffusion", 0.25, rtol = 1.0e-6, atol = 1.0e-8 )
 check_restart_round_trip( "MatTest", 0.25, rtol = 1.0e-4, atol = 1.0e-6 )
 check_restart_round_trip( "AuxVarTest", 0.6, rtol = 1.0e-6, atol = 1.0e-8 )
+# psi is algebraic here, so it is recomputed against the resumed transport
+# rather than read off the file -- the round trip pins the coupled state, and
+# SolverLifecycleTests' differential psi pins the field block of the file. Its
+# first step after the restart fails the error test 4 times of the 10 IDA
+# allows, as AuxVarTest's does, with the error estimate falling like h^2 -- the
+# cadence is a long first step, and a consistent y' makes cutting it cheap.
+check_restart_round_trip( "ThetaPinch", 0.5, rtol = 1.0e-6, atol = 1.0e-8 )
 
 
 print("\n\n----------------")

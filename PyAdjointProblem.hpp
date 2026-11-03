@@ -86,6 +86,13 @@ public:
                                        weights, nNodes);
   }
 
+  // On the solver's own states, which carry geometry on a coupled run.
+  Matrix dGFndpAtNodes(Index gIndex, GlobalState const &states,
+                       std::vector<Position> const &points, Vector const &weights,
+                       Index nPerCell, DGSoln &, Postprocessor const *) const override {
+    return explicitParameterDerivative(gIndex, states, points, weights, nPerCell);
+  }
+
   // At the star nodes, with u* and the star basis's weights b1: the derivative
   // of AdjointProblem::GFn's superconvergent form. Reads the u* from the last
   // pp.computeUStar(y).

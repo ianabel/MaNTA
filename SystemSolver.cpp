@@ -14,6 +14,7 @@
 #include <print>
 
 #include "FieldModel.hpp"
+#include "EquilibriumModel.hpp"
 #include "State.hpp"
 #include "Types.hpp"
 #include "gridStructures.hpp"
@@ -125,16 +126,18 @@ void SystemSolver::allocateJacobianStorage()
     dydtJac.Map(dydtJacMem);
 }
 
-void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
+// See the declaration. Everything here is knowable before anything is
+// allocated, so it is all refused before setFieldModel or setEquilibriumModel
+// moves a thing.
+void SystemSolver::checkGeometrySource(std::string const &modelName, bool otherSourceAttached) const
 {
-    // Not after initialise: the five DGSoln members change shape below and three
-    // of them are reallocated, so anything already mapping them -- IDA's Y and
-    // dYdt above all -- would be reading a vector of the wrong length with
-    // nothing to say so.
-    if (initialised)
+    // One source of geometry. The two would both fill State::geom, and nothing
+    // could say which the physics was meant to read.
+    if (otherSourceAttached)
         throw std::logic_error(
-            "setFieldModel must be called before the solver is initialised: the field "
-            "unknowns are part of the solution vector, whose length is fixed by then.");
+            "'" + modelName + "' cannot be attached: this solver already has a source of "
+            "geometry. A field model and an equilibrium model are alternatives; detach the "
+            "other first.");
 
     // Not alongside global scalars yet, and the reason is a disagreement between
     // two branches rather than a missing feature. dSources_dScalars_Mat builds
@@ -147,11 +150,23 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     // caused it. Refused here, at the earliest point where the combination is
     // known, rather than filled: filling is three lines but there is no fixture
     // in the tree that would exercise either branch of it.
-    if (model && nScalars > 0)
+    if (nScalars > 0)
         throw std::logic_error(
-            "A field model cannot yet be attached to a system with global scalars: the "
+            "'" + modelName + "' cannot be attached: a field model cannot yet be coupled to a system with global scalars: the "
             "scalar coupling's non-superconvergent branch evaluates dSources_dScalars on "
             "states that carry no geometry.");
+
+    // Not to a case that reads no geometry. The geometry slots are the field's
+    // only channel into the transport physics, so attached to such a case the
+    // field could not reach the solution: the run would pay for every field
+    // solve and change nothing. That is a configuration mistake, and it is
+    // knowable here, before anything is allocated.
+    if (!problem->spec().readsGeometry)
+        throw std::logic_error(
+            "The field model '" + modelName +
+            "' cannot be attached: the transport system does not read geometry "
+            "(SystemSpec::readsGeometry is false), so the field could not reach the "
+            "solution.");
 
     // The model's output group must not collide with anything else at the top
     // level of the netCDF file. FieldModelSpec::validate() cannot see this --
@@ -164,34 +179,48 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     // Groups and variables share one namespace in netCDF-4 -- both are HDF5
     // links in the same parent -- so the reserved variables are collisions too,
     // not just the Grid and RestartData groups.
-    if (model)
     {
         auto refuse = [&](std::string const &what)
         {
             throw std::logic_error(
-                "The field model's output group is named '" + model->getSpec().name +
+                "The field model's output group is named '" + modelName +
                 "', which is already " + what +
                 " in the netCDF output. Rename it through FieldModelSpec::name.");
         };
 
         for (char const *reserved : {"Grid", "RestartData", "x", "t", "nVariables"})
-            if (model->getSpec().name == reserved)
+            if (modelName == reserved)
                 refuse("written by the solver itself");
 
         for (Index i = 0; i < nVars; ++i)
-            if (model->getSpec().name == problem->getVariableName(i))
+            if (modelName == problem->getVariableName(i))
                 refuse("the group of transport variable " + std::to_string(i));
 
         for (Index i = 0; i < nAux; ++i)
-            if (model->getSpec().name == problem->getAuxVarName(i))
+            if (modelName == problem->getAuxVarName(i))
                 refuse("auxiliary variable " + std::to_string(i));
 
         // Unreachable while the refusal above stands, and here for the day it
         // lifts rather than as a live check.
         for (Index i = 0; i < nScalars; ++i)
-            if (model->getSpec().name == problem->getScalarName(i))
+            if (modelName == problem->getScalarName(i))
                 refuse("scalar " + std::to_string(i));
     }
+}
+
+void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
+{
+    // Not after initialise: the five DGSoln members change shape below and three
+    // of them are reallocated, so anything already mapping them -- IDA's Y and
+    // dYdt above all -- would be reading a vector of the wrong length with
+    // nothing to say so.
+    if (initialised)
+        throw std::logic_error(
+            "setFieldModel must be called before the solver is initialised: the field "
+            "unknowns are part of the solution vector, whose length is fixed by then.");
+
+    if (model)
+        checkGeometrySource(model->getSpec().name, equilibriumModel != nullptr);
 
     // Before nField moves: the count of vectors to destroy is the old one.
     freeFieldWorkVectors();
@@ -236,18 +265,82 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
     }
 }
 
+void SystemSolver::setEquilibriumModel(std::shared_ptr<EquilibriumModel> model)
+{
+    // Not after initialise, for symmetry with setFieldModel and because
+    // initialize() is where a run's cache is cleared and its tolerances handed
+    // over: a model attached after that would start mid-run with neither.
+    if (initialised)
+        throw std::logic_error("setEquilibriumModel must be called before the solver is initialised.");
+
+    if (model)
+        checkGeometrySource(model->getSpec().name, fieldModel != nullptr);
+
+    // Nothing to reshape: an equilibrium adds no unknowns, so the layout, the
+    // error weights and every vector are exactly the uncoupled run's.
+    equilibriumModel = std::move(model);
+    nGeom = equilibriumModel ? equilibriumModel->nGeometry() : (fieldModel ? fieldModel->nGeometry() : 0);
+    equilibriumCache = {};
+}
+
+// See the declaration. The input is compared byte for byte, not to a tolerance:
+// a residual evaluated again at the same state is the case being saved, and any
+// other state -- however close -- is a different residual, whose geometry a
+// tolerance would get silently wrong by its size.
+Equilibrium const &SystemSolver::equilibriumAt(DGSoln const &Y, Time t)
+{
+    if (Y.data() == nullptr)
+        throw std::logic_error("equilibriumAt: the state has no memory mapped, so it cannot key the cache");
+
+    const size_t n = static_cast<size_t>(nCells) * static_cast<size_t>((3 * nVars + nAux) * (k + 1));
+    if (equilibriumCache.eq && equilibriumCache.t == t && equilibriumCache.input.size() == n &&
+        std::memcmp(equilibriumCache.input.data(), Y.data(), n * sizeof(double)) == 0)
+        return *equilibriumCache.eq;
+
+    ++equilibriumSolves;
+    std::shared_ptr<Equilibrium const> next =
+        equilibriumModel->Solve(Y.evalOnNodes(), Y.getPoints(),
+                                integrator.integrationWeights(Y.getBasis(), grid), t,
+                                equilibriumCache.eq.get());
+    equilibriumCache.input.assign(Y.data(), Y.data() + n);
+    equilibriumCache.t = t;
+    equilibriumCache.eq = std::move(next);
+    return *equilibriumCache.eq;
+}
+
+void SystemSolver::geometryAt(VectorRef out, DGSoln const &Y, Position x, Time t)
+{
+    if (fieldModel)
+        fieldModel->Geometry(out, Vector(Y.getField()), x, t);
+    else if (equilibriumModel)
+    {
+        Matrix g = Matrix::Zero(nGeom, 1);
+        equilibriumModel->Geometry(g, equilibriumAt(Y, t), {x});
+        out = g.col(0);
+    }
+}
+
 // See the declaration for why this is once per residual rather than once per
 // variable, and why the superconvergent star nodes need no special case.
 void SystemSolver::evaluateGeometry(DGSoln const &Y, std::vector<Position> const &points,
                                     GlobalState &states, Time t_eval)
 {
-    if (!fieldModel)
+    if (!fieldModel && !equilibriumModel)
         return;
 
     // The states arrive from DGSoln::evalOnNodes or evalOnStarNodes, neither of
     // which knows about geometry, so the rows have to be made before they can be
     // filled.
     states.setGeometrySlots(nGeom);
+
+    if (equilibriumModel)
+    {
+        Matrix g = Matrix::Zero(nGeom, static_cast<Eigen::Index>(points.size()));
+        equilibriumModel->Geometry(g, equilibriumAt(Y, t_eval), points);
+        for (size_t j = 0; j < points.size(); ++j)
+            states.setGeometry(static_cast<Index>(j), g.col(static_cast<Eigen::Index>(j)));
+        return;
+    }
 
     const Vector psi = Y.getField();
     Vector g(nGeom);
@@ -717,6 +810,15 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
             if (sameGrid)
                 for (Index v = 0; v < nVars; ++v)
                     y.lambda(v) = restart.lambda(v);
+
+            // Nor do the field unknowns: they are the field model's own
+            // representation, sized by the model rather than by the transport's
+            // degree or mesh, and runManta refuses a file whose nField differs
+            // from the model's. So they transfer verbatim, which is also the
+            // only choice that leaves them set at all -- InitialFieldValue is
+            // not called on a restart, and resetCoeffs left psi zero.
+            if (nField > 0)
+                y.getField() = restart.getField();
         }
 
         ApplyDirichletBCs(y, t); // If dirichlet, overwrite with those boundary conditions
@@ -2861,6 +2963,20 @@ Vector SystemSolver::ironsTuck(const Vector &g, const Vector &delta, const Vecto
     if (!(secant.norm() > 1e-12 * scale))
         return g;
 
+    // Only along a direction the two increments agree on. The step is exact
+    // when delta = lambda deltaPrev -- the sweep settled into its dominant
+    // eigendirection -- and is an extrapolation with no evidence behind it
+    // otherwise. A strongly non-normal iteration matrix amplifies and turns an
+    // increment before that regime is reached: the theta pinch's adjoint sweep
+    // at cj = 0 grows its first increment tenfold at cos = -0.27, while its
+    // spectral radius is 0.14. Extrapolating from that pair is what drove that
+    // sweep to a backward error of 1e68, where the plain iteration converges in
+    // ten sweeps. The divergent couplings this acceleration exists for give
+    // pairs with |cos| above 0.99, so they are untouched.
+    const double alignment = delta.dot(deltaPrev) / (delta.norm() * deltaPrev.norm());
+    if (!(std::abs(alignment) >= 0.9))
+        return g;
+
     const Vector accelerated = g - (delta.dot(secant) / secant.squaredNorm()) * delta;
 
     // The guard above bounds the denominator relative to the numerator, so this
@@ -2898,6 +3014,17 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     Vector dpsi = Vector::Zero(nField);
     Vector delta = Vector::Zero(nField), deltaPrev = Vector::Zero(nField);
     bool haveDeltaPrev = false, converged = false;
+    // The run's error weights at the state the Jacobian was built at: the
+    // weights IDA's error and Newton tests use (it takes them from
+    // getErrorWeights), and those NewtonStep's tests use. See the acceptance
+    // test below for why the sweep has to be measured in them.
+    N_Vector ewt = N_VClone(delY), prevDelY = N_VClone(delY), change = N_VClone(delY);
+    {
+        N_Vector yAt = N_VMake_Serial(N_VGetLength(delY), yJacMem, ctx);
+        getErrorWeights(yAt, ewt);
+        N_VDestroy(yAt);
+    }
+    N_VConst(0.0, prevDelY);
 
     ++fieldSweepSolves;
 
@@ -2924,21 +3051,63 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
         deltaPrev = delta;
         delta = g - dpsi;
 
-        // The acceptance test is on the UNACCELERATED iterate, and is purely
-        // relative -- deliberately not `tol * max(1, |g|)`,
-        // whose absolute floor stopped the sweep after the first iterate
-        // whenever |g| < 1, i.e. throughout the small-correction regime Newton
-        // lives in. Accepting only g is also what keeps the returned pair
-        // consistent: dx was solved against the dpsi that produced this g, so
-        // row one of the coupled system is off by A1 . delta, which is the
-        // tolerance. An extrapolated dpsi would be off by the length of the
+        // The acceptance test is on the UNACCELERATED iterate, and on how far
+        // this sweep moved the *whole* increment, transport and field together,
+        // in the run's error-weighted RMS norm -- the norm IDA's Newton test is
+        // in. Accepting only g keeps the returned pair consistent: dx was solved
+        // against the dpsi that produced this g, so row one of the coupled system
+        // is off by A1 . delta, which A^-1 carries into the transport block as
+        // the size of the next sweep's change. This sweep's change estimates
+        // that to within the sweep's contraction factor, 0.1-0.2 on the theta
+        // pinch. An extrapolated dpsi would be off by the length of the
         // extrapolation instead, and nothing downstream would report it.
         //
+        // **What the test is measured in, and against what, were both settled
+        // by what each costs IDA**, on the manufactured theta pinch
+        // (ThetaPinchMMSTests.cpp) at 1e-9 / 1e-11 and on ThetaPinchRunTests.cpp's
+        // run at 1e-6 / 1e-8:
+        //
+        // * *In the run's weights, over the whole increment.* A relative 2-norm
+        //   test on psi alone leaves an error in the transport block, through
+        //   A^-1 A1 delta, that is negligible in the 2-norm and not in IDA's:
+        //   sigma and q near the axis sit near zero, so their weights are
+        //   ~1/atol. At k = 3 on 8 cells IDA then held order one for more than
+        //   20000 steps against the exact solve's 213, and tightening that test
+        //   to 1e-11 did not cure it.
+        // * *Absolute, and well inside Newton's own tolerance.* IDA estimates
+        //   Newton's rate as ||del_m|| / ||del_0|| in this norm and fails a step
+        //   above 0.9 (idaNlsConvTest, ida_nls.c), and it accepts a corrector
+        //   after one iteration on the strength of the last rate; an error that
+        //   is small against a late update, or against the first, is what keeps
+        //   both readings honest. At 1e-2 the run test took 658 steps against
+        //   the exact solve's 166. A test relative to the increment does not
+        //   fix that: at 1e-3 of the increment it lets a first update of size ~2
+        //   carry an error of 2e-3, and k = 4 on 8 cells held order one for
+        //   29000 steps against 214. At 1e-4 absolute every case measured takes
+        //   steps comparable to the exact solve's, and the answers agree.
+        // * *...or a millionth of the increment, whichever is larger.* The first
+        //   solve of a run is IDACalcIC's first Newton step, at cj ~ 1e9, and
+        //   its increment is ~4e8 error-weight units: 1e-4 there is 1e-13 of
+        //   it, which twenty sweeps cannot reach, and every such run fell back
+        //   to the exact solve exactly once. A relative error of 1e-6 in a
+        //   Newton update moves IDA's rate estimate by nothing it can see, and
+        //   for any increment below 100 units the absolute bound is the one in
+        //   force.
+        //
         // isZero(0.0), not the default: Eigen's dummy_precision is ~1e-12, so
-        // the bare call was an absolute magnitude test wearing a degenerate
-        // case's clothing. This fires only when the increment is exactly zero,
-        // which is the 0/0 the relative test genuinely cannot handle.
-        if (delta.isZero(0.0) || delta.norm() <= fieldSolveTolerance * g.norm())
+        // the bare call would be an absolute magnitude test wearing a degenerate
+        // case's clothing. This fires only when the increment is exactly zero.
+        constexpr double relativeFloor = 1e-6;
+        N_VLinearSum(1.0, delY, -1.0, prevDelY, change);
+        DGSoln(nVars, grid, k, N_VGetArrayPointer(change), nScalars, nAux, nField).getField() = delta;
+        N_VScale(1.0, delY, prevDelY);
+        DGSoln increment(nVars, grid, k, N_VGetArrayPointer(delY), nScalars, nAux, nField);
+        increment.getField() = g;
+        const double incrementNorm = N_VWrmsNorm(delY, ewt);
+        increment.getField().setZero(); // solveTransportJac leaves it zero; written on acceptance
+        const bool accept = delta.isZero(0.0) || N_VWrmsNorm(change, ewt) <=
+                                                     std::max(fieldSolveTolerance, relativeFloor * incrementNorm);
+        if (accept)
         {
             dpsi = g;
             converged = true;
@@ -2950,6 +3119,9 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     }
 
     N_VDestroy(work);
+    N_VDestroy(ewt);
+    N_VDestroy(prevDelY);
+    N_VDestroy(change);
 
     if (converged)
     {
@@ -2971,17 +3143,14 @@ void SystemSolver::solveCoupledJacIterative(N_Vector res_g, N_Vector delY)
     //
     //     #sweeps  <  nField + 1
     //
-    // and *no fixture in this tree is on the winning side of it*: at nField == 1
-    // the sweep takes 3 against exact's 2, and at nField == 5 it takes 13 to 38
-    // against exact's 6. Measured, the iterative path is 1.5x more expensive than
-    // exact at nField == 1 and 2-6x more expensive at nField == 5, for the same
-    // answer -- and an escalation pays fieldSolveMaxSweeps *plus* the exact solve
-    // on top. That is not a defect: this path is a bet on N_magnetics >> N_HDG,
-    // where nField + 1 transport solves and an O(nField^3) dense solve are
-    // hopeless and one sweep per iteration is the only affordable option. It is
-    // a bet, though, and not a free improvement, which is why it is written down
-    // here, in the initialize() warning, and in TODO rather than left to be
-    // rediscovered.
+    // and which side of it a run is on is a property of the coupling. The
+    // manufactured fixtures lose: over whole integrations they take 2.0-2.8
+    // sweeps a solve against an nField + 1 of 2 to 6. The theta pinch wins: its
+    // sweep contracts at 0.10-0.19 and takes ~3.7 a solve whatever nField is, so
+    // iterative is 1.5x faster at nField == 12 and 12x at nField == 132. An
+    // escalation, though, pays fieldSolveMaxSweeps
+    // *plus* the exact solve on top -- which is why the mode is a cost choice,
+    // stated here, in the initialize() message and in docs/field_coupling.rst.
     //
     // Counted, not warned: a warning here would fire once per Jacobian solve.
     // The count is reported once per run, in Solver.cpp.
@@ -3501,16 +3670,42 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
 }
 
 // See the declaration.
+Vector SystemSolver::objectiveWeights(DGSoln const &state) const
+{
+    const Index nPer = physicsNodesPerCell();
+    Vector w(nCells * nPer);
+    for (Index i = 0; i < nCells; ++i)
+        w.segment(i * nPer, nPer) = superconvergent ? Vector(postprocessor->starWeights(i))
+                                                    : Vector(state.getBasis().getIntegrationWeights(grid[i]));
+    return w;
+}
+
+double SystemSolver::objectiveValue(AdjointProblem &objective, Index gIndex, DGSoln &state, Time tEval)
+{
+    if (fieldModel)
+    {
+        PhysicsNodes nodes = physicsNodesAt(state, tEval);
+        return objective.GFnAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(state),
+                                    physicsNodesPerCell());
+    }
+    if (superconvergent)
+    {
+        postprocessor->computeUStar(state);
+        return objective.GFn(gIndex, state, *postprocessor);
+    }
+    return objective.GFn(gIndex, state);
+}
+
 std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &objective,
                                                             Index gIndex, DGSoln const &state,
-                                                            Time tEval, Vector *dGdmu)
+                                                            Time tEval, Vector *dGdmu, Vector *dGdpsi)
 {
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
     // physicsNodesAt builds u*, and fills the geometry an objective's dg may read.
     const Index derivK = superconvergent ? k + 1 : k;
 
-    GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux);
+    GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux, nGeom);
     PhysicsNodes nodes = physicsNodesAt(state, tEval);
     objective.dg(gIndex, dGdvars, nodes.states, nodes.points);
     if (dGdmu != nullptr)
@@ -3519,6 +3714,33 @@ std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &obje
             *dGdmu = dGdvars.Scalars();
         else
             dGdmu->resize(0);
+    }
+
+    // dG/dpsi. psi reaches nothing outside the field rows except through the
+    // geometry slots, so its explicit share of G = sum_j w_j g(geom(psi, x_j))
+    // is sum_j w_j (dg/dgeom)_j . dgeom/dpsi(x_j) -- diag(w), the weights G
+    // itself is summed with, at the nodes dg was evaluated on.
+    if (dGdpsi != nullptr)
+    {
+        if (fieldModel)
+        {
+            const Vector psi = state.getField();
+            const Vector w = objectiveWeights(state);
+            Matrix const &dgdgeom = dGdvars.GeometryMatrix();
+            Matrix dgeom = Matrix::Zero(nGeom, nField);
+            *dGdpsi = Vector::Zero(nField);
+            for (size_t j = 0; j < nodes.points.size(); ++j)
+            {
+                const Vector slope = dgdgeom.col(static_cast<Index>(j));
+                if (slope.squaredNorm() == 0.0)
+                    continue;
+                dgeom.setZero();
+                fieldModel->dGeometry_dpsi(dgeom, psi, nodes.points[j], tEval);
+                *dGdpsi += w(static_cast<Index>(j)) * dgeom.transpose() * slope;
+            }
+        }
+        else
+            dGdpsi->resize(0);
     }
 
     Vector dGdu(nVars * (k + 1));
@@ -3604,6 +3826,13 @@ std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &obje
 // blocks some earlier evaluation left in src.
 void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
 {
+    // Every adjoint path comes through here, the on-demand ones included, so
+    // this is the one guard that cannot be routed around. initialize() refuses
+    // the configured cases earlier and with more to say.
+    if (equilibriumModel)
+        throw std::logic_error("No adjoint can be solved with an equilibrium model attached (FieldCoupling = "
+                               "\"consistent\"): it supplies no derivatives through the field.");
+
     // Rebuild rather than grow. Every container filled below is appended to, so
     // a second adjoint solve on one solver used to leave them holding 2 * nCells
     // entries with the stale ones at the front -- which is where every index
@@ -3890,11 +4119,7 @@ void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
 void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 {
     assembleAdjointOperator(adjointDerivativesAt(y, dydt, jt));
-    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu);
-    if (fieldModel)
-        G_field = Vector::Zero(nField);
-    else
-        G_field.resize(0);
+    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field);
 
     initialised = true;
 }
@@ -3964,11 +4189,7 @@ void SystemSolver::solveAdjointAt(AdjointProblem &objective, std::vector<Index> 
     assembleAdjointOperator(src);
     for (Index g : objectives)
     {
-        G_y = assembleObjectiveGradient(objective, g, state, src.t, &G_mu);
-        if (fieldModel)
-            G_field = Vector::Zero(nField);
-        else
-            G_field.resize(0);
+        G_y = assembleObjectiveGradient(objective, g, state, src.t, &G_mu, &G_field);
         solveAdjointState();
         storeAdjointSolution(g, state, operatorAtState);
     }
@@ -4345,7 +4566,7 @@ void SystemSolver::solveCoupledAdjointIterative()
             residual2 += (A2_transpose_cellwise[i] * delta).squaredNorm();
         residualNorm = std::sqrt(residual2);
 
-        if (residualNorm <= fieldSolveTolerance * rhsNorm)
+        if (residualNorm <= fieldSolveAdjointTolerance * rhsNorm)
         {
             zpsi = g;
             converged = true;
@@ -4392,7 +4613,7 @@ void SystemSolver::solveCoupledAdjointIterative()
         "to the exact transposed Schur solve, which costs {} transposed transport solves. "
         "The gradient is correct either way. Raise FieldSolveMaxAdjointSweeps to try "
         "longer, or set FieldSolve = exact to skip the sweep.",
-        fieldSolveMaxAdjointSweeps, residualNorm, fieldSolveTolerance, rhsNorm, nField + 1);
+        fieldSolveMaxAdjointSweeps, residualNorm, fieldSolveAdjointTolerance, rhsNorm, nField + 1);
     solveCoupledAdjointExact();
 }
 
@@ -4431,7 +4652,9 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     // through G_mu just as it sees the cells' part through G_y.
     DGSoln deltaMap(nVars, grid, k, N_VGetArrayPointer(delta), nScalars, nAux, nField);
     const Vector deltaMu = nScalars > 0 ? Vector(deltaMap.Scalars()) : Vector();
-    double deltaNorm = deltaMu.squaredNorm();
+    // ...and the field's, which an objective reading geometry sees through G_field.
+    const Vector deltaPsi = nField > 0 ? Vector(deltaMap.getField()) : Vector();
+    double deltaNorm = deltaMu.squaredNorm() + deltaPsi.squaredNorm();
     for (Index i = 0; i < static_cast<Index>(nCells); ++i)
         for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
         {
@@ -4445,19 +4668,20 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
         // y, not yJac: y maps Y, the state the solve is actually in. yJac does not
         // catch up until the end of integrate(), so reading it here would report
         // the objective at the initial condition.
-        if (superconvergent)
-            postprocessor->computeUStar(y);
-        out.value(g) = superconvergent
-                           ? adjointProblem->GFn(g, y, *postprocessor)
-                           : adjointProblem->GFn(g, y);
+        out.value(g) = objectiveValue(*adjointProblem, g, y, jt);
 
         // dG/dy for this objective, from its dg alone: the Jacobian built above
         // is the only one this needs, and it is not transposed.
-        Vector Gmu;
-        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt, &Gmu);
+        Vector Gmu, Gpsi;
+        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt, &Gmu, &Gpsi);
 
         double dot = nScalars > 0 ? Gmu.dot(deltaMu) : 0.0;
         double dGdyNorm = nScalars > 0 ? Gmu.squaredNorm() : 0.0;
+        if (nField > 0)
+        {
+            dot += Gpsi.dot(deltaPsi);
+            dGdyNorm += Gpsi.squaredNorm();
+        }
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
             {
@@ -4536,11 +4760,7 @@ void SystemSolver::computeAdjointGradients()
     initialised = true;
     for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
     {
-        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu);
-        if (fieldModel)
-            G_field = Vector::Zero(nField);
-        else
-            G_field.resize(0);
+        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field);
         solveAdjointState();
         storeAdjointSolution(gIndex, y, true);
         accumulateAdjointGradients(gIndex);
@@ -4602,8 +4822,19 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
     const bool spatial = adjointProblem->areParametersSpatial();
     const Index nPhys = physicsNodesPerCell();
     const Index nPoints = nCells * nPhys;
-    const Matrix dGdp = superconvergent ? adjointProblem->dGFndp(gIndex, y, *postprocessor)
-                                        : adjointProblem->dGFndp(gIndex, y);
+    // With a field model, on the solver's own geometry-filled states: the
+    // y-based forms evaluate the objective on states with no geometry rows, and
+    // one that reads geometry would read past them.
+    Matrix dGdp;
+    if (fieldModel)
+    {
+        PhysicsNodes nodes = physicsNodesAt(y, jt);
+        dGdp = adjointProblem->dGFndpAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(y), nPhys, y,
+                                             superconvergent ? postprocessor.get() : nullptr);
+    }
+    else
+        dGdp = superconvergent ? adjointProblem->dGFndp(gIndex, y, *postprocessor)
+                               : adjointProblem->dGFndp(gIndex, y);
     if (spatial)
         checkShapeAndSet(G_p.block(gIndex * nPoints, 0, nPoints, adjointProblem->getNp()), dGdp,
                          "dGdp in SystemSolver");
@@ -4959,51 +5190,110 @@ void SystemSolver::printOnNodes(std::ostream &out, double t, N_Vector const& tem
     std::println(out, ""); // Two blank lines needed to make gnuplot happy
 }
 
+// See the ErrorWeights declaration for what each scheme is, and
+// docs/running.rst ("Error weights") for the measurements that chose the
+// default. The relative part, rtol |y_i|, is pointwise in every scheme; what
+// differs is the absolute part each class of unknown is held to.
 int SystemSolver::getErrorWeights(N_Vector y_sundials, N_Vector ewt_sundials)
 {
     DGSoln y(nVars, grid, k, N_VGetArrayPointer(y_sundials), nScalars, nAux, nField);
     DGSoln ewt(nVars, grid, k, N_VGetArrayPointer(ewt_sundials), nScalars, nAux, nField);
+
+    using W = ErrorWeights;
+    const W scheme = errorWeights;
+    const bool derived = scheme == W::Derivative || scheme == W::DerivativeLocal || scheme == W::Hybrid ||
+                         scheme == W::HybridLocal;
+    const bool hybrid = scheme == W::Hybrid || scheme == W::HybridLocal;
+    // sigma, q and aux floored at rtol times their largest magnitude on the
+    // grid; AllMax floors u and lambda the same way.
+    const bool floorAlgebraic = scheme == W::AlgebraicMax || scheme == W::AllMax || derived;
+    const bool floorAll = scheme == W::AllMax;
+    // The local kappa is the last Jacobian build's dsigma/dq and dsigma/du at
+    // the physics nodes, so it costs no physics call. Before the first build
+    // there is none, and DerivativeLocal falls back to Derivative's ratio.
+    const bool localKappa = (scheme == W::DerivativeLocal || scheme == W::HybridLocal) &&
+                            jacobianDerivatives.valid && jacobianDerivatives.dSigma.size() == nVars;
+    const Index nPhys = physicsNodesPerCell();
+
+    auto atolOf = [&](Index v) { return atol.size() == static_cast<size_t>(nVars) ? atol[v] : atol[0]; };
+
+    std::vector<double> maxU(nVars, 0.0), maxQ(nVars, 0.0), maxS(nVars, 0.0), maxL(nVars, 0.0), maxA(nAux, 0.0);
+    if (floorAlgebraic)
+    {
+        for (Index i = 0; i < nCells; ++i)
+        {
+            for (Index v = 0; v < nVars; ++v)
+            {
+                maxU[v] = std::max(maxU[v], y.u(v).getCoeff(i).second.cwiseAbs().maxCoeff());
+                maxQ[v] = std::max(maxQ[v], y.q(v).getCoeff(i).second.cwiseAbs().maxCoeff());
+                maxS[v] = std::max(maxS[v], y.sigma(v).getCoeff(i).second.cwiseAbs().maxCoeff());
+            }
+            for (Index a = 0; a < nAux; ++a)
+                maxA[a] = std::max(maxA[a], y.Aux(a).getCoeff(i).second.cwiseAbs().maxCoeff());
+        }
+        for (Index v = 0; v < nVars; ++v)
+            maxL[v] = y.lambda(v).cwiseAbs().maxCoeff();
+    }
+    auto floored = [&](double absTol, double scale, bool on) { return on ? std::max(absTol, rtol * scale) : absTol; };
+
     for (Index i = 0; i < nCells; ++i)
     {
-        double absTol = 1e-8;
+        // The aux rows take the last variable's absolute tolerance, as they
+        // always have; with one atol, which is every config in the tree, that
+        // is atol[0].
+        double absTol = atolOf(nVars - 1);
         for (Index v = 0; v < nVars; ++v)
         {
-            if (atol.size() == 1)
+            absTol = atolOf(v);
+            double tolU = floored(absTol, maxU[v], floorAll);
+            double tolQ = floored(absTol, maxQ[v], floorAlgebraic);
+            double tolS = floored(absTol, maxS[v], floorAlgebraic);
+
+            if (derived)
             {
-                absTol = atol[0];
-            }
-            else if (atol.size() == nVars)
-            {
-                absTol = atol[v];
+                // q held to what u's tolerance implies across this cell, and
+                // sigma to q's times kappa: the run's sigma/q scale, or locally
+                // the propagation of u's and q's tolerances through the last
+                // build's dsigma/du and dsigma/dq, at the worst node of the cell.
+                const double h = grid[i].h();
+                const double scaleU = rtol * maxU[v] + absTol;
+                double dQ = scaleU / h;
+                double dS = maxQ[v] > 0.0 ? dQ * maxS[v] / maxQ[v] : dQ;
+                if (localKappa)
+                {
+                    GlobalState const &dSigma = jacobianDerivatives.dSigma[v];
+                    double worst = 0.0;
+                    for (Index j = 0; j < nPhys; ++j)
+                    {
+                        const Index node = i * nPhys + j;
+                        double t = 0.0;
+                        for (Index w = 0; w < nVars; ++w)
+                        {
+                            const double scaleUw = rtol * maxU[w] + atolOf(w);
+                            t += std::abs(dSigma.Derivative()(w, node)) * (scaleUw / h) +
+                                 std::abs(dSigma.Variable()(w, node)) * scaleUw;
+                        }
+                        worst = std::max(worst, t);
+                    }
+                    dS = std::max(worst, absTol);
+                }
+                // The hybrids take the stricter of this and AlgebraicMax's floor.
+                tolQ = hybrid ? std::min(dQ, tolQ) : dQ;
+                tolS = hybrid ? std::min(dS, tolS) : dS;
             }
 
-            ewt.u(v).getCoeff(i).second = 1.0 / (rtol * abs(y.u(v).getCoeff(i).second.array()) + absTol);
-            ewt.q(v).getCoeff(i).second = 1.0 / (rtol * abs(y.q(v).getCoeff(i).second.array()) + absTol);
-            ewt.sigma(v).getCoeff(i).second = 1.0 / (rtol * abs(y.sigma(v).getCoeff(i).second.array()) + absTol);
+            ewt.u(v).getCoeff(i).second = 1.0 / (rtol * abs(y.u(v).getCoeff(i).second.array()) + tolU);
+            ewt.q(v).getCoeff(i).second = 1.0 / (rtol * abs(y.q(v).getCoeff(i).second.array()) + tolQ);
+            ewt.sigma(v).getCoeff(i).second = 1.0 / (rtol * abs(y.sigma(v).getCoeff(i).second.array()) + tolS);
         }
 
         for (Index a = 0; a < nAux; ++a)
-        {
-
-            ewt.Aux(a).getCoeff(i).second = 1.0 / (rtol * abs(y.Aux(a).getCoeff(i).second.array()) + absTol);
-        }
+            ewt.Aux(a).getCoeff(i).second =
+                1.0 / (rtol * abs(y.Aux(a).getCoeff(i).second.array()) + floored(absTol, maxA[a], floorAlgebraic));
     }
 
     for (Index v = 0; v < nVars; ++v)
-    {
-
-        double absTol = 1e-8;
-
-        if (atol.size() == 1)
-        {
-            absTol = atol[0];
-        }
-        else if (atol.size() == nVars)
-        {
-            absTol = atol[v];
-        }
-        ewt.lambda(v) = 1.0 / (rtol * abs(y.lambda(v).array()) + absTol);
-    }
+        ewt.lambda(v) = 1.0 / (rtol * abs(y.lambda(v).array()) + floored(atolOf(v), maxL[v], floorAll));
 
     for (Index i = 0; i < nScalars; ++i)
     {

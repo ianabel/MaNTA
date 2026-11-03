@@ -50,6 +50,7 @@ set(MANTA_TEST_SOURCES
   FieldAdjointTests.cpp
   FieldDoFLayoutTests.cpp
   FieldJacobianTests.cpp
+  EquilibriumTests.cpp
   FieldModelSpecTests.cpp
   FieldRegistryTests.cpp
   GeometryDerivativeTests.cpp
@@ -81,6 +82,9 @@ set(MANTA_TEST_SOURCES
   StateGeometryTests.cpp
   SystemSolverMatrixTests.cpp
   SystemSolverTests.cpp
+  ThetaPinchEquilibriumTests.cpp
+  ThetaPinchMMSTests.cpp
+  ThetaPinchRunTests.cpp
   TimeDerivativeSourceTests.cpp
   TransportSystemTests.cpp
   UtilityTests.cpp

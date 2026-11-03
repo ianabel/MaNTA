@@ -48,6 +48,10 @@
 // as long as its destructor is instantiated where the type is complete, which
 // is ~SystemSolver in SystemSolver.cpp.
 class FieldModel;
+// Likewise, for symmetry with FieldModel rather than for toml11: a tier-0 model
+// and the opaque answer the solver caches from it.
+class EquilibriumModel;
+class Equilibrium;
 
 class SystemSolver
 {
@@ -695,9 +699,26 @@ class SystemSolver
         // derivative of the objective GFn reports. With global scalars, dG/dmu
         // -- dg's Scalars entry, already integrated -- goes into *dGdmu when one
         // is passed; it is the scalar rows' share of the same right-hand side.
+        //
+        // With a field model, dG/dpsi goes into *dGdpsi when one is passed: dg's
+        // geometry rows contracted with the weights G is summed with and the
+        // model's dGeometry_dpsi at the same nodes. It is the field rows' share
+        // of the adjoint right-hand side, G_field. Empty without a field model.
         std::vector<Vector> assembleObjectiveGradient(AdjointProblem &objective, Index gIndex,
                                                       DGSoln const &state, Time tEval,
-                                                      Vector *dGdmu = nullptr);
+                                                      Vector *dGdmu = nullptr,
+                                                      Vector *dGdpsi = nullptr);
+
+        // G for objective gIndex at `state`, as the run reports it. With a field
+        // model attached, on the physics nodes physicsNodesAt fills with geometry,
+        // since only the solver can; otherwise through the case's own GFn, u*-based
+        // under the superconvergent scheme. Either way the functional dg
+        // differentiates.
+        double objectiveValue(AdjointProblem &objective, Index gIndex, DGSoln &state, Time tEval);
+
+        // One weight per physics node: the star weights b1 under the
+        // superconvergent scheme, the interpolatory basis weights otherwise.
+        Vector objectiveWeights(DGSoln const &state) const;
 
         // w = dG/dGamma: how the objective moves with the physics outputs Gamma
         // at each physics node -- the flux sigma_hat the case returns, and its
@@ -815,10 +836,59 @@ class SystemSolver
             min_step_size = dt_min;
         };
 
+        // The absolute part of IDA's error weights, class by class; the
+        // relative part is rtol |y_i| pointwise in every scheme. These are the
+        // weights of IDA's error test *and* its Newton test, of the field
+        // sweep's stopping test and of the NewtonStep steady test.
+        //
+        //   Pointwise          atol for every unknown -- the weights before
+        //                      this option existed.
+        //   AlgebraicMax       sigma, q and aux floored at rtol times that
+        //                      variable's largest magnitude on the grid; u and
+        //                      lambda as Pointwise. The default.
+        //   AllMax             AlgebraicMax, and u and lambda floored too.
+        //   Derivative         q held to u's tolerance over the cell width,
+        //                      sigma to q's times max|sigma| / max|q|.
+        //   DerivativeLocal    Derivative with sigma's from the last Jacobian
+        //                      build's local dsigma/dq and dsigma/du.
+        //   Hybrid(Local)      the stricter of Derivative(Local) and AlgebraicMax.
+        //
+        // Taking the algebraic unknowns out of the error test altogether is the
+        // separate, orthogonal setSuppressAlgebraicError; it composes with any
+        // of these.
+        //
+        // Why AlgebraicMax: pointwise weights hold sigma and q, wherever they
+        // pass near zero, to ~atol absolutely, and next to a Dirichlet wall --
+        // where the Chebyshev nodes crowd and the diffusive mode is stiff --
+        // backward Euler's lag behind the slow manifold, ~ h dg/dt, shows up in
+        // them amplified by the node spacing. IDA reads that as local error that
+        // jumps when h doubles and holds order one indefinitely: the "crawl" on
+        // the coupled theta pinch, ~25000 steps for ~200, under either field
+        // solve and at any FieldSolveTolerance. docs/running.rst has the study.
+        enum class ErrorWeights
+        {
+            Pointwise,
+            AlgebraicMax,
+            AllMax,
+            Derivative,
+            DerivativeLocal,
+            Hybrid,
+            HybridLocal
+        };
+        void setErrorWeights(ErrorWeights w) { errorWeights = w; };
+        ErrorWeights getErrorWeightScheme() const { return errorWeights; };
+
         void setTolerances(std::vector<double> a, double r)
         {
             if (r <= 0)
                 throw std::logic_error("Cannot set tolerance to non-positive value");
+            // One absolute tolerance for every variable, or one each. Any other
+            // length used to fall through getErrorWeights to a hard-coded 1e-8,
+            // silently -- a far tighter solve than was asked for.
+            if (a.size() != 1 && a.size() != static_cast<size_t>(nVars))
+                throw std::invalid_argument("Absolute_tolerance has " + std::to_string(a.size()) +
+                                            " entries; it takes one, or one per variable (" +
+                                            std::to_string(nVars) + ").");
             atol = a;
             rtol = r;
         };
@@ -892,8 +962,10 @@ class SystemSolver
         // Block Gauss-Seidel between the transport and field blocks, with
         // Irons-Tuck acceleration: one transport solve and one field solve per
         // sweep, against the exact path's nField + 1 transport solves. Stops
-        // once the relative change in psi between sweeps is below
-        // FieldSolveTolerance, up to FieldSolveMaxSweeps.
+        // once a sweep changes the whole increment -- transport and field -- by
+        // less than FieldSolveTolerance in the run's own error-weighted RMS
+        // norm, or by less than a millionth of the increment when that is
+        // larger, up to FieldSolveMaxSweeps.
         //
         // Reaching that cap **escalates to solveCoupledJacExact** rather than
         // returning the last iterate, so this mode can no longer be wrong, only
@@ -1250,6 +1322,28 @@ class SystemSolver
         Index getFieldDOF() const { return nField; };
         Index getGeometrySlots() const { return nGeom; };
 
+        // Couple this solver to a magnetic equilibrium evaluated as a black box
+        // (tier 0, FieldCoupling = "consistent"): its geometry reaches the
+        // physics through State::geom exactly as a field model's does, but it
+        // adds no unknowns, no rows and no Jacobian coupling. The solver keeps
+        // the last equilibrium as a cache keyed on the transport state, solves
+        // a new one only when that state changes, and warm-starts it from the
+        // last; see equilibriumAt.
+        //
+        // The same refusals as setFieldModel, and one of the two at most: a
+        // solver has one source of geometry. Before initialize(), and nullptr
+        // detaches.
+        void setEquilibriumModel(std::shared_ptr<EquilibriumModel> model);
+        EquilibriumModel *getEquilibriumModel() const { return equilibriumModel.get(); };
+
+        // Equilibrium solves this run: one per distinct transport input.
+        long getEquilibriumSolves() const { return equilibriumSolves; };
+
+        // The geometry slots at x for the state Y, from whichever of the field
+        // model and the equilibrium is attached; empty with neither. What the
+        // case's diagnostics and the netCDF field group read.
+        void geometryAt(VectorRef out, DGSoln const &Y, Position x, Time t);
+
         // How the coupled Jacobian is solved once a field model is attached.
         // Iterative is block Gauss-Seidel and is the default; Exact is the
         // Schur complement onto psi, and is a verification tool rather than a
@@ -1276,6 +1370,17 @@ class SystemSolver
             fieldSolveTolerance = tol;
         };
         double getFieldSolveTolerance() const { return fieldSolveTolerance; };
+
+        // The adjoint sweep's tolerance, on a relative backward error rather than
+        // a weighted change: the adjoint solves at cj = 0 for a gradient, with no
+        // error test to measure against. See solveCoupledAdjointIterative.
+        void setFieldSolveAdjointTolerance(double tol)
+        {
+            if (tol <= 0)
+                throw std::logic_error("Field solve adjoint tolerance cannot be zero or negative.");
+            fieldSolveAdjointTolerance = tol;
+        };
+        double getFieldSolveAdjointTolerance() const { return fieldSolveAdjointTolerance; };
 
         void setFieldSolveMaxSweeps(int n)
         {
@@ -1316,8 +1421,9 @@ class SystemSolver
         // condition, so this is meaningful between the two phases as well.
         DGSoln const &getSolution() const { return yJac; };
 
-        // Fill the geometry rows of `states` from the field model, at the points
-        // those states were sampled on. A no-op with no model attached.
+        // Fill the geometry rows of `states` from the field model or the
+        // equilibrium, at the points those states were sampled on. A no-op with
+        // neither attached.
         //
         // Called once per residual and once per Jacobian update, never once per
         // variable: geometry does not depend on which equation is being
@@ -1522,12 +1628,9 @@ class SystemSolver
         // The field block of the adjoint state, z_psi, and of the adjoint
         // right-hand side, dG/dpsi.
         //
-        // G_field is identically zero and that is a *limit*, not a fact about
-        // the discretisation: AdjointProblem reports dg/du, dg/dq, dg/dsigma and
-        // dg/dphi and has no geometry hook, so an objective whose integrand
-        // reads State::geom directly loses that term. It cannot be detected from
-        // here, so it is named here and in TODO rather than left as an
-        // unremarked zero.
+        // G_field is dG/dpsi: what an objective reading State::geom contributes
+        // through dg's geometry rows (assembleObjectiveGradient), and zero for
+        // one that reads none.
         Vector adjoint_field;
         Vector G_field;
 
@@ -2330,11 +2433,41 @@ class SystemSolver
         // need to reach it and neither owns the solver.
         std::shared_ptr<FieldModel> fieldModel = nullptr;
 
+        // Tier 0: null unless setEquilibriumModel attached one, and never set
+        // together with fieldModel.
+        std::shared_ptr<EquilibriumModel> equilibriumModel = nullptr;
+
+        // The equilibrium for the transport state last asked about. `input` is
+        // that state's cell DOF -- sigma, q, u and aux, the prefix of the
+        // solution vector, which is everything the model is handed -- and `t`
+        // its time, so a repeat is recognised byte for byte. `eq` is also the
+        // next Solve's warm start. Cleared in initialize()'s unconditional part.
+        struct EquilibriumCache
+        {
+            std::vector<double> input;
+            Time t = 0.0;
+            std::shared_ptr<Equilibrium const> eq;
+        } equilibriumCache;
+        long equilibriumSolves = 0;
+
+        // The cached equilibrium if Y and t are the ones it was solved for, and
+        // a new one -- solved, cached and returned -- if not.
+        Equilibrium const &equilibriumAt(DGSoln const &Y, Time t);
+
+        // The refusals setFieldModel and setEquilibriumModel share: scalars,
+        // a case that reads no geometry, an output group colliding with a name
+        // the file already holds, and a second source of geometry.
+        void checkGeometrySource(std::string const &modelName, bool otherSourceAttached) const;
+
         // Iterative to match the FieldSolve default, so there is one default
         // rather than two that can drift. Read by solveJacEq and by
         // initialize(), which reports what the choice costs.
         FieldSolveMode fieldSolveMode = FieldSolveMode::Iterative;
-        double fieldSolveTolerance = 1e-8;
+        // Absolute, in the error-weighted RMS norm IDA's Newton test is in; see
+        // solveCoupledJacIterative for what looser and differently-measured
+        // tests cost. Matching ConfigSchema.
+        double fieldSolveTolerance = 1e-4;
+        double fieldSolveAdjointTolerance = 1e-8;
         int fieldSolveMaxSweeps = 20;
         // Larger than the forward cap, and for the reason the setter gives: the
         // adjoint runs at cj = 0, where the coupling is stiffest. One default,
@@ -2518,8 +2651,11 @@ class SystemSolver
         void assembleTauBlocks(Index i, Matrix const &tau, Matrix &D, Matrix &E,
                                Matrix &G, Matrix &H) const;
 
-        double rtol;
-        std::vector<double> atol;
+        // The schema's defaults, so a solver no configuration reached -- the
+        // test fixtures that build a Jacobian directly -- still has error weights.
+        double rtol = 1e-3;
+        std::vector<double> atol{1e-3};
+        ErrorWeights errorWeights = ErrorWeights::AlgebraicMax;
 
         NetCDFIO nc_output;
         NetCDFIO restart_file;

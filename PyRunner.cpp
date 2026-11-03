@@ -521,14 +521,8 @@ Vector PyRunner::G(void) {
   // the functional the gradient differentiates and the estimates bound, and the
   // u_h-based one beside it converges more slowly and is held to nothing.
   Vector Gout(ap->getNg());
-  if (system->isSuperconvergent()) {
-    system->postprocessor->computeUStar(system->yJac);
-    for (Index i = 0; i < ap->getNg(); i++)
-      Gout(i) = ap->GFn(i, system->yJac, *system->postprocessor);
-  } else {
-    for (Index i = 0; i < ap->getNg(); i++)
-      Gout(i) = ap->GFn(i, system->yJac);
-  }
+  for (Index i = 0; i < ap->getNg(); i++)
+    Gout(i) = system->objectiveValue(*ap, i, system->yJac, system->jt);
 
   return Gout;
 }
@@ -577,18 +571,12 @@ py::tuple PyRunner::getAdjointGradients(void) {
   }
 
   Vector G(adjoint->getNg());
-  if (system->isSuperconvergent()) {
-    // G_p above is the gradient of the u*-based objective, so the value reported
-    // alongside it has to be that same objective -- otherwise a finite-difference
-    // check compares the derivative of one functional against differences of
-    // another.
-    system->postprocessor->computeUStar(system->yJac);
-    for (Index i = 0; i < adjoint->getNg(); i++)
-      G(i) = adjoint->GFn(i, system->yJac, *system->postprocessor);
-  } else {
-    for (Index i = 0; i < adjoint->getNg(); i++)
-      G(i) = adjoint->GFn(i, system->yJac);
-  }
+  // G_p above is the gradient of the objective objectiveValue reports -- u*-based
+  // under Superconvergent -- so the value beside it has to be that same one, or
+  // a finite-difference check compares the derivative of one functional against
+  // differences of another.
+  for (Index i = 0; i < adjoint->getNg(); i++)
+    G(i) = system->objectiveValue(*adjoint, i, system->yJac, system->jt);
 
   return py::make_tuple(G, gp);
 }
@@ -666,11 +654,11 @@ py::dict PyRunner::objective_gradient(Index g) {
     throw std::out_of_range("Objective " + std::to_string(g) +
                             " requested, but the adjoint problem defines " +
                             std::to_string(ap.getNg()) + ".");
-  Vector Gmu;
+  Vector Gmu, Gpsi;
   const std::vector<Vector> Gy =
-      system->assembleObjectiveGradient(ap, g, system->yJac, system->jt, &Gmu);
+      system->assembleObjectiveGradient(ap, g, system->yJac, system->jt, &Gmu, &Gpsi);
   return nodalLayout(Gy, Vector::Zero(system->nVars * (system->nCells + 1)),
-                     Vector::Zero(system->getFieldDOF()), Gmu);
+                     system->getFieldDOF() > 0 ? Gpsi : Vector::Zero(0), Gmu);
 }
 
 py::dict PyRunner::objective_sensitivity(Index g) const {

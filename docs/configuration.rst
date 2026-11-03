@@ -105,6 +105,15 @@ Problem definition
        :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
+   * - ``FieldCoupling``
+     - ``"coupled"``, *file only*
+     - How the ``FieldModel`` is attached. ``coupled`` puts its unknowns in the
+       DAE and its derivatives in the Jacobian. ``consistent`` runs it as a black
+       box: solved to convergence at each transport state the physics is
+       evaluated at, held as a cache rather than as unknowns, with no Jacobian
+       coupling and no adjoint (a run asking for one is refused). A model whose
+       field has a differential DOF cannot run ``consistent``, and the key is
+       refused without a ``FieldModel``. See :ref:`field-tier-0`.
    * - ``FieldModel``
      - ``""``, *file only*
      - Name of a registered magnetic-field model to couple to, as registered by
@@ -113,7 +122,7 @@ Problem definition
        feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
        ``RestartData/nField`` is written on every run, and reads back as ``0``.
        An unrecognised name is an error listing what *is* registered;
-       note that no field model is registered in this tree yet. Like
+       ``ThetaPinchEquilibrium`` is the one in this tree. Like
        ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
        ``Runner.configure`` is an error rather than being ignored. See
        :doc:`field_coupling`.
@@ -271,7 +280,15 @@ Time integration
    * - ``Absolute_tolerance``
      - ``1e-3``
      - IDA's absolute tolerance. Either a single value or an array with one
-       entry per variable.
+       entry per variable; any other length is refused.
+   * - ``ErrorWeights``
+     - ``"AlgebraicMax"``
+     - How that absolute tolerance is applied to each class of unknown in IDA's
+       error weights: ``AlgebraicMax`` (``sigma``, ``q`` and the auxiliary
+       variables floored at ``Relative_tolerance`` times their largest
+       magnitude on the grid), ``Pointwise``, ``AllMax``, ``Derivative``,
+       ``DerivativeLocal``, ``Hybrid`` or ``HybridLocal``. See
+       :ref:`error-weights`.
    * - ``MinStepSize``
      - ``1e-7``
      - Steps smaller than this end the run.
@@ -608,18 +625,23 @@ the coupling on.
        the field block, at :math:`\texttt{nField}+1` transport solves per
        Jacobian solve.
    * - ``FieldSolveTolerance``
+     - ``1e-4``
+     - Where the forward sweep stops: once one sweep changes the whole Newton
+       increment -- transport and field -- by less than this in the run's
+       error-weighted RMS norm, the norm IDA's own tests are in, where its
+       Newton iteration stops at 0.33; or by less than a millionth of the
+       increment when that is larger, which only ``IDACalcIC``'s first step
+       reaches. Measured in IDA's terms because IDA is
+       what reads the answer: see :ref:`field-solve` for what a 2-norm test, a
+       looser bound and a relative one each cost. Reaching the cap escalates to the exact solve rather than
+       returning an under-converged answer.
+   * - ``FieldSolveAdjointTolerance``
      - ``1e-8``
-     - Where the sweep stops — **one key, two tests**, because the two
-       directions have different things available to measure. Forward, it is a
-       relative *change*: the sweep stops once
-       :math:`\|\delta\psi\| \le \texttt{tol}\,\|\psi\|` for the unaccelerated
-       iterate. In the adjoint it is a relative *backward error*: the field row
+     - Where the adjoint sweep stops: a relative *backward error*. The field row
        of the transposed system holds identically at every iterate, so the
-       residual of the pair returned is exactly
-       :math:`A_2^{T}\,\delta z_\psi`, and the sweep stops once that is below
-       ``tol`` times the norm of the right-hand side. Both are scale
-       equivariant, so neither has an absolute floor, and neither returns an
-       under-converged answer — reaching the cap escalates to the exact solve.
+       residual of the pair returned is exactly :math:`A_2^{T}\,\delta z_\psi`,
+       and the sweep stops once that is below this times the norm of the
+       right-hand side. Reaching the cap escalates to the exact solve.
    * - ``FieldSolveMaxSweeps``
      - ``20``
      - Sweep cap for the forward solve. Reaching it escalates to the exact
@@ -627,8 +649,7 @@ the coupling on.
    * - ``FieldSolveMaxAdjointSweeps``
      - ``100``
      - The same cap for the adjoint solve. Separate, and larger, because the
-       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest —
-       five field unknowns have been measured needing 13–38 sweeps.
+       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest.
 
 .. important::
 

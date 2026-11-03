@@ -6,6 +6,7 @@
 // SystemSolver.hpp only forward-declares FieldModel; the field group below needs
 // the spec that names its variables.
 #include "FieldModel.hpp"
+#include "EquilibriumModel.hpp"
 
 // Code for NetCDF interface
 //
@@ -226,54 +227,75 @@ void SystemSolver::initialiseNetCDF(std::string const &NetcdfOutputFile, size_t 
 // slots go in as spatial variables because that is what they are, and the field
 // DOFs as time series because psi has no x dependence -- the same split the
 // transport variables and the global scalars already get.
+//
+// The group, its label and the geometry slots come from whichever source of
+// geometry is attached; only a field model has DOFs to write. Geometry is read
+// through geometryAt on `y`, which for an equilibrium is the cached solve at
+// this state -- one Solve per slice, then a cache hit for every x.
+namespace
+{
+struct FieldOutputSpec
+{
+	std::string name, label;
+	std::vector<FieldSlot> const *geometry = nullptr;
+};
+} // namespace
+
 void SystemSolver::initialiseFieldOutput(NetCDFIO &file, Time tEval)
 {
-	if (!fieldModel)
+	if (!fieldModel && !equilibriumModel)
 		return;
 
-	FieldModelSpec const &fspec = fieldModel->getSpec();
+	FieldOutputSpec out = fieldModel ? FieldOutputSpec{fieldModel->getSpec().name, fieldModel->getSpec().label,
+													   &fieldModel->getSpec().geometry}
+									 : FieldOutputSpec{equilibriumModel->getSpec().name,
+													   equilibriumModel->getSpec().label,
+													   &equilibriumModel->getSpec().geometry};
 
-	NcGroup group = file.CreateGroup(fspec.name, "Self-consistent magnetic field model");
+	NcGroup group = file.CreateGroup(out.name, "Self-consistent magnetic field model");
 	// What the model's x means. MaNTA does not interpret it -- the provider
 	// declares its own coordinate and supplies the metric on it -- so recording
 	// it is the only way a reader can tell what the geometry is a function of.
-	group.putAtt("label", fspec.label);
+	group.putAtt("label", out.label);
 
-	for (Index f = 0; f < nField; ++f)
-		file.AddTimeSeries(fspec.name, fspec.dofs[f].name, fspec.dofs[f].description,
-						   fspec.dofs[f].units, y.Field(f));
+	if (fieldModel)
+	{
+		FieldModelSpec const &fspec = fieldModel->getSpec();
+		for (Index f = 0; f < nField; ++f)
+			file.AddTimeSeries(fspec.name, fspec.dofs[f].name, fspec.dofs[f].description,
+							   fspec.dofs[f].units, y.Field(f));
+	}
 
-	// A copy, not the map: the lambda outlives the statement that builds it, and
-	// `y` is a view over memory SUNDIALS owns.
-	const Vector psi = y.getField();
 	for (Index g = 0; g < nGeom; ++g)
-		file.AddVariable(fspec.name, fspec.geometry[g].name, fspec.geometry[g].description,
-						 fspec.geometry[g].units,
-						 [this, &psi, g, tEval](Position x)
+		file.AddVariable(out.name, (*out.geometry)[g].name, (*out.geometry)[g].description,
+						 (*out.geometry)[g].units,
+						 [this, g, tEval](Position x)
 						 {
 							 Vector slots = Vector::Zero(nGeom);
-							 fieldModel->Geometry(slots, psi, x, tEval);
+							 geometryAt(slots, y, x, tEval);
 							 return slots(g);
 						 });
 }
 
 void SystemSolver::writeFieldTimeslice(NetCDFIO &file, size_t tIndex, Time tEval)
 {
-	if (!fieldModel)
+	if (!fieldModel && !equilibriumModel)
 		return;
 
-	FieldModelSpec const &fspec = fieldModel->getSpec();
+	std::string const &name = fieldModel ? fieldModel->getSpec().name : equilibriumModel->getSpec().name;
+	std::vector<FieldSlot> const &geometry =
+		fieldModel ? fieldModel->getSpec().geometry : equilibriumModel->getSpec().geometry;
 
-	for (Index f = 0; f < nField; ++f)
-		file.AppendToTimeSeries(fspec.name, fspec.dofs[f].name, y.Field(f), tIndex);
+	if (fieldModel)
+		for (Index f = 0; f < nField; ++f)
+			file.AppendToTimeSeries(name, fieldModel->getSpec().dofs[f].name, y.Field(f), tIndex);
 
-	const Vector psi = y.getField();
 	for (Index g = 0; g < nGeom; ++g)
-		file.AppendToGroup(fspec.name, tIndex, fspec.geometry[g].name,
-						   [this, &psi, g, tEval](Position x)
+		file.AppendToGroup(name, tIndex, geometry[g].name,
+						   [this, g, tEval](Position x)
 						   {
 							   Vector slots = Vector::Zero(nGeom);
-							   fieldModel->Geometry(slots, psi, x, tEval);
+							   geometryAt(slots, y, x, tEval);
 							   return slots(g);
 						   });
 }
@@ -329,9 +351,7 @@ void SystemSolver::WriteAdjoints()
 	for (Index i = 0; i < ng; ++i)
 	{
 		const std::string Gi = "G" + std::to_string(i);
-		nc_output.AddScalarVariable(Gi, "G function", "",
-									superconvergent ? adjointProblem->GFn(i, y, *postprocessor)
-													: adjointProblem->GFn(i, y));
+		nc_output.AddScalarVariable(Gi, "G function", "", objectiveValue(*adjointProblem, i, y, jt));
 		nc_output.AddGroup(Gi + "_p", "Gradients of G using adjoint state method");
 		nc_output.AddGroup(Gi + "_boundary", "Gradients of G on boundary using adjoint state method");
 

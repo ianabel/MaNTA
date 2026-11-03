@@ -277,6 +277,10 @@ public:
   Vector Geometry(Index node) const { return m_Geometry.col(node); }
   void setGeometry(Index node, Vector const &g) { m_Geometry.col(node) = g; }
 
+  /// A zeroed state of this one's shape, for a derivative hook's out-parameter
+  /// when only a state of that shape is to hand.
+  GlobalState zeroedLike() const { return GlobalState(nCells, k, nVars, nScalars, nAux, nGeom); }
+
   /*
       Give this state the time derivatives of the variables.
 
