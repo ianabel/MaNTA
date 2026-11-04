@@ -516,27 +516,50 @@ supplies its own fixed geometry, as ``ThetaPinchDiffusion``'s
 ``VacuumGeometry = true`` does.
 
 Reading it in a value hook is all that is needed for the *residual* to be
-right. For the *Jacobian* to be right, a case that reads geometry must also say
-how it depends on it:
+right. For a coupled field's *Jacobian*, the solver also needs
+:math:`\partial(\hat\sigma, S, G)/\partial g` at the physics nodes — the first
+factor of the coupling block :math:`A_1`; the second,
+:math:`\partial g/\partial\psi`, is the field model's. **A case says where that
+comes from**, in its spec:
 
 .. code-block:: cpp
 
-   void dSigmaFn_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
-   void dSources_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
-   void dAuxG_dGeometry   (Index i, VectorRef out, const State &s, Position x, Time t);
+   SystemSpec{.variables = {...}, .readsGeometry = true,
+              .geometryDerivatives = GeometryDerivatives::Analytic}
 
-Each ``out`` is length ``nGeometry`` and, like every other derivative
-out-parameter, **arrives zeroed** — so a hook assigns only its nonzero entries.
-These are the first factor of the coupling block :math:`A_1`; the second,
-:math:`\partial g/\partial\psi`, is the field model's.
+* ``None``, the default: the case supplies none. A field cannot be coupled to it
+  — ``setFieldModel`` refuses, naming the declaration — but it can run as a
+  :ref:`black box <field-tier-0>`, which is what ``FieldCoupling = "auto"``
+  chooses for it.
+* ``Analytic``: the case's own hooks, pointwise,
 
-**An absent hook is an identically zero block, and that is correct rather than
-approximate** for a case that does not read geometry: it does not couple. It is
-*not* correct for a case that does. Getting this wrong has the usual asymmetric
-consequence — the Jacobian is never assembled, so a missing block costs Newton
-iterations and nothing else in a forward run, but the adjoint operator *is* the
-transpose and a missing block there is a silently wrong gradient beside a
-perfectly good :math:`G`.
+  .. code-block:: cpp
+
+     void dSigmaFn_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+     void dSources_dGeometry(Index i, VectorRef out, const State &s, Position x, Time t);
+     void dAuxG_dGeometry   (Index i, VectorRef out, const State &s, Position x, Time t);
+
+  Each ``out`` is length ``nGeometry`` and, like every other derivative
+  out-parameter, **arrives zeroed** — so a hook assigns only its nonzero entries.
+  An ``AutodiffTransportSystem`` derives all three, so a case built on it can
+  always declare ``Analytic``.
+* ``Differenced``: the solver differences the case's values instead — one
+  batched ``ComputePhysics`` per geometry slot, with that slot stepped at every
+  node, and one at the nodes as they stand, per Jacobian build — and never calls
+  the three hooks. It is for a case whose flux has no derivative in the
+  geometry to give, a flux code driven as a black box. The step is
+  :math:`\sqrt{\varepsilon}` relative to the slot's size, floored at its largest
+  size on the grid, and the coupling block comes out within
+  :math:`4\times10^{-7}` of the analytic one on the theta pinch (:math:`10^{-8}`
+  on the manufactured fixture) — which leaves IDA's step sequence unchanged.
+
+**The declaration is required because the hooks cannot speak for themselves.**
+They default to no-ops meaning "no coupling", so nothing could tell a case that
+supplies zero because its flux ignores the geometry from one that supplies zero
+because nobody wrote the hook — and a coupled Jacobian built on that zero
+costs Newton iterations in a forward run and is a silently wrong gradient in an
+adjoint, whose operator *is* the transpose. Declaring derivatives without
+``readsGeometry`` is refused by the spec itself.
 
 There is deliberately no hook for :math:`\partial q/\partial g` or for the trace
 rows. :math:`q = \partial_x u` is a definition rather than a physical relation,
@@ -698,7 +721,9 @@ The kinds, for :math:`N` cells at degree :math:`k`:
      - :math:`N(k+1)` whatever ``Superconvergent`` says
      - per residual, per Jacobian build; once per run per differential scalar
    * - ``ScalarCoupling``, ``FieldCoupling``
-     - pointwise ``dSources_dScalars``; the three ``*_dGeometry`` hooks
+     - pointwise ``dSources_dScalars``; the three ``*_dGeometry`` hooks, or, for a
+       case declaring ``GeometryDerivatives::Differenced``, ``ComputePhysics``
+       :math:`n_{geom} + 1` times
      - as ``Residual``
      - per Jacobian build
    * - ``Adjoint``

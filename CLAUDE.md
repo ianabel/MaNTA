@@ -1370,6 +1370,26 @@ search fails where full steps converge. **No adjoint** -- refused in
 **one source of geometry**: `setFieldModel` and `setEquilibriumModel` share
 `checkGeometrySource`, which refuses the second.
 
+**Which of the two runs is `FieldCoupling = "auto"`'s call (`chooseFieldCoupling`,
+`SolverConfig.cpp`), from `SystemSpec::geometryDerivatives`**: `None` (the
+default) cannot be coupled -- `setFieldModel` refuses it, since the hooks'
+no-op defaults would build A1 out of zeros -- and runs as a black box;
+`Analytic` couples; `Differenced` couples transients and runs steady solves as
+a black box, because the solver then differences `ComputePhysics` once per
+geometry slot plus once at the state per Jacobian build, and a steady solve
+builds a Jacobian nearly every iteration. That last rule departs from the
+design's, which coupled a differenced `Newton` solve against its own numbers;
+`docs/field_coupling.rst` has the measured table. A field with dynamics or an
+adjoint forces the coupled mode, and is refused for a `None` case. Two things
+are load-bearing. **The `Analytic` path is byte identical to the code before
+`geometryResponse`**, which only hoisted `dGeometry/dpsi` out of the row loop:
+re-run the theta-pinch `cmp` (the regression config, a `Superconvergent` and a
+`Newton` variant) after touching the A1 assembly. **The unperturbed
+`ComputePhysics` goes last** in `differencedGeometryResponse`, because
+`ComputePhysics` also writes the case's source cache, which the output reads;
+`a_build_spends_what_its_geometry_derivatives_declare` pins that and the call
+counts.
+
 **The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
 read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
 physics). Three things about it are load-bearing. Its pressure crosses as the

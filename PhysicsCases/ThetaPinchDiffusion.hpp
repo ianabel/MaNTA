@@ -29,6 +29,11 @@
     wall of radius a), so a frozen-geometry run is a choice rather than an
     accident.
 
+    Its derivatives in the geometry are Analytic -- the autodiff layer derives
+    them -- unless GeometryDerivatives in its table says Differenced or None, the
+    two other declarations SystemSpec::geometryDerivatives allows. Those exist to
+    exercise the solver's alternatives on a real case.
+
     The boundaries are zero flux at the axis -- V' <|grad x|^2> vanishes there,
     so that is the only consistent choice -- and Dirichlet on N at the wall.
     The datum is N, not n, because a boundary value cannot read geometry; as

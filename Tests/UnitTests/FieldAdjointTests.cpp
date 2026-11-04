@@ -131,7 +131,8 @@ public:
     explicit ClosedFormCoupledDiffusion(Vector p)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .readsGeometry = true}),
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic}),
           params(std::move(p))
     {
     }
@@ -306,7 +307,8 @@ public:
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
                            .aux = {{"phi", "an auxiliary quantity", ""}},
-                           .readsGeometry = true}),
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic}),
           params(std::move(p))
     {
     }

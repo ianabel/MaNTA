@@ -21,6 +21,7 @@
 #include <toml.hpp>
 
 #include "ConfigSchema.hpp"
+#include "SystemSpec.hpp"
 
 class Grid;
 class SystemSolver;
@@ -135,8 +136,9 @@ struct SolverConfig
     // other three are plain solver options and go through applySolverConfig
     // like everything else.
     std::string              FieldModel;
-    // "coupled" or "consistent": also applied by runManta, which wraps the model
-    // in a FieldModelEquilibrium for the second.
+    // "auto", "coupled" or "consistent": also applied by runManta, which
+    // resolves it with chooseFieldCoupling and wraps the model in a
+    // FieldModelEquilibrium for the consistent mode.
     std::string              FieldCoupling;
     std::string              FieldSolve;
     double                   FieldSolveTolerance;
@@ -285,5 +287,33 @@ unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder)
 
 // Every config-derived set* call on the solver, in one place.
 void applySolverConfig(SolverConfig const &config, SystemSolver &system);
+
+// How runManta attaches a FieldModel. Coupled: its unknowns join the DAE and its
+// derivatives the Jacobian (setFieldModel). Consistent: solved to convergence at
+// each transport state as a black box, with no Jacobian coupling and no adjoint
+// (a FieldModelEquilibrium, setEquilibriumModel).
+enum class FieldCouplingMode
+{
+    Coupled,
+    Consistent,
+};
+
+// FieldCoupling resolved against what the case and the model can supply.
+// "consistent" and "coupled" are taken as asked, except that "coupled" is refused
+// for a case declaring no geometry derivatives. "auto" picks:
+//
+//   * consistent when the case declares no geometry derivatives -- and refuses,
+//     naming why, when the run needs the coupled field anyway: a field with
+//     dynamics, or an adjoint (solveAdjoint, SteadyStateTest = "Objective");
+//   * coupled when the run needs it;
+//   * consistent for a steady solve (PseudoTransient or Newton) of a case whose
+//     derivatives are Differenced, where differencing the flux in every
+//     geometry slot costs more than the coupling saves;
+//   * coupled otherwise.
+//
+// The measurements behind the last two are in docs/field_coupling.rst. Throws
+// std::invalid_argument, like every configuration error.
+FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                      bool fieldHasDynamics);
 
 #endif // SOLVERCONFIG_HPP

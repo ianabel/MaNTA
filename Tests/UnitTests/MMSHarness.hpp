@@ -448,7 +448,8 @@ public:
     explicit ManufacturedGeometricDiffusion(M const &model_)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .readsGeometry = true}),
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic}),
           model(model_)
     {
     }

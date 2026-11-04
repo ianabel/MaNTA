@@ -2307,43 +2307,62 @@ class SystemSolver
         void dSources_dScalars_StarMat(Matrix &, GlobalState const &,
                                        std::vector<Position> const &, Index, Time);
 
+        // d(sigma_hat_i, S_i, G_a)/d(geometry) at every physics node of the
+        // grid: one (nGeom, nNodes) matrix per variable in `sigma` and
+        // `sources`, and per aux variable in `aux`, column j the derivative at
+        // node j of PhysicsNodes::points. The transport factor of A1, taken once
+        // per Jacobian build in the way SystemSpec::geometryDerivatives says.
+        struct GeometryResponse
+        {
+            std::vector<Matrix> sigma, sources, aux;
+        };
+
+        // Analytic: the case's three pointwise hooks, at every node.
+        // Differenced: a forward difference of one batched ComputePhysics per
+        // geometry slot against one at the nodes as they stand -- nGeom + 1
+        // calls, the evaluation plan's FieldCoupling site -- with the
+        // unperturbed call last, so the case's source cache is left holding
+        // the sources at the state rather than at a perturbed geometry.
+        //
+        // `nodes` must be the ones evaluatePhysicsDerivatives filled: they carry
+        // geometry, and a hook may read it (d/dg of g^2 q is 2 g q). A State
+        // built from DGSoln::evalOnNode has no geometry rows at all.
+        GeometryResponse geometryResponse(PhysicsNodes const &nodes, Time tEval);
+        GeometryResponse differencedGeometryResponse(PhysicsNodes const &nodes, Time tEval);
+
         // One cell's block of A1: d(sigma, u and aux residual rows)/d(psi), by
         // the chain rule
         //
         //     d(row)/d(psi_m) = sum_g d(row)/d(geometry_g) . d(geometry_g)/d(psi_m)
         //
-        // The first factor is the case's, the second the field model's. The q
+        // The first factor is `response`, the second the field model's. The q
         // rows and the trace rows have no geometry dependence and stay zero.
         //
         // Shape ( (3 nVars + nAux)(k+1), nField ), laid out [ sigma | q | u | aux ]
         // to match assembleCellMatrix's rows.
-        //
-        // `states` must be the ones evaluatePhysicsDerivatives filled -- they
-        // carry geometry, and a hook may read it (d/dg of g^2 q is 2 g q). That
-        // is why this takes them rather than calling DGSoln::evalOnNode the way
-        // dSources_dScalars_Mat does: a State built from a DGSoln has no
-        // geometry rows at all.
-        void dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+        void dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
                                  std::vector<Position> const &points, Index intervalIndex,
                                  Time tEval);
 
         // Superconvergent counterpart: the k+2 star nodes and A9 in place of
         // InterpolateOntoBasis. There is no chain matrix -- geometry is a
         // function of (psi, x), and u* does not enter it.
-        void dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+        void dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
                                      std::vector<Position> const &points, Index intervalIndex,
                                      Time tEval);
 
+        // The model's dGeometry/dpsi, (nGeom, nField), at each node of one cell.
+        std::vector<Matrix> geometryJacobianOnNodes(Vector const &psi,
+                                                    std::vector<Position> const &points,
+                                                    Index intervalIndex, Index nNodes, Time tEval);
+
         // d(one physics value)/d(psi_m) at each node of one cell, (nField, nNodes):
-        // the case's dX/dgeometry there contracted with the model's
+        // dX/dgeometry, a row of `response`, contracted with the model's
         // dGeometry/dpsi. The part the two functions above share; they differ
         // only in how they project the result onto the test space.
-        void fieldChainOnNodes(Matrix &nodal, Index XVar,
-                               void (TransportSystem::*dX_dGeom)(Index, VectorRef, const State &,
-                                                                 Position, Time),
-                               Vector const &psi, GlobalState const &states,
-                               std::vector<Position> const &points, Index intervalIndex,
-                               Index nNodes, Time tEval);
+        static void fieldChainOnNodes(Matrix &nodal, Matrix const &dXdG,
+                                      std::vector<Matrix> const &dGdPsi, Index intervalIndex,
+                                      Index nNodes);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
         void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );

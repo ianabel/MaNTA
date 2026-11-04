@@ -110,6 +110,35 @@ enum class RegridPolicy
     InPlace,
 };
 
+/*
+    Where the coupled Jacobian gets d(flux, sources, aux)/d(geometry) from, at the
+    physics nodes -- the transport factor of A1, the block that carries a field
+    model's influence on the transport rows.
+
+    None        the case supplies none. A coupled field would be given a Jacobian
+                built on zero blocks, so SystemSolver::setFieldModel refuses the
+                case and FieldCoupling = "auto" runs the field as a black box
+                (FieldCoupling = "consistent") instead.
+    Analytic    the case's dSigmaFn_dGeometry, dSources_dGeometry and
+                dAuxG_dGeometry, pointwise. An AutodiffTransportSystem derives
+                all three, so a case built on it can always declare this.
+    Differenced the solver differences the case's values in each geometry slot:
+                nGeometry + 1 batched ComputePhysics calls per Jacobian build,
+                and the three hooks are never called. For a case whose flux has
+                no derivative in the geometry to give -- a black-box flux code.
+
+    Declared rather than detected, like sourceReadsTimeDerivatives: the hooks
+    default to no-ops meaning "no coupling", so nothing could tell a case that
+    supplies zero because its flux ignores geometry from one that supplies zero
+    because it was never written.
+*/
+enum class GeometryDerivatives
+{
+    None,
+    Analytic,
+    Differenced,
+};
+
 struct FieldSpec
 {
     std::string name;
@@ -174,6 +203,11 @@ struct SystemSpec
     // A permission, not an obligation: a case may set it and read nothing.
     // Trailing and defaulted for the same reason as `regrid`.
     bool readsGeometry = false;
+
+    // How the coupled Jacobian differentiates the physics in the geometry; see
+    // GeometryDerivatives. Anything but None needs readsGeometry. Trailing and
+    // defaulted for the same reason as `regrid`.
+    GeometryDerivatives geometryDerivatives = GeometryDerivatives::None;
 
     /// Does any variable's source read du/dt?
     ///
@@ -250,6 +284,14 @@ struct SystemSpec
             checkMixed(v.lower, v.name, "lower");
             checkMixed(v.upper, v.name, "upper");
         }
+
+        // Derivatives in a geometry the case says it does not read are a
+        // contradiction, and would buy a coupled Jacobian for a field that
+        // setFieldModel then refuses to attach.
+        if (geometryDerivatives != GeometryDerivatives::None && !readsGeometry)
+            throw std::invalid_argument(
+                "geometryDerivatives is set but readsGeometry is not: a case that reads no "
+                "geometry has no derivative in it to declare");
     }
 
     /// Index of a variable / scalar / auxiliary variable by name, or -1.

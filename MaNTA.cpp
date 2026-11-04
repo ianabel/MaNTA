@@ -180,17 +180,24 @@ int runManta(std::string const &fname)
 			return 1;
 		}
 	}
-	else if (config.FieldCoupling != "coupled")
+	else if (config.FieldCoupling != "auto")
 		throw std::invalid_argument("FieldCoupling = \"" + config.FieldCoupling +
 									"\" was given without a FieldModel to couple.");
 
-	// FieldCoupling = "consistent" runs the same model as a black-box
-	// equilibrium: no unknowns in the state vector, so the restart check below
-	// sees none, and the wrapper refuses a model whose field has dynamics here,
-	// before anything else is built.
+	// The consistent mode runs the same model as a black-box equilibrium: no
+	// unknowns in the state vector, so the restart check below sees none, and
+	// the wrapper refuses a model whose field has dynamics here, before anything
+	// else is built. Which mode is chooseFieldCoupling's, from FieldCoupling and
+	// what the case and the model supply.
 	std::shared_ptr<EquilibriumModel> equilibrium;
-	if (fieldModel && config.FieldCoupling == "consistent")
-		equilibrium = std::make_shared<FieldModelEquilibrium>(fieldModel);
+	if (fieldModel)
+	{
+		bool dynamics = false;
+		for (Index i = 0; i < fieldModel->nFieldDOF(); ++i)
+			dynamics = dynamics || fieldModel->isFieldDOFDifferential(i);
+		if (chooseFieldCoupling(config, pProblem->spec(), dynamics) == FieldCouplingMode::Consistent)
+			equilibrium = std::make_shared<FieldModelEquilibrium>(fieldModel);
+	}
 	const Index nField = fieldModel && !equilibrium ? fieldModel->nFieldDOF() : 0;
 
 	if (config.restart)

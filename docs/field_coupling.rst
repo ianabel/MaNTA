@@ -99,7 +99,10 @@ same standing as :math:`\hat\sigma`. A physics case reads slot ``s`` through
 A field model can be attached only to a case whose spec sets
 ``readsGeometry = true`` (see :ref:`geometry-derivatives`). ``setFieldModel``
 refuses any other, naming the model: a field that cannot reach the solution
-would be solved for at every Newton iteration and change nothing. With no field
+would be solved for at every Newton iteration and change nothing. It also
+refuses a case whose ``geometryDerivatives`` is ``None``, since the coupled
+Jacobian would be built on zero blocks; such a case runs its field as a
+:ref:`black box <field-tier-0>` instead. With no field
 model attached the declaration changes nothing — no geometry rows, no geometry
 evaluation — which is what keeps every uncoupled run bit for bit what it was.
 
@@ -568,6 +571,100 @@ of the transport state. So the theta pinch runs either way, and the two agree:
 on six cells at :math:`k = 3`, to :math:`8.8\times10^{-8}` in :math:`N` after a
 transient at ``rtol`` :math:`10^{-6}`, and to :math:`4\times10^{-10}` at a steady
 state.
+
+.. _field-coupling-mode:
+
+Choosing the coupling
+---------------------
+
+``FieldCoupling = "auto"``, the default, picks the mode from what the case and
+the model supply and what the run needs:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 35 30
+
+   * - the case's ``geometryDerivatives``
+     - the run
+     - mode
+   * - ``None``
+     - anything not needing the coupled field
+     - ``consistent``
+   * - ``Analytic``
+     - anything
+     - ``coupled``
+   * - ``Differenced``
+     - a transient, or ``TimeMarch``
+     - ``coupled``
+   * - ``Differenced``
+     - a ``PseudoTransient`` or ``Newton`` steady solve
+     - ``consistent``
+
+**A field with dynamics, or an adjoint, needs the coupled field**: the black box
+can neither carry a differential :math:`\psi` nor differentiate through the
+field. So ``auto`` couples whenever the model has a differential DOF, or the run
+solves an adjoint (``solveAdjoint``, or ``SteadyStateTest = "Objective"``),
+whatever the derivatives cost — and refuses, naming why, when the case declares
+none. ``"coupled"`` and ``"consistent"`` take the mode as given; the first is
+refused for a case declaring no derivatives, the second for a field with
+dynamics or a run with an adjoint.
+
+**The rest of the table is a measurement.** ``ThetaPinchDiffusion`` on five
+cells at :math:`k = 4`, ``rtol`` :math:`10^{-6}`, ``atol`` :math:`10^{-8}`, to
+:math:`t = 1`, counting what matters for an expensive flux: calls into the
+transport system per physics point, one for values and two for derivatives.
+``Analytic``'s calls to the geometry hooks are shown separately as ``+g``,
+priced like a derivative evaluation, since that is what an autodiff case pays;
+``Differenced``'s :math:`n_{geom} + 1 = 5` value evaluations per Jacobian build
+are in its total.
+
+.. list-table::
+   :header-rows: 1
+
+   * - 5 cells
+     - transient
+     - ``PseudoTransient``
+     - ``Newton``
+   * - T = 0.3, coupled, ``Analytic``
+     - 6,375 (+1,000)
+     - 550 (+350)
+     - 325 (+200)
+   * - T = 0.3, coupled, ``Differenced``
+     - 8,875
+     - 1,425
+     - 825
+   * - T = 0.3, consistent
+     - 13,150
+     - 550
+     - 400
+   * - T = 0.9, coupled, ``Analytic``
+     - 10,250 (+1,150)
+     - 550 (+350)
+     - 325 (+200)
+   * - T = 0.9, coupled, ``Differenced``
+     - 13,125
+     - 1,425
+     - 1,025
+   * - T = 0.9, consistent
+     - 34,275
+     - 625
+     - 475
+
+**A transient wants the coupled Jacobian whatever the derivatives cost.** IDA
+reuses each Jacobian over many steps, so its cost is almost all residual
+values, and the black box's linearly converging Newton costs it 1.5–2.6 times
+the calls even against differenced derivatives. **A steady solve is decided by
+what the derivatives cost**, because it builds a Jacobian at nearly every
+iteration. Differenced, they make the coupled solve 2.1–2.6 times the black
+box's under either steady solver, so ``auto`` runs those as a black box.
+Analytic, it depends on what the hooks cost, which nothing can tell the
+solver: free — analytic prefactors — coupling ties ``PseudoTransient`` and wins
+``Newton``; priced like a derivative evaluation, as autodiff hooks are, it loses
+both, by up to 1.6 and 1.3 times. ``auto`` couples an ``Analytic`` case
+regardless, for Newton's quadratic convergence and a loss that is bounded; a
+case whose hooks are expensive can set ``FieldCoupling = "consistent"`` for its
+steady solves. The field-side work, the equilibrium solves included, is free by
+this measure.
 
 Current restrictions
 --------------------

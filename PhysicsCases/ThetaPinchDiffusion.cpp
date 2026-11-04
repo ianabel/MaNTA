@@ -8,19 +8,39 @@ REGISTER_PHYSICS_IMPL(ThetaPinchDiffusion);
 
 namespace
 {
-SystemSpec thetaPinchSpec()
+// Analytic by default: the autodiff layer derives every geometry derivative.
+// The other two are for exercising the solver's alternatives on a real case --
+// Differenced has the solver difference this case's values instead, and None
+// declares none, which runs the field as a black box.
+GeometryDerivatives geometryDerivativesFrom(toml::value const &config)
+{
+    std::string name = "Analytic";
+    if (config.is_table() && config.contains("ThetaPinchDiffusion"))
+        name = toml::find_or(config.at("ThetaPinchDiffusion"), "GeometryDerivatives", name);
+    if (name == "Analytic")
+        return GeometryDerivatives::Analytic;
+    if (name == "Differenced")
+        return GeometryDerivatives::Differenced;
+    if (name == "None")
+        return GeometryDerivatives::None;
+    throw std::invalid_argument("ThetaPinchDiffusion: GeometryDerivatives must be \"Analytic\", "
+                                "\"Differenced\" or \"None\"; got \"" + name + "\"");
+}
+
+SystemSpec thetaPinchSpec(toml::value const &config)
 {
     return {.variables = {{"N", "particles per unit flux per unit length, V' n", "n0 a^2",
                            BoundaryKind::Neumann, BoundaryKind::Dirichlet}},
             .aux = {{"p", "pressure, in units where 2 mu0 = 1", "B0^2"}},
             .regrid = RegridPolicy::InPlace,
-            .readsGeometry = true};
+            .readsGeometry = true,
+            .geometryDerivatives = geometryDerivativesFrom(config)};
 }
 } // namespace
 
 // RegridPolicy::InPlace: nothing here depends on the grid.
 ThetaPinchDiffusion::ThetaPinchDiffusion(toml::value const &config, Grid const &grid)
-    : AutodiffTransportSystem(config, grid, thetaPinchSpec())
+    : AutodiffTransportSystem(config, grid, thetaPinchSpec(config))
 {
     toml::value table = toml::table{};
     if (config.is_table() && config.contains("ThetaPinchDiffusion"))

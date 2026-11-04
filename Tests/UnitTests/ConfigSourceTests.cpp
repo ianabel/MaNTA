@@ -277,6 +277,74 @@ BOOST_AUTO_TEST_CASE(the_field_model_key_is_problem_selection_too)
                       std::invalid_argument);
 }
 
+// FieldCoupling, resolved against what the case and the model supply. The table
+// is the policy docs/field_coupling.rst states: coupled wherever the case has
+// geometry derivatives, except a steady solve of a case whose derivatives are
+// differenced; consistent without them; and coupled whatever
+// the derivatives cost when the run needs it -- a field with dynamics, or an
+// adjoint.
+BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
+{
+    using M = FieldCouplingMode;
+    using D = GeometryDerivatives;
+    auto spec = [](D d)
+    {
+        return SystemSpec{.variables = {{"u", "", ""}}, .readsGeometry = true, .geometryDerivatives = d};
+    };
+    const std::string steady = "SteadyStateTolerance = 1e-6\n";
+
+    BOOST_TEST(load(minimal).FieldCoupling == "auto");
+
+    struct Row
+    {
+        std::string extra;
+        D derivatives;
+        bool dynamics;
+        M want;
+    };
+    for (Row const &r : {
+             Row{"", D::Analytic, false, M::Coupled},
+             Row{"", D::Differenced, false, M::Coupled},
+             Row{"", D::None, false, M::Consistent},
+             Row{steady, D::Analytic, false, M::Coupled},
+             Row{steady, D::Differenced, false, M::Consistent},
+             Row{steady, D::None, false, M::Consistent},
+             Row{"SteadyStateSolve = true\n", D::Differenced, false, M::Consistent},
+             Row{steady + "SteadyStateSolver = \"Newton\"\n", D::Differenced, false, M::Consistent},
+             Row{steady + "SteadyStateSolver = \"Newton\"\n", D::Analytic, false, M::Coupled},
+             Row{steady + "SteadyStateSolver = \"TimeMarch\"\n", D::Differenced, false, M::Coupled},
+             Row{steady + "solveAdjoint = true\n", D::Differenced, false, M::Coupled},
+             Row{steady, D::Differenced, true, M::Coupled},
+             Row{"FieldCoupling = \"consistent\"\n", D::Analytic, false, M::Consistent},
+             Row{"FieldCoupling = \"coupled\"\n" + steady, D::Differenced, false, M::Coupled},
+         })
+    {
+        CapturedOutput quiet;
+        const M got = chooseFieldCoupling(load(minimal + r.extra), spec(r.derivatives), r.dynamics);
+        BOOST_TEST((got == r.want), "[" << r.extra << "] derivatives " << static_cast<int>(r.derivatives)
+                                         << ", dynamics " << r.dynamics);
+    }
+
+    // What the run needs and the case cannot supply is refused, naming why.
+    auto refusal = [&](std::string const &extra, bool dynamics)
+    {
+        try
+        {
+            chooseFieldCoupling(load(minimal + extra), spec(D::None), dynamics);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    BOOST_TEST(refusal("", true).find("dynamics") != std::string::npos, refusal("", true));
+    BOOST_TEST(refusal("solveAdjoint = true\n", false).find("adjoint") != std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"coupled\"\n", false).find("geometryDerivatives = None") !=
+               std::string::npos);
+    BOOST_CHECK_THROW(load(minimal + "FieldCoupling = \"couple\"\n"), std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_with)
 {
     // Two defaults that have to agree: the schema's, and SystemSolver's own

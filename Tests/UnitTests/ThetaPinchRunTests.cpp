@@ -14,6 +14,7 @@
 #include <netcdf>
 #include <nvector/nvector_serial.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -55,6 +56,8 @@ struct Options
     bool writeOutput = false;
     double cadence = 0.25;
     double t0 = 0.0;
+    // ThetaPinchDiffusion's GeometryDerivatives: Analytic, Differenced or None.
+    std::string derivatives = "Analytic";
 };
 
 struct Run
@@ -70,7 +73,9 @@ Run makeRun(Options const &o, std::string const &stem,
 {
     Run r;
     r.grid = std::make_unique<Grid>(0.0, 1.0, o.nCells);
-    r.problem = std::make_unique<ThetaPinchDiffusion>(thetaPinchConfig, *r.grid);
+    toml::value config = thetaPinchConfig;
+    config.as_table().at("ThetaPinchDiffusion").as_table()["GeometryDerivatives"] = o.derivatives;
+    r.problem = std::make_unique<ThetaPinchDiffusion>(config, *r.grid);
     if (prepare)
         prepare(*r.problem, *r.grid);
     r.field = std::make_shared<ThetaPinchEquilibrium>(
@@ -281,6 +286,64 @@ BOOST_AUTO_TEST_CASE(a_tier_zero_steady_solve_reaches_the_coupled_answer)
     }
 }
 
+// The solver differencing the case's values in each geometry slot, in place of
+// the case's own derivatives, changes the Jacobian by the difference's error and
+// nothing else -- so the same steps, and the same answer to far below the run's
+// tolerance -- at nGeometry + 1 batched evaluations per Jacobian build.
+BOOST_AUTO_TEST_CASE(differenced_geometry_derivatives_give_the_analytic_run)
+{
+    auto steps = [](std::string const &log)
+    {
+        const auto at = log.find("Total Number of Timesteps");
+        return at == std::string::npos ? std::string("?") : log.substr(at, log.find('\n', at) - at);
+    };
+
+    auto analytic = makeRun({}, "theta_pinch_analytic");
+    auto differenced = makeRun({.derivatives = "Differenced"}, "theta_pinch_differenced");
+    std::string logA, logD;
+    {
+        CapturedOutput capture;
+        analytic.sys->runSolver(0.5);
+        logA = capture.text();
+    }
+    {
+        CapturedOutput capture;
+        differenced.sys->runSolver(0.5);
+        logD = capture.text();
+    }
+    const Vector a = sample(*analytic.sys), d = sample(*differenced.sys);
+    const double transient = (a - d).cwiseAbs().maxCoeff() / a.cwiseAbs().maxCoeff();
+    BOOST_TEST_MESSAGE("transient: analytic " << steps(logA) << "; differenced " << steps(logD)
+                                              << "; relative difference " << transient);
+    BOOST_TEST(steps(logA) == steps(logD));
+    BOOST_TEST(transient < 1e-9);
+
+    auto newtonA = makeRun({}, "theta_pinch_analytic_ss");
+    auto newtonD = makeRun({.derivatives = "Differenced"}, "theta_pinch_differenced_ss");
+    for (Run *r : {&newtonA, &newtonD})
+    {
+        r->sys->setSteadyStateTolerance(1e-8);
+        r->sys->setSteadyMode(SystemSolver::SteadyMode::Newton);
+        CapturedOutput quiet;
+        r->sys->runSolver(0.5);
+    }
+    const Vector sa = sample(*newtonA.sys), sd = sample(*newtonD.sys);
+    const double steady = (sa - sd).cwiseAbs().maxCoeff() / sa.cwiseAbs().maxCoeff();
+    BOOST_TEST_MESSAGE("steady Newton: analytic " << newtonA.sys->lastSteadyStats().newtonIters
+                                                  << " Newton iterations, differenced "
+                                                  << newtonD.sys->lastSteadyStats().newtonIters
+                                                  << "; relative difference " << steady);
+    BOOST_TEST(steady < 1e-9);
+
+    // The plan says what a build costs: one batched evaluation per geometry slot
+    // and one at the state.
+    const EvaluationPlan plan = differenced.sys->evaluationPlan();
+    const auto site = std::find_if(plan.sites.begin(), plan.sites.end(), [](EvaluationSite const &s)
+                                   { return s.kind == EvaluationKind::FieldCoupling; });
+    BOOST_REQUIRE(site != plan.sites.end());
+    BOOST_TEST(site->calls == differenced.sys->getGeometrySlots() + 1);
+}
+
 BOOST_AUTO_TEST_CASE(a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)
 {
     // The adapter's Newton starts from the warm psi, and the theta pinch's rows
@@ -482,15 +545,18 @@ BOOST_AUTO_TEST_CASE(a_non_positive_vprime_is_a_recoverable_residual_failure)
 // mistransposed block there is a wrong dG/dT beside a perfectly good G.
 BOOST_AUTO_TEST_CASE(the_coupled_gradient_matches_finite_differences)
 {
-    for (bool iterative : {true, false})
+    // The adjoint transposes A1 whichever way it was taken, so a differenced A1
+    // gives the gradient too, to the difference's accuracy.
+    for (auto [iterative, derivatives] : {std::pair{true, "Analytic"}, std::pair{false, "Analytic"},
+                                          std::pair{true, "Differenced"}})
     {
-        BOOST_TEST_CONTEXT("FieldSolve = " << (iterative ? "iterative" : "exact"))
+        BOOST_TEST_CONTEXT("FieldSolve = " << (iterative ? "iterative" : "exact") << ", " << derivatives)
         {
             // G, and with `gradient` the adjoint's dG/dp, at a steady state with
             // parameter `which` moved by `delta`.
             auto solve = [&](Index which, double delta, Vector *gradient)
             {
-                auto run = makeRun({.iterative = iterative}, "theta_pinch_gradient");
+                auto run = makeRun({.iterative = iterative, .derivatives = derivatives}, "theta_pinch_gradient");
                 run.problem->setPval(which, Real(run.problem->getPval(which).val + delta));
                 AutodiffAdjointProblem objective(run.problem.get());
                 objective.addG([](Position, RealVector &u, RealVector &, RealVector &, RealVector &) -> Real
