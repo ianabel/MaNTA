@@ -397,8 +397,8 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
 
-    if (c.FieldCoupling != "coupled" && c.FieldCoupling != "consistent")
-        throw std::invalid_argument("FieldCoupling must be \"coupled\" or \"consistent\"; got \"" +
+    if (c.FieldCoupling != "auto" && c.FieldCoupling != "coupled" && c.FieldCoupling != "consistent")
+        throw std::invalid_argument("FieldCoupling must be \"auto\", \"coupled\" or \"consistent\"; got \"" +
                                     c.FieldCoupling + "\".");
 
     // The alias machinery warns that the *name* changed. It cannot know that the
@@ -1212,4 +1212,64 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     }
 
     // Zero is off, and the setter rejects anything negative.
+}
+
+FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                      bool fieldHasDynamics)
+{
+    const bool derivatives = spec.geometryDerivatives != GeometryDerivatives::None;
+
+    if (config.FieldCoupling == "consistent")
+        return FieldCouplingMode::Consistent;
+
+    if (config.FieldCoupling == "coupled")
+    {
+        if (!derivatives)
+            throw std::invalid_argument(
+                "FieldCoupling = \"coupled\" needs the transport system's derivatives in the "
+                "geometry, and it declares none (geometryDerivatives = None). Use \"consistent\" "
+                "or \"auto\".");
+        return FieldCouplingMode::Coupled;
+    }
+
+    // "auto". What forces the coupled field: the black-box mode can neither
+    // carry a field with dynamics of its own nor differentiate through one.
+    std::vector<std::string> needs;
+    if (fieldHasDynamics)
+        needs.emplace_back("the field has dynamics (a differential field unknown)");
+    if (config.solveAdjoint || config.SteadyStateTest == "Objective")
+        needs.emplace_back("an adjoint is solved (solveAdjoint, or SteadyStateTest = \"Objective\")");
+
+    if (!derivatives)
+    {
+        if (!needs.empty())
+        {
+            std::string why = needs.front();
+            for (size_t i = 1; i < needs.size(); ++i)
+                why += ", and " + needs[i];
+            throw std::invalid_argument(
+                "The field must be coupled because " + why +
+                ", but the transport system declares no derivatives in the geometry "
+                "(geometryDerivatives = None).");
+        }
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, since the transport system "
+                                "declares no derivatives in the geometry.");
+        return FieldCouplingMode::Consistent;
+    }
+    if (!needs.empty())
+        return FieldCouplingMode::Coupled;
+
+    // A steady solve -- PseudoTransient or Newton; TimeMarch integrates, and is
+    // a transient for this purpose -- with derivatives the solver has to
+    // difference: nGeometry + 1 value evaluations per Jacobian build cost more
+    // than the black box's slower Newton does.
+    const bool steady = config.SteadyStateTolerance.has_value() || config.SteadyStateSolve;
+    if (spec.geometryDerivatives == GeometryDerivatives::Differenced && steady &&
+        config.SteadyStateSolver != "TimeMarch")
+    {
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, for a steady solve with "
+                                "differenced geometry derivatives.");
+        return FieldCouplingMode::Consistent;
+    }
+    return FieldCouplingMode::Coupled;
 }

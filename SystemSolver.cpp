@@ -220,7 +220,21 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
             "unknowns are part of the solution vector, whose length is fixed by then.");
 
     if (model)
+    {
         checkGeometrySource(model->getSpec().name, equilibriumModel != nullptr);
+
+        // A coupled field reaches the Jacobian through d(physics)/d(geometry),
+        // and a case declaring none would have it built on zero blocks: a
+        // Jacobian silently missing the coupling, which converges slowly where it
+        // converges at all and gives a wrong gradient. The black-box mode needs
+        // no derivatives, so it is the way to run such a case.
+        if (problem->spec().geometryDerivatives == GeometryDerivatives::None)
+            throw std::logic_error(
+                "The field model '" + model->getSpec().name +
+                "' cannot be coupled: the transport system supplies no derivatives in the "
+                "geometry (SystemSpec::geometryDerivatives is None). Declare Analytic or "
+                "Differenced, or run the field as a black box (FieldCoupling = \"consistent\").");
+    }
 
     // Before nField moves: the count of vectors to destroy is the old one.
     freeFieldWorkVectors();
@@ -385,16 +399,18 @@ SystemSolver::evaluateFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
                                    integrator.integrationWeights(Y.getBasis(), grid),
                                    tEval);
 
-    // ---- A1, cell by cell: the chain through the case's geometry hooks. Does
-    // not depend on alpha, so it is evaluated here, once, for whichever alpha
-    // applyFieldCoupling is then given.
+    // ---- A1, cell by cell: the chain through d(physics)/d(geometry), taken
+    // the way the case declares (geometryResponse). Does not depend on alpha,
+    // so it is evaluated here, once, for whichever alpha applyFieldCoupling is
+    // then given.
+    const GeometryResponse response = geometryResponse(nodes, tEval);
     d.A1.assign(nCells, Matrix((3 * nVars + nAux) * (k + 1), nField));
     for (Index i = 0; i < nCells; ++i)
     {
         if (superconvergent)
-            dPhysics_dField_StarMat(d.A1[i], Y, nodes.states, nodes.points, i, tEval);
+            dPhysics_dField_StarMat(d.A1[i], Y, response, nodes.points, i, tEval);
         else
-            dPhysics_dField_Mat(d.A1[i], Y, nodes.states, nodes.points, i, tEval);
+            dPhysics_dField_Mat(d.A1[i], Y, response, nodes.points, i, tEval);
     }
     return d;
 }
@@ -560,8 +576,16 @@ EvaluationPlan SystemSolver::evaluationPlanFor(Grid const &grid, unsigned int kP
             basisPerCell, basisNodes);
     }
     if (fieldModel)
-        add(Kind::FieldCoupling, Entry::Pointwise, Cadence::PerJacobianBuild, 1,
-            physicsPerCell, physicsNodes);
+    {
+        // The hooks pointwise, or one batched evaluation per geometry slot and
+        // one at the nodes as they stand (differencedGeometryResponse).
+        if (problem->spec().geometryDerivatives == GeometryDerivatives::Differenced)
+            add(Kind::FieldCoupling, Entry::ComputePhysics, Cadence::PerJacobianBuild,
+                fieldModel->nGeometry() + 1, physicsPerCell, physicsNodes);
+        else
+            add(Kind::FieldCoupling, Entry::Pointwise, Cadence::PerJacobianBuild, 1,
+                physicsPerCell, physicsNodes);
+    }
 
     // faceStates(): both faces of every cell, one-sided, so each interior face
     // appears twice -- once as the upper face of the cell below it and once as

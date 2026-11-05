@@ -277,7 +277,7 @@ the transport rows blind; `PlainDiffusion(false)` is the refusal's fixture.
   time. The trace is not in it: a model is never handed lambda.
 * Selected by `FieldCoupling = "coupled" | "consistent"` (default `coupled`),
   which runManta applies by wrapping the `FieldModel` in
-  `FieldModelEquilibrium`. `auto` comes with step 3. There is no registry of
+  `FieldModelEquilibrium`. `auto` came with step 3, below. There is no registry of
   native `EquilibriumModel`s yet: the adapter is the only route from a config,
   and a native model is attached with `setEquilibriumModel`.
 * The geometry provider a case's diagnostics read now takes the state rather
@@ -323,6 +323,58 @@ gap is 8.8e-8, and 4e-10 at a steady state.
 Not yet run at tier 0: the coupled MMS order study. At its 1e-9 / 1e-11
 tolerances the experiment crawled for most of an hour on three of four cases,
 and tier 0 is the same method.
+
+### Step 3: `geometryDerivatives` and `FieldCoupling = "auto"`
+
+* `SystemSpec::geometryDerivatives` is `None` / `Analytic` / `Differenced`,
+  defaulted `None`; anything else without `readsGeometry` is refused by
+  `validate()`. `setFieldModel` refuses `None`, naming the consistent mode as
+  the way to run such a case. `ThetaPinchDiffusion` declares `Analytic` (the
+  autodiff layer derives the hooks) and takes `GeometryDerivatives` in its own
+  table so the other two can be exercised on it.
+* The A1 assembly takes `d(physics)/d(geometry)` at every physics node first
+  (`geometryResponse`) and chains it per cell, with `dGeometry/dpsi` taken once
+  per node rather than once per node per row block. `Analytic` output is byte
+  identical to the tree before, on the theta-pinch regression config, its
+  superconvergent variant and a steady Newton variant.
+* `Differenced` is a forward difference, one batched `ComputePhysics` per
+  geometry slot and one at the state: **`nGeometry + 1` calls, not the
+  `nGeometry` this spec named**, since a forward difference needs the
+  unperturbed values and the residual's are not at the build's state bit for
+  bit. The unperturbed call goes last, so the case's source cache is left at
+  the state. Step `sqrt(eps)` relative, floored at the slot's grid maximum. A1
+  agrees with the analytic one to 4e-7 relative on the theta pinch and 1e-8 on
+  the manufactured fixture; a transient takes the same 144 steps and agrees to
+  3e-14, a steady Newton solve the same 4 iterations, and the adjoint gradient
+  through a differenced A1 passes the finite-difference check at 1e-6.
+* `FieldCoupling` defaults to `auto`, resolved by `chooseFieldCoupling` in
+  runManta before the restart block (the mode fixes `nField`).
+
+**`auto` sends a `Differenced` `Newton` solve to `consistent`, not `coupled`
+as "Choosing the mode" says.** The rule above contradicted the measurements
+it cited -- "priced by differencing the flux in each geometry slot, tier 0
+wins both" -- and measuring the built code agrees with the measurements
+(5 cells, k = 4, rtol 1e-6, atol 1e-8, t_final 1; values + 2 x derivatives,
+`+g` the analytic hooks priced as derivatives):
+
+| | transient | PTC | Newton |
+|---|---|---|---|
+| T = 0.3, coupled, Analytic | 6,375 (+1,000) | 550 (+350) | 325 (+200) |
+| T = 0.3, coupled, Differenced | 8,875 | 1,425 | 825 |
+| T = 0.3, consistent | 13,150 | 550 | 400 |
+| T = 0.9, coupled, Analytic | 10,250 (+1,150) | 550 (+350) | 325 (+200) |
+| T = 0.9, coupled, Differenced | 13,125 | 1,425 | 1,025 |
+| T = 0.9, consistent | 34,275 | 625 | 475 |
+
+Differenced, the coupled steady solves cost 2.1-2.6x the black box under
+either solver; the transients still go 1.5-2.6x the other way. The table at
+the top of this spec predates `ErrorWeights = "AlgebraicMax"` and need not share
+this one's settings, so the two are not compared row by row; this one is
+measured in one setup throughout, and is what `auto` rests on. `TimeMarch`
+counts as a transient. An `Analytic` case is
+coupled under every solver, although with the hooks priced like a derivative
+it loses the steady solves by up to 1.6x: `auto` cannot know the hooks' price,
+and the loss is bounded.
 
 ## Not in this work
 

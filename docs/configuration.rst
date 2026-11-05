@@ -106,14 +106,17 @@ Problem definition
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
    * - ``FieldCoupling``
-     - ``"coupled"``, *file only*
+     - ``"auto"``, *file only*
      - How the ``FieldModel`` is attached. ``coupled`` puts its unknowns in the
-       DAE and its derivatives in the Jacobian. ``consistent`` runs it as a black
+       DAE and its derivatives in the Jacobian, and is refused for a case
+       declaring no geometry derivatives. ``consistent`` runs it as a black
        box: solved to convergence at each transport state the physics is
        evaluated at, held as a cache rather than as unknowns, with no Jacobian
-       coupling and no adjoint (a run asking for one is refused). A model whose
-       field has a differential DOF cannot run ``consistent``, and the key is
-       refused without a ``FieldModel``. See :ref:`field-tier-0`.
+       coupling and no adjoint (a run asking for one is refused); a model whose
+       field has a differential DOF cannot run that way. ``auto`` chooses from
+       what the case and the model supply and what the run needs — see
+       :ref:`field-coupling-mode`. Anything but ``auto`` is refused without a
+       ``FieldModel``.
    * - ``FieldModel``
      - ``""``, *file only*
      - Name of a registered magnetic-field model to couple to, as registered by

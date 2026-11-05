@@ -330,10 +330,12 @@ const std::vector<Entry> &table()
         // How runManta attaches the FieldModel, so a ProblemSelection key for the
         // same reason: a dict has no FieldModel for it to apply to.
         {"FieldCoupling", {}, Type::String, Category::ProblemSelection, false, false,
-         std::string{"coupled"},
+         std::string{"auto"},
          "How the FieldModel is coupled: coupled (its unknowns join the DAE and its "
-         "derivatives the Jacobian) or consistent (solved to convergence at each transport "
-         "state, as a black box, with no Jacobian coupling and no adjoint)."},
+         "derivatives the Jacobian), consistent (solved to convergence at each transport "
+         "state, as a black box, with no Jacobian coupling and no adjoint), or auto (the "
+         "default: coupled where the transport system supplies geometry derivatives, except "
+         "a steady solve with differenced ones; see docs/field_coupling.rst)."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,
          std::vector<std::string>{},
          "Shared objects to dlopen for their physics-case registrations."},

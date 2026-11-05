@@ -150,7 +150,8 @@ public:
     GeometricDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .readsGeometry = true})
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic})
     {
     }
 

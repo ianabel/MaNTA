@@ -59,11 +59,12 @@ using std::numbers::pi;
 class GeometricAuxDiffusion : public TransportSystem
 {
 public:
-    GeometricAuxDiffusion()
+    explicit GeometricAuxDiffusion(GeometryDerivatives derivatives = GeometryDerivatives::Analytic)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
                            .aux = {{"phi", "an auxiliary quantity", ""}},
-                           .readsGeometry = true})
+                           .readsGeometry = true,
+                           .geometryDerivatives = derivatives})
     {
     }
 
@@ -134,7 +135,8 @@ public:
     GeometricDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .readsGeometry = true})
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic})
     {
     }
 
@@ -379,15 +381,17 @@ CoupledSolver multiDofFixture(Index nCells, Index k, double strength = 1.0)
 /// far from vacuum, so the coupling blocks are not evaluated at a degenerate
 /// point; the field block's size is nCells * intervalsPerCell + 4.
 CoupledSolver thetaPinchFixture(Index nCells, Index k, Index intervalsPerCell, bool superconvergent = false,
-                                double cj = 1.7)
+                                double cj = 1.7, std::string const &derivatives = "Analytic")
 {
     using namespace toml::literals::toml_literals;
-    static const toml::value config = u8R"(
+    static const toml::value base = u8R"(
         [ThetaPinchDiffusion]
         Temperature = 0.3
         D0 = 0.5
         Gamma = 2.0
     )"_toml;
+    toml::value config = base;
+    config.as_table().at("ThetaPinchDiffusion").as_table()["GeometryDerivatives"] = derivatives;
     const Grid grid(0.0, 1.0, nCells);
     return makeCoupledSolverAtState(
         nCells, k, std::make_unique<ThetaPinchDiffusion>(config, grid),
@@ -628,7 +632,8 @@ public:
     ManufacturedCoupledDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .readsGeometry = true})
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic})
     {
     }
 
@@ -1534,6 +1539,151 @@ BOOST_AUTO_TEST_CASE(the_theta_pinch_sweep_contracts_at_every_cj)
             BOOST_TEST_MESSAGE("cj = " << cj << ", " << m << " intervals per cell: rho = " << rho);
             BOOST_TEST(rho < 0.3);
         }
+}
+
+// ---------------------------------------- geometryDerivatives = Differenced --
+
+/// GeometricAuxDiffusion counting what a Jacobian build asks of it: batched
+/// value evaluations, and calls of the three geometry hooks.
+class CountingGeometricAux : public GeometricAuxDiffusion
+{
+public:
+    explicit CountingGeometricAux(GeometryDerivatives d) : GeometricAuxDiffusion(d) {}
+
+    PhysicsOutput ComputePhysics(GlobalState const &s, std::vector<Position> const &x, Time t) override
+    {
+        ++batched;
+        return GeometricAuxDiffusion::ComputePhysics(s, x, t);
+    }
+    void dSigmaFn_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++hooks;
+        GeometricAuxDiffusion::dSigmaFn_dGeometry(i, v, s, x, t);
+    }
+    void dSources_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++hooks;
+        GeometricAuxDiffusion::dSources_dGeometry(i, v, s, x, t);
+    }
+    void dAuxG_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++hooks;
+        GeometricAuxDiffusion::dAuxG_dGeometry(i, v, s, x, t);
+    }
+
+    int batched = 0, hooks = 0;
+};
+
+double relativeA1Difference(CoupledSolver const &a, CoupledSolver const &b)
+{
+    double d = 0.0;
+    for (size_t i = 0; i < a->A1_cellwise.size(); ++i)
+        d = std::max(d, (a->A1_cellwise[i] - b->A1_cellwise[i]).cwiseAbs().maxCoeff());
+    return d / maxAbsA1(a);
+}
+
+// The solver's forward difference of the case's values reproduces the case's
+// own derivatives, for every row block of A1 (GeometricAuxDiffusion reaches the
+// sigma, u and aux rows) and on both node sets.
+BOOST_AUTO_TEST_CASE(a_differenced_a1_matches_the_analytic_one)
+{
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto field = std::make_shared<ManufacturedFieldEverySlot>(1.0);
+            auto analytic = makeCoupledSolverAtState(
+                6, 2, std::make_unique<GeometricAuxDiffusion>(GeometryDerivatives::Analytic), field,
+                superconvergent);
+            auto differenced = makeCoupledSolverAtState(
+                6, 2, std::make_unique<GeometricAuxDiffusion>(GeometryDerivatives::Differenced),
+                std::make_shared<ManufacturedFieldEverySlot>(1.0), superconvergent);
+            BOOST_REQUIRE_GT(maxAbsA1(analytic), 1e-3);
+            const double manufactured = relativeA1Difference(analytic, differenced);
+
+            auto pinchA = thetaPinchFixture(5, 3, 1, superconvergent, 1.7, "Analytic");
+            auto pinchD = thetaPinchFixture(5, 3, 1, superconvergent, 1.7, "Differenced");
+            BOOST_REQUIRE_GT(maxAbsA1(pinchA), 1e-3);
+            const double pinch = relativeA1Difference(pinchA, pinchD);
+
+            BOOST_TEST_MESSAGE("differenced A1 against analytic, relative: manufactured "
+                               << manufactured << ", theta pinch " << pinch);
+            BOOST_TEST(manufactured < 1e-6);
+            BOOST_TEST(pinch < 1e-6);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_exact_solve_inverts_the_jacobian_with_a_differenced_a1)
+{
+    auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervalsPerCell=*/1, false, 1.7, "Differenced");
+    for (int trial = 0; trial < 2; ++trial)
+    {
+        const SolveReport r = checkExactSolve(solver, trial);
+        BOOST_TEST_MESSAGE("theta pinch, differenced A1, trial "
+                           << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                           << ", ||J dy* - g||/||g|| = " << r.residual);
+        BOOST_TEST(r.solutionError < 1e-5);
+        BOOST_TEST(r.residual < 1e-6);
+    }
+}
+
+// What a build costs, exactly, under each declaration -- the evaluation plan's
+// FieldCoupling site, and the calls actually made. Differenced makes nGeometry + 1
+// batched value calls and never reaches a geometry hook; Analytic the reverse.
+// And the unperturbed call comes last, so the case's source cache, which the
+// output reads, holds the sources at the state rather than at a shifted geometry.
+BOOST_AUTO_TEST_CASE(a_build_spends_what_its_geometry_derivatives_declare)
+{
+    for (GeometryDerivatives d : {GeometryDerivatives::Analytic, GeometryDerivatives::Differenced})
+    {
+        const bool differenced = d == GeometryDerivatives::Differenced;
+        BOOST_TEST_CONTEXT((differenced ? "Differenced" : "Analytic"))
+        {
+            auto problem = std::make_unique<CountingGeometricAux>(d);
+            CountingGeometricAux &p = *problem;
+            auto h = makeCoupledSolverAtState(6, 2, std::move(problem),
+                                              std::make_shared<ManufacturedFieldEverySlot>(1.0));
+            const Index nGeom = h->getGeometrySlots();
+            const Index nNodes = 6 * 3;
+            BOOST_REQUIRE_GE(nGeom, 1);
+
+            p.batched = p.hooks = 0;
+            h->updateMatricesForJacSolve();
+            if (differenced)
+            {
+                BOOST_TEST(p.batched == nGeom + 1);
+                BOOST_TEST(p.hooks == 0);
+            }
+            else
+            {
+                BOOST_TEST(p.batched == 0);
+                BOOST_TEST(p.hooks == 3 * nNodes); // sigma and S for one variable, G for one aux
+            }
+
+            const EvaluationPlan plan = h->evaluationPlan();
+            const auto site = std::find_if(plan.sites.begin(), plan.sites.end(), [](EvaluationSite const &s)
+                                           { return s.kind == EvaluationKind::FieldCoupling; });
+            BOOST_REQUIRE(site != plan.sites.end());
+            BOOST_TEST((site->cadence == EvaluationCadence::PerJacobianBuild));
+            BOOST_TEST((site->entry ==
+                        (differenced ? EvaluationEntry::ComputePhysics : EvaluationEntry::Pointwise)));
+            BOOST_TEST(site->calls == (differenced ? nGeom + 1 : 1));
+
+            if (differenced)
+            {
+                const Values cached = p.getSourceCache(0)->get();
+                auto nodes = h->physicsNodesAt(h->yJac, h->t);
+                const PhysicsOutput atState = p.GeometricAuxDiffusion::ComputePhysics(nodes.states, nodes.points, h->t);
+                BOOST_TEST((cached - atState[1][0]).cwiseAbs().maxCoeff() == 0.0,
+                           boost::test_tools::tolerance(0.0));
+                // Not vacuous: the sources do move with the geometry.
+                nodes.states.GeometryMatrix().row(0).array() += 1e-3;
+                const PhysicsOutput shifted = p.GeometricAuxDiffusion::ComputePhysics(nodes.states, nodes.points, h->t);
+                BOOST_TEST((shifted[1][0] - atState[1][0]).cwiseAbs().maxCoeff() > 1e-6);
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
