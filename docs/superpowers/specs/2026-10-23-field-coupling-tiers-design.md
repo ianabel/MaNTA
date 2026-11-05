@@ -468,6 +468,19 @@ tier-1 exact against tier-2 exact with psi on its equilibrium to 2e-15;
 iterative and krylov within the sweep's tolerance of exact; runs against tier
 2 within 2.5e-7 (iterative) and 3.7e-8 (krylov) in N, steady states to 4e-13.
 
+**The MMS order study keeps the full order at tier 1** (`ThetaPinchMMSTests.cpp`,
+`MMSFieldTests.cpp`, `FieldSolve = "iterative"`, with the exact and the
+differenced G'). On the theta pinch at 1e-9 / 1e-11, 8, 16 and 32 cells, tier 1
+has tier 2's local orders to the digit: N 1.99 / 3.00-3.01 / 3.95-3.99 for
+k = 1, 2, 3. Its N errors match tier 2's to 2e-12-1.9e-10, against an
+rtol ||N|| of 4.4e-9, and it takes tier 2's steps: 97-249 against 96-326, where
+tier 0 takes 284-2234. The steady Newton study gives N 2.00, 3.00, 4.00 on
+16-64 cells in 4 iterations, against tier 2's 5, and lands on tier 2's answer to
+9e-15. Both manufactured field models reproduce tier 2's u and psi orders, with
+gaps of at most 1.3e-10. Both declare `Analytic`, so none is skipped. The sweep
+never fell back. Krylov gives the same errors, but takes 45 s where the sweep
+takes 16 s, so it is not part of the suite.
+
 ### Step 5: the tier-1 adjoint
 
 * `EquilibriumModel::applyResponseTranspose(dp, e, states, dg, inputPoints,

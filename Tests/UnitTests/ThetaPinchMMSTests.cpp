@@ -223,7 +223,7 @@ struct Errors
     double N, Vp, C;
     // Time steps for a transient, Newton iterations for a steady solve.
     long steps = 0, solves = 0, fallbacks = 0;
-    // Tier 0 only: equilibrium solves, one per distinct transport state.
+    // Tiers 0 and 1: equilibrium solves, one per distinct transport state.
     long equilibria = 0;
 };
 
@@ -235,7 +235,8 @@ enum class Tier
 {
     Coupled,    // tier 2: psi in the DAE, the coupled Jacobian (FieldCoupling = "coupled")
     Consistent, // tier 0: the same model as a black box, FieldModelEquilibrium ("consistent")
-    Reduced,    // tier 1: the black box with G' in the Jacobian -- not built yet
+    Reduced,    // tier 1: the black box with its exact G' in the Jacobian ("reduced")
+    ReducedDifferenced, // tier 1, G' a forward difference of the equilibrium solve
 };
 
 const char *tierName(Tier tier)
@@ -248,6 +249,8 @@ const char *tierName(Tier tier)
         return "consistent (tier 0)";
     case Tier::Reduced:
         return "reduced (tier 1)";
+    case Tier::ReducedDifferenced:
+        return "reduced, differenced G' (tier 1)";
     }
     return "?";
 }
@@ -256,19 +259,23 @@ const char *tierName(Tier tier)
 void attachField(SystemSolver &sys, std::shared_ptr<ThetaPinchEquilibrium> const &field, Tier tier,
                  SystemSolver::FieldSolveMode mode)
 {
+    using C = SystemSolver::EquilibriumCoupling;
     switch (tier)
     {
     case Tier::Coupled:
         sys.setFieldModel(field);
-        sys.setFieldSolveMode(mode);
-        return;
+        break;
     case Tier::Consistent:
         sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(field));
-        return;
+        return; // no coupling to solve, so no FieldSolve
     case Tier::Reduced:
+        sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(field), C::Reduced);
+        break;
+    case Tier::ReducedDifferenced:
+        sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(field, true), C::Reduced);
         break;
     }
-    throw std::logic_error("ThetaPinchMMSTests: tier 1 (reduced) is not built yet");
+    sys.setFieldSolveMode(mode);
 }
 
 struct Run
@@ -366,10 +373,9 @@ std::string table(std::vector<Index> const &res, std::vector<Errors> const &e, c
     return s;
 }
 
-/// The tiers built so far. Tier 1 joins by gaining a branch in attachField (and
-/// a psi read-back in solveOnce if it carries none) and an entry here; every
-/// study below then runs it and compares it with tier 2.
-constexpr Tier builtTiers[] = {Tier::Coupled, Tier::Consistent};
+/// Every tier, tier 2 first: the steady study runs them all and compares each
+/// with tier 2.
+constexpr Tier builtTiers[] = {Tier::Coupled, Tier::Consistent, Tier::Reduced, Tier::ReducedDifferenced};
 
 /// The grids each study refines over. The steady study starts at 16: at k = 3 the
 /// step from 8 is pre-asymptotic in N (3.89), and a steady solve is cheap enough
@@ -424,9 +430,9 @@ void checkOrders(Tier tier, bool steady, Index k)
     }
 }
 
-/// A tier against tier 2 on the same grids. Both solve the same discrete
-/// equations -- tier 0 differs only in carrying psi as a cache rather than as
-/// unknowns -- so their errors in N and V' must agree to the solve's own
+/// A tier against tier 2 on the same grids. All solve the same discrete
+/// equations -- tiers 0 and 1 differ only in carrying psi as a cache rather than
+/// as unknowns, and in what of the coupling their Jacobians carry -- so their errors in N and V' must agree to the solve's own
 /// accuracy, not merely converge at one rate: orders alone would pass a tier
 /// that converged to a different function.
 ///
@@ -437,7 +443,8 @@ void checkOrders(Tier tier, bool steady, Index k)
 /// the global one only to a small multiple of it: the gap there is 3.4e-9, 0.77
 /// of rtol ||N||, and the iterative-against-exact comparison above has seen
 /// compilers move such a gap sevenfold. 10 rtol ||N|| is still a tenth of the
-/// smallest spatial error compared, 3.1e-7 at k = 3 on 32 cells.
+/// smallest spatial error compared, 3.1e-7 at k = 3 on 32 cells. Tier 1, taking
+/// tier 2's steps, comes within 0.04 of rtol ||N||.
 void checkAgainstCoupled(Tier tier, bool steady, Index k)
 {
     const auto &cells = studyCells(steady);
@@ -452,14 +459,15 @@ void checkAgainstCoupled(Tier tier, bool steady, Index k)
                                                  [&](double x, double tt) { return exact.N(x, tt); }, grid, t);
         const double normVp = mms::l2ErrorAgainst([](double) { return 0.0; },
                                                   [&](double x, double tt) { return exact.Vp(x, tt); }, grid, t);
-        const double rtol = (steady ? 1.0 : 10.0) * mms::Tolerances{}.relative;
-        BOOST_TEST_MESSAGE(std::format("{} against coupled, k = {}, n = {}: N {:.2e}, V' {:.2e} (rtol ||.|| {:.2e}, {:.2e})",
+        const double rtol = mms::Tolerances{}.relative, bound = steady ? 1.0 : 10.0;
+        BOOST_TEST_MESSAGE(std::format("{} against coupled, k = {}, n = {}: N {:.2e}, V' {:.2e} (rtol ||.|| {:.2e}, "
+                                       "{:.2e}; bound {}x that)",
                                        tierName(tier), k, cells[i], std::abs(e[i].N - c[i].N),
-                                       std::abs(e[i].Vp - c[i].Vp), rtol * normN, rtol * normVp));
-        BOOST_TEST(std::abs(e[i].N - c[i].N) <= rtol * normN,
+                                       std::abs(e[i].Vp - c[i].Vp), rtol * normN, rtol * normVp, bound));
+        BOOST_TEST(std::abs(e[i].N - c[i].N) <= bound * rtol * normN,
                    tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": N error " << e[i].N
                                   << " against coupled " << c[i].N);
-        BOOST_TEST(std::abs(e[i].Vp - c[i].Vp) <= rtol * normVp,
+        BOOST_TEST(std::abs(e[i].Vp - c[i].Vp) <= bound * rtol * normVp,
                    tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": V' error " << e[i].Vp
                                   << " against coupled " << c[i].Vp);
     }
@@ -612,17 +620,52 @@ BOOST_DATA_TEST_CASE(the_consistent_theta_pinch_converges_at_k_plus_one,
     checkAgainstCoupled(Tier::Consistent, false, k);
 }
 
+// Tier 1 (FieldCoupling = "reduced"), with the exact G' FieldModelEquilibrium
+// supplies and with a forward difference of its Solve, under the default
+// FieldSolve = "iterative". Measured, on the same grids, with IDA's steps
+// against tier 2's and tier 0's:
+//
+//             N            V'           steps, exact G'   differenced G'   tier 2          tier 0
+//     k = 1   1.99, 1.99   2.55, 2.49   249, 224, 224     246, 230, 218    326, 311, 231   580, 560, 1416
+//     k = 2   3.01, 3.00   3.59, 3.53   172, 154, 122     161, 185, 122    178, 154, 126   410, 388, 284
+//     k = 3   3.95, 3.99   3.97, 3.98   157, 121, 97      166, 121, 97     193, 120, 96    1439, 2234, 521
+//
+// -- tier 2's orders to the digit, at either response, and its N errors to
+// 2e-12 - 1.9e-10 against an rtol ||N|| of 4.4e-9, an order closer than tier 0
+// gets: the response restores the Newton rate the black box loses, so the
+// two take tier 2's steps rather than 2 to 18 times them, and the sweep never
+// fell back. FieldSolve = "krylov" gives the same table and errors, but took 45 s
+// over the three degrees against the sweep's 16 s (and tier 2's 23 s under
+// krylov), so it is not run here.
+BOOST_DATA_TEST_CASE(the_reduced_theta_pinch_converges_at_k_plus_one,
+                     boost::unit_test::data::make({1, 2, 3}), k)
+{
+    checkOrders(Tier::Reduced, false, k);
+    checkAgainstCoupled(Tier::Reduced, false, k);
+}
+
+BOOST_DATA_TEST_CASE(the_reduced_theta_pinch_with_a_differenced_response_converges_at_k_plus_one,
+                     boost::unit_test::data::make({1, 2, 3}), k)
+{
+    checkOrders(Tier::ReducedDifferenced, false, k);
+    checkAgainstCoupled(Tier::ReducedDifferenced, false, k);
+}
+
 // The steady solve at every tier: the source frozen at tFinal, Newton from the
-// transient solution at t = 0, on 16, 32 and 64 cells. Measured, alike at both
-// tiers to every printed digit:
+// transient solution at t = 0, on 16, 32 and 64 cells. Measured, alike at every
+// tier to every printed digit:
 //
 //     k = 1   N 2.00, 2.00    V' 2.52, 2.45
 //     k = 2   N 3.01, 3.00    V' 3.70, 3.62
 //     k = 3   N 3.98, 4.00    V' 3.97, 3.99
 //
-// with 5 Newton iterations at tier 2 and 8 to 14 at tier 0. Cheap -- a second or
-// two per tier -- and it is the path `auto` sends a Differenced case's steady
-// solve down.
+// with 5 Newton iterations at tier 2, 4 at tier 1 at either response and 8 to
+// 14 at tier 0. Tier 1 lands on tier 2's answer to round-off, 3.6e-15 in N
+// with the exact G' and 9.0e-15 with the differenced one, where tier 0 stops
+// within 2e-11 of it: with G' in the Jacobian the Newton iteration is tier 2's,
+// converging quadratically to the same iterate. Cheap -- a second or two per
+// tier -- and tier 0 is the path `auto` sends a Differenced case's steady solve
+// down.
 BOOST_AUTO_TEST_CASE(steady_solves_converge_at_k_plus_one_at_every_tier)
 {
     for (Tier tier : builtTiers)
