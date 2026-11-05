@@ -58,6 +58,47 @@ struct Options
     double t0 = 0.0;
     // ThetaPinchDiffusion's GeometryDerivatives: Analytic, Differenced or None.
     std::string derivatives = "Analytic";
+    // Tier 1: the model through FieldModelEquilibrium, FieldCoupling =
+    // "reduced", with its own response or the differenced default.
+    bool reduced = false;
+    bool differencedResponse = false;
+    // FieldSolve = krylov, at tier 1 or 2; overrides `iterative`.
+    bool krylov = false;
+    // Count what the run asks of the case (CountingThetaPinch).
+    bool count = false;
+};
+
+/// ThetaPinchDiffusion counting the physics a run asks for, in the cost
+/// metric: points of batched value evaluations, points of batched derivative
+/// evaluations, and nodes at which the analytic geometry hooks were called (one
+/// dSigmaFn_dGeometry per node per Jacobian build).
+class CountingThetaPinch : public ThetaPinchDiffusion
+{
+public:
+    using ThetaPinchDiffusion::ThetaPinchDiffusion;
+
+    PhysicsOutput ComputePhysics(GlobalState const &s, std::vector<Position> const &x, Time t) override
+    {
+        values += static_cast<long>(x.size());
+        return ThetaPinchDiffusion::ComputePhysics(s, x, t);
+    }
+    void ComputePhysicsDerivatives(std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS> &&out,
+                                   GlobalState const &s, std::vector<Position> const &x, Time t) override
+    {
+        derivatives += static_cast<long>(x.size());
+        ThetaPinchDiffusion::ComputePhysicsDerivatives(std::move(out), s, x, t);
+    }
+    void dSigmaFn_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        if (i == 0)
+            ++geometryHookNodes;
+        ThetaPinchDiffusion::dSigmaFn_dGeometry(i, v, s, x, t);
+    }
+
+    /// Values at 1 and derivatives at 2 per point; the hooks priced separately.
+    long cost() const { return values + 2 * derivatives; }
+
+    long values = 0, derivatives = 0, geometryHookNodes = 0;
 };
 
 struct Run
@@ -75,7 +116,10 @@ Run makeRun(Options const &o, std::string const &stem,
     r.grid = std::make_unique<Grid>(0.0, 1.0, o.nCells);
     toml::value config = thetaPinchConfig;
     config.as_table().at("ThetaPinchDiffusion").as_table()["GeometryDerivatives"] = o.derivatives;
-    r.problem = std::make_unique<ThetaPinchDiffusion>(config, *r.grid);
+    if (o.count)
+        r.problem = std::make_unique<CountingThetaPinch>(config, *r.grid);
+    else
+        r.problem = std::make_unique<ThetaPinchDiffusion>(config, *r.grid);
     if (prepare)
         prepare(*r.problem, *r.grid);
     r.field = std::make_shared<ThetaPinchEquilibrium>(
@@ -95,12 +139,15 @@ Run makeRun(Options const &o, std::string const &stem,
     sys.setWriteDatFile(false);
     if (o.consistent)
         sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(r.field));
+    else if (o.reduced)
+        sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(r.field, o.differencedResponse),
+                                SystemSolver::EquilibriumCoupling::Reduced);
     else
-    {
         sys.setFieldModel(r.field);
-        sys.setFieldSolveMode(o.iterative ? SystemSolver::FieldSolveMode::Iterative
-                                          : SystemSolver::FieldSolveMode::Exact);
-    }
+    if (!o.consistent)
+        sys.setFieldSolveMode(o.krylov      ? SystemSolver::FieldSolveMode::Krylov
+                              : o.iterative ? SystemSolver::FieldSolveMode::Iterative
+                                            : SystemSolver::FieldSolveMode::Exact);
     return r;
 }
 
@@ -342,6 +389,167 @@ BOOST_AUTO_TEST_CASE(differenced_geometry_derivatives_give_the_analytic_run)
                                    { return s.kind == EvaluationKind::FieldCoupling; });
     BOOST_REQUIRE(site != plan.sites.end());
     BOOST_TEST(site->calls == differenced.sys->getGeometrySlots() + 1);
+}
+
+/// "Total Number of Timesteps" from a run's report, as a number.
+long stepsIn(std::string const &log)
+{
+    const auto at = log.find("Total Number of Timesteps");
+    if (at == std::string::npos)
+        return -1;
+    return std::stol(log.substr(log.find(':', at) + 1));
+}
+
+// Tier 1 carries the coupling in its Jacobian, so IDA's Newton converges as it
+// does at tier 2 and the run takes about tier 2's steps, not tier 0's crawl --
+// with the model's own response or the differenced default, under either
+// solve. Measured: 163 steps under iterative and 157 under krylov, against
+// tier 2's 144 and tier 0's 321 (on the regression config, 174 at both tiers);
+// N within 2.5e-7 and 3.7e-8 of tier 2's.
+BOOST_AUTO_TEST_CASE(a_reduced_theta_pinch_reaches_the_coupled_answer)
+{
+    auto run = [](Options const &o, std::string const &stem, long &steps)
+    {
+        auto r = makeRun(o, stem);
+        CapturedOutput capture;
+        r.sys->runSolver(0.5);
+        steps = stepsIn(capture.text());
+        return r;
+    };
+    long coupledSteps = 0, tier0Steps = 0;
+    auto coupled = run({}, "theta_pinch_tier2_t1", coupledSteps);
+    auto tier0 = run({.consistent = true}, "theta_pinch_tier0_t1", tier0Steps);
+    const Vector want = sampleWithGeometry(*coupled.sys);
+
+    for (bool differenced : {false, true})
+        for (bool krylov : {false, true})
+        {
+            long steps = 0;
+            auto reduced = run({.reduced = true, .differencedResponse = differenced, .krylov = krylov},
+                               "theta_pinch_tier1", steps);
+            const Vector got = sampleWithGeometry(*reduced.sys);
+            const double dN =
+                (want.head(5) - got.head(5)).cwiseAbs().maxCoeff() / want.head(5).cwiseAbs().maxCoeff();
+            const double dB = (want.tail(5) - got.tail(5)).cwiseAbs().maxCoeff();
+            const auto stats = reduced.sys->getFieldSweepStats();
+            BOOST_TEST_MESSAGE("tier 1, differenced response = "
+                               << differenced << ", krylov = " << krylov << ": " << steps << " steps (tier 2 "
+                               << coupledSteps << ", tier 0 " << tier0Steps << "); N " << dN << " relative, B "
+                               << dB << "; " << stats.iterations << " sweeps / " << stats.solves << " solves, "
+                               << stats.krylovIterations << " GMRES iterations / " << stats.krylovSolves
+                               << ", " << stats.responses << " responses, " << stats.fallbacks
+                               << " fallbacks");
+            BOOST_TEST(dN < 1e-5);
+            BOOST_TEST(dB < 1e-6);
+            BOOST_TEST(reduced.sys->getFieldDOF() == 0);
+            BOOST_TEST(steps <= coupledSteps + coupledSteps / 4);
+            BOOST_TEST(2 * steps < 3 * tier0Steps / 2);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(a_reduced_steady_solve_reaches_the_coupled_answer)
+{
+    for (auto mode : {SystemSolver::SteadyMode::Newton, SystemSolver::SteadyMode::PseudoTransient})
+        for (bool differenced : {false, true})
+        {
+            auto coupled = makeRun({}, "theta_pinch_tier2_ss1");
+            auto reduced = makeRun({.reduced = true, .differencedResponse = differenced}, "theta_pinch_tier1_ss");
+            for (Run *r : {&coupled, &reduced})
+            {
+                r->sys->setSteadyStateTolerance(1e-8);
+                r->sys->setSteadyMode(mode);
+                CapturedOutput quiet;
+                r->sys->runSolver(0.5);
+            }
+            const Vector a = sampleWithGeometry(*coupled.sys), b = sampleWithGeometry(*reduced.sys);
+            const double dN = (a.head(5) - b.head(5)).cwiseAbs().maxCoeff() / a.head(5).cwiseAbs().maxCoeff();
+            BOOST_TEST_MESSAGE("steady tier 1 (differenced response = "
+                               << differenced << ") against coupled: N " << dN << " relative; Newton iterations "
+                               << reduced.sys->lastSteadyStats().newtonIters << " against "
+                               << coupled.sys->lastSteadyStats().newtonIters);
+            BOOST_TEST(dN < 1e-8);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(a_reused_reduced_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)
+{
+    for (bool differenced : {false, true})
+    {
+        auto fresh = makeRun({.reduced = true, .differencedResponse = differenced}, "theta_pinch_tier1_fresh");
+        auto reused = makeRun({.reduced = true, .differencedResponse = differenced}, "theta_pinch_tier1_reused");
+        {
+            CapturedOutput quiet;
+            fresh.sys->runSolver(0.5);
+            reused.sys->runSolver(0.5);
+            reused.sys->runSolver(0.5);
+        }
+        const Vector want = sampleWithGeometry(*fresh.sys), got = sampleWithGeometry(*reused.sys);
+        BOOST_TEST((want - got).cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
+    }
+}
+
+// What a mode spends on the case, pinned exactly. Every mode pays one value
+// sweep per residual, one derivative sweep per Jacobian build and its coupling
+// site per build, plus the same fixed sweeps to start: so the cost less those
+// per-evaluation terms is the same constant in every mode, and the equilibrium
+// work tier 1 adds -- solves, responses, the differenced response's extra
+// solves -- costs the case nothing.
+BOOST_AUTO_TEST_CASE(each_mode_spends_one_sweep_per_residual_and_per_build_and_no_more)
+{
+    for (std::string derivatives : {"Analytic", "Differenced"})
+    {
+        std::vector<long> fixedValues, fixedDerivatives;
+        for (int mode = 0; mode < 4; ++mode)
+        {
+            Options o{.derivatives = derivatives, .count = true};
+            o.reduced = mode >= 1;
+            o.differencedResponse = mode == 2;
+            o.krylov = mode == 3;
+            auto r = makeRun(o, "theta_pinch_counted");
+            {
+                CapturedOutput quiet;
+                r.sys->runSolver(0.5);
+            }
+            auto const &c = static_cast<CountingThetaPinch const &>(*r.problem);
+            const long points = static_cast<long>(r.sys->evaluationPlan().grid.getNCells()) * (o.k + 1);
+            const long coupling = derivatives == "Differenced" ? r.sys->getGeometrySlots() + 1 : 0;
+            const long perValues = r.sys->nResidualEvals + coupling * r.sys->nJacBuilds;
+            fixedValues.push_back(c.values - points * perValues);
+            fixedDerivatives.push_back(c.derivatives - points * r.sys->nJacBuilds);
+            BOOST_TEST_MESSAGE(derivatives << ", mode " << mode << ": " << r.sys->nResidualEvals << " residuals, "
+                                           << r.sys->nJacBuilds << " builds; values " << c.values
+                                           << ", derivatives " << c.derivatives << ", hook nodes "
+                                           << c.geometryHookNodes << "; fixed " << fixedValues.back() << " / "
+                                           << fixedDerivatives.back());
+            if (derivatives == "Analytic")
+                BOOST_TEST(c.geometryHookNodes == points * r.sys->nJacBuilds);
+            else
+                BOOST_TEST(c.geometryHookNodes == 0);
+        }
+        for (size_t m = 1; m < fixedValues.size(); ++m)
+        {
+            BOOST_TEST(fixedValues[m] == fixedValues[0]);
+            BOOST_TEST(fixedDerivatives[m] == fixedDerivatives[0]);
+        }
+    }
+}
+
+// The plan says what a build costs at tier 1 as at tier 2: the case's coupling
+// site, and nothing for the equilibrium.
+BOOST_AUTO_TEST_CASE(a_reduced_plan_lists_the_coupling_site)
+{
+    auto analytic = makeRun({.reduced = true}, "theta_pinch_tier1_plan");
+    auto differenced = makeRun({.derivatives = "Differenced", .reduced = true}, "theta_pinch_tier1_plan");
+    auto tier0 = makeRun({.consistent = true}, "theta_pinch_tier0_plan");
+    auto site = [](SystemSolver &sys)
+    {
+        const EvaluationPlan plan = sys.evaluationPlan();
+        return std::find_if(plan.sites.begin(), plan.sites.end(), [](EvaluationSite const &s)
+                            { return s.kind == EvaluationKind::FieldCoupling; }) != plan.sites.end();
+    };
+    BOOST_TEST(site(*analytic.sys));
+    BOOST_TEST(site(*differenced.sys));
+    BOOST_TEST(!site(*tier0.sys));
 }
 
 BOOST_AUTO_TEST_CASE(a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)

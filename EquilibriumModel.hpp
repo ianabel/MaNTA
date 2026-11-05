@@ -32,10 +32,14 @@
         residual is handed it.
       * Geometry is then asked for the slots at whichever points the solver is
         about to evaluate the physics at.
-      * The Jacobian carries no coupling: the transport derivatives are taken at
-        the geometry of the build's state, held fixed. So the solver's Newton
-        converges linearly in the coupling, which is the price of asking for
-        nothing but G.
+      * At tier 0 (FieldCoupling = "consistent") the Jacobian carries no
+        coupling: the transport derivatives are taken at the geometry of the
+        build's state, held fixed. So the solver's Newton converges linearly in
+        the coupling, which is the price of asking for nothing but G.
+      * At tier 1 (FieldCoupling = "reduced") it carries G' too, through
+        applyResponse -- by default a forward difference of Solve, so a model
+        still need supply nothing but G, and pays in equilibrium solves rather
+        than in Newton iterations.
 
     `Equilibrium` is opaque to the solver. It holds whatever the model caches --
     a spline, Fourier coefficients, a file handle -- and the solver only stores
@@ -45,6 +49,19 @@ class Equilibrium
 {
 public:
     virtual ~Equilibrium() = default;
+};
+
+/// Where a model's response G'(p) dp comes from (EquilibriumModel::applyResponse).
+///
+/// `Differenced` is the default implementation, a forward difference of Solve;
+/// `Model` declares that the model overrides applyResponse with its own, exact,
+/// derivative. Declared as data rather than inferred from the override, the way
+/// SystemSpec::geometryDerivatives is, because a default that differences looks
+/// from outside exactly like one that does not.
+enum class EquilibriumResponse
+{
+    Differenced,
+    Model,
 };
 
 /// What a tier-0 model is, as data: FieldModelSpec without the unknowns.
@@ -57,6 +74,7 @@ struct EquilibriumSpec
     std::vector<FieldSlot> geometry;
     std::string label;
     std::string name = "Field";
+    EquilibriumResponse response = EquilibriumResponse::Differenced;
 
     Index nGeometry() const { return static_cast<Index>(geometry.size()); }
 
@@ -109,6 +127,30 @@ public:
 
     /// The geometry slots of `e` at each of `points`: g is (nGeometry, points.size()).
     virtual void Geometry(MatrixRef g, Equilibrium const &e, std::vector<Position> const &points) = 0;
+
+    /// The response of the geometry to the input, dg = G'(p) dp: tier 1.
+    ///
+    /// `e` is the equilibrium Solve returned for `states` (on `inputPoints`, with
+    /// `weights`, at `t`), `dp` a direction in that same space -- every component
+    /// of the transport state at the basis nodes -- and dg is filled as
+    /// (nGeometry, geometryPoints.size()), at the points the solver evaluates the
+    /// physics at.
+    ///
+    /// The default is a forward difference of Solve, warm-started from `e`: one
+    /// equilibrium solve per call, at a step of responseStep() relative to the
+    /// input (see the definition). A model that can do better -- a code with its
+    /// own linearisation, or FieldModelEquilibrium -- overrides this and declares
+    /// EquilibriumResponse::Model in its spec.
+    virtual void applyResponse(MatrixRef dg, Equilibrium const &e, GlobalState const &states,
+                               GlobalState const &dp, std::vector<Position> const &inputPoints,
+                               Vector const &weights, Time t,
+                               std::vector<Position> const &geometryPoints);
+
+    /// The relative step the default applyResponse takes. sqrt(eps), which is
+    /// right for an equilibrium converged to round-off. A model that converges
+    /// only to a tolerance tol should return about sqrt(tol), or the difference
+    /// is its own convergence error divided by the step.
+    virtual double responseStep() const;
 
     /// How accurately the geometry has to be resolved, relative and absolute,
     /// in the units of the slots. Handed over once per run, from initialize().

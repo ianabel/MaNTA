@@ -299,8 +299,9 @@ const std::vector<Entry> &table()
          "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
          "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
         {"FieldSolve", {}, Type::String, Category::Solver, false, false, std::string{"iterative"},
-         "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default) "
-         "or exact (Schur complement onto the field block; a verification tool, see docs)."},
+         "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default), "
+         "krylov (GMRES on the system with the field eliminated) or exact (the eliminated "
+         "system solved directly; a verification tool, see docs)."},
         {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-4,
          "Convergence tolerance for FieldSolve = iterative: the change one sweep makes to the "
          "Newton increment, in the error-weighted RMS norm IDA's tests use (where its Newton "
@@ -309,7 +310,7 @@ const std::vector<Entry> &table()
          "Convergence tolerance for the coupled adjoint sweep: its backward error relative to "
          "the right-hand side."},
         {"FieldSolveMaxSweeps", {}, Type::Int, Category::Solver, false, false, 20,
-         "Sweep cap for FieldSolve = iterative."},
+         "Sweep cap for FieldSolve = iterative, and the Krylov dimension for krylov."},
         {"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,
          "Sweep cap for the coupled adjoint solve. Separate from FieldSolveMaxSweeps, and "
          "larger, because the adjoint always runs at cj = 0 where the coupling is stiffest. "
@@ -332,8 +333,10 @@ const std::vector<Entry> &table()
         {"FieldCoupling", {}, Type::String, Category::ProblemSelection, false, false,
          std::string{"auto"},
          "How the FieldModel is coupled: coupled (its unknowns join the DAE and its "
-         "derivatives the Jacobian), consistent (solved to convergence at each transport "
-         "state, as a black box, with no Jacobian coupling and no adjoint), or auto (the "
+         "derivatives the Jacobian), reduced (solved to convergence at each transport state, "
+         "with its response in the Jacobian but no unknowns and no adjoint), consistent "
+         "(solved to convergence at each transport state, as a black box, with no Jacobian "
+         "coupling and no adjoint), or auto (the "
          "default: coupled where the transport system supplies geometry derivatives, except "
          "a steady solve with differenced ones; see docs/field_coupling.rst)."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,

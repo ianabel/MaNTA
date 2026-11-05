@@ -190,13 +190,17 @@ int runManta(std::string const &fname)
 	// else is built. Which mode is chooseFieldCoupling's, from FieldCoupling and
 	// what the case and the model supply.
 	std::shared_ptr<EquilibriumModel> equilibrium;
+	auto equilibriumCoupling = SystemSolver::EquilibriumCoupling::Consistent;
 	if (fieldModel)
 	{
 		bool dynamics = false;
 		for (Index i = 0; i < fieldModel->nFieldDOF(); ++i)
 			dynamics = dynamics || fieldModel->isFieldDOFDifferential(i);
-		if (chooseFieldCoupling(config, pProblem->spec(), dynamics) == FieldCouplingMode::Consistent)
+		const FieldCouplingMode mode = chooseFieldCoupling(config, pProblem->spec(), dynamics);
+		if (mode != FieldCouplingMode::Coupled)
 			equilibrium = std::make_shared<FieldModelEquilibrium>(fieldModel);
+		if (mode == FieldCouplingMode::Reduced)
+			equilibriumCoupling = SystemSolver::EquilibriumCoupling::Reduced;
 	}
 	const Index nField = fieldModel && !equilibrium ? fieldModel->nFieldDOF() : 0;
 
@@ -302,7 +306,7 @@ int runManta(std::string const &fname)
 		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
 		// reshapes the solution vector and refuses once the solver is initialised.
 		if (equilibrium)
-			system->setEquilibriumModel(equilibrium);
+			system->setEquilibriumModel(equilibrium, equilibriumCoupling);
 		else if (fieldModel)
 			system->setFieldModel(fieldModel);
 

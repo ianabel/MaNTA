@@ -20,16 +20,30 @@
     A model with a differential DOF is refused: a field with dynamics of its own
     is not an instantaneous function of the transport state, which is all tier 0
     can express.
+
+    The response is the model's own, exactly (tier 1, EquilibriumResponse::Model):
+    the field rows hold R(psi(p); p) = 0, so
+
+        dpsi = -(dR/dpsi)^-1 (dR/dp) dp,   dg = (dGeometry/dpsi) dpsi,
+
+    the tier-2 coupling blocks with psi eliminated -- which is what makes the
+    theta pinch at tier 1 checkable against tier 2. `differencedResponse` keeps
+    the base class's forward difference of Solve instead, so that the default
+    every black-box model gets is exercised on a real field too.
  */
 class FieldModelEquilibrium : public EquilibriumModel
 {
 public:
-    explicit FieldModelEquilibrium(std::shared_ptr<FieldModel> model);
+    explicit FieldModelEquilibrium(std::shared_ptr<FieldModel> model, bool differencedResponse = false);
 
     std::unique_ptr<Equilibrium> Solve(GlobalState const &states, std::vector<Position> const &points,
                                        Vector const &weights, Time t, Equilibrium const *warm) override;
 
     void Geometry(MatrixRef g, Equilibrium const &e, std::vector<Position> const &points) override;
+
+    void applyResponse(MatrixRef dg, Equilibrium const &e, GlobalState const &states, GlobalState const &dp,
+                       std::vector<Position> const &inputPoints, Vector const &weights, Time t,
+                       std::vector<Position> const &geometryPoints) override;
 
     void resetForRun() override { model->resetForRun(); }
 
@@ -49,6 +63,10 @@ public:
 private:
     std::shared_ptr<FieldModel> model;
     long iterations = 0;
+    // The equilibrium whose dR/dpsi the model's own factorisation currently
+    // holds, or null. Solve refactorises it at every Newton step, so a response
+    // applied after another Solve has to put its own back first.
+    Equilibrium const *factorisedFor = nullptr;
 };
 
 #endif // FIELDMODELEQUILIBRIUM_HPP

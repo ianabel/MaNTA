@@ -397,9 +397,11 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
 
-    if (c.FieldCoupling != "auto" && c.FieldCoupling != "coupled" && c.FieldCoupling != "consistent")
-        throw std::invalid_argument("FieldCoupling must be \"auto\", \"coupled\" or \"consistent\"; got \"" +
-                                    c.FieldCoupling + "\".");
+    if (c.FieldCoupling != "auto" && c.FieldCoupling != "coupled" && c.FieldCoupling != "reduced" &&
+        c.FieldCoupling != "consistent")
+        throw std::invalid_argument(
+            "FieldCoupling must be \"auto\", \"coupled\", \"reduced\" or \"consistent\"; got \"" +
+            c.FieldCoupling + "\".");
 
     // The alias machinery warns that the *name* changed. It cannot know that the
     // *mesh* changed too, and it did: High_Grid_Boundary spaced its boundary-layer
@@ -1142,9 +1144,11 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
     else if (config.FieldSolve == "exact")
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+    else if (config.FieldSolve == "krylov")
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Krylov);
     else
-        throw std::invalid_argument(
-            "FieldSolve must be \"iterative\" or \"exact\"; got \"" + config.FieldSolve + "\".");
+        throw std::invalid_argument("FieldSolve must be \"iterative\", \"krylov\" or \"exact\"; got \"" +
+                                    config.FieldSolve + "\".");
 
     system.setFieldSolveTolerance(config.FieldSolveTolerance);
     system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
@@ -1222,14 +1226,30 @@ FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec con
     if (config.FieldCoupling == "consistent")
         return FieldCouplingMode::Consistent;
 
-    if (config.FieldCoupling == "coupled")
+    if (config.FieldCoupling == "coupled" || config.FieldCoupling == "reduced")
     {
         if (!derivatives)
             throw std::invalid_argument(
-                "FieldCoupling = \"coupled\" needs the transport system's derivatives in the "
+                "FieldCoupling = \"" + config.FieldCoupling +
+                "\" needs the transport system's derivatives in the "
                 "geometry, and it declares none (geometryDerivatives = None). Use \"consistent\" "
                 "or \"auto\".");
-        return FieldCouplingMode::Coupled;
+        if (config.FieldCoupling == "coupled")
+            return FieldCouplingMode::Coupled;
+
+        // The reduced mode runs the field as an equilibrium, so what that
+        // cannot carry it cannot either -- and it has no adjoint yet.
+        if (fieldHasDynamics)
+            throw std::invalid_argument(
+                "FieldCoupling = \"reduced\" runs the field as an equilibrium of the transport "
+                "state, and this field has dynamics (a differential field unknown). Use "
+                "\"coupled\".");
+        if (config.solveAdjoint || config.SteadyStateTest == "Objective")
+            throw std::invalid_argument(
+                "FieldCoupling = \"reduced\" cannot solve an adjoint (solveAdjoint, or "
+                "SteadyStateTest = \"Objective\"): the transposed response is not built. Use "
+                "\"coupled\".");
+        return FieldCouplingMode::Reduced;
     }
 
     // "auto". What forces the coupled field: the black-box mode can neither

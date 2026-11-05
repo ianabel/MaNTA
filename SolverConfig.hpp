@@ -136,9 +136,9 @@ struct SolverConfig
     // other three are plain solver options and go through applySolverConfig
     // like everything else.
     std::string              FieldModel;
-    // "auto", "coupled" or "consistent": also applied by runManta, which
-    // resolves it with chooseFieldCoupling and wraps the model in a
-    // FieldModelEquilibrium for the consistent mode.
+    // "auto", "coupled", "reduced" or "consistent": also applied by runManta,
+    // which resolves it with chooseFieldCoupling and wraps the model in a
+    // FieldModelEquilibrium for the reduced and consistent modes.
     std::string              FieldCoupling;
     std::string              FieldSolve;
     double                   FieldSolveTolerance;
@@ -292,15 +292,22 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system);
 // derivatives the Jacobian (setFieldModel). Consistent: solved to convergence at
 // each transport state as a black box, with no Jacobian coupling and no adjoint
 // (a FieldModelEquilibrium, setEquilibriumModel).
+// Reduced: the model run as an equilibrium (a FieldModelEquilibrium) whose
+// response G' enters the Jacobian, with no unknowns in the DAE
+// (setEquilibriumModel with EquilibriumCoupling::Reduced): tier 1.
 enum class FieldCouplingMode
 {
     Coupled,
     Consistent,
+    Reduced,
 };
 
 // FieldCoupling resolved against what the case and the model can supply.
-// "consistent" and "coupled" are taken as asked, except that "coupled" is refused
-// for a case declaring no geometry derivatives. "auto" picks:
+// "consistent", "coupled" and "reduced" are taken as asked, except that "coupled"
+// and "reduced" are refused for a case declaring no geometry derivatives, and
+// "reduced" for a field with dynamics or a run solving an adjoint. "auto" never
+// picks "reduced": with the field model's own unknowns available, "coupled" is
+// the same Jacobian without the equilibrium solves. It picks:
 //
 //   * consistent when the case declares no geometry derivatives -- and refuses,
 //     naming why, when the run needs the coupled field anyway: a field with

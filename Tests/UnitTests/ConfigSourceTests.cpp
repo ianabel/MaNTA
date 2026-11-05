@@ -317,6 +317,8 @@ BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
              Row{steady, D::Differenced, true, M::Coupled},
              Row{"FieldCoupling = \"consistent\"\n", D::Analytic, false, M::Consistent},
              Row{"FieldCoupling = \"coupled\"\n" + steady, D::Differenced, false, M::Coupled},
+             Row{"FieldCoupling = \"reduced\"\n", D::Analytic, false, M::Reduced},
+             Row{"FieldCoupling = \"reduced\"\n" + steady, D::Differenced, false, M::Reduced},
          })
     {
         CapturedOutput quiet;
@@ -341,6 +343,29 @@ BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
     BOOST_TEST(refusal("", true).find("dynamics") != std::string::npos, refusal("", true));
     BOOST_TEST(refusal("solveAdjoint = true\n", false).find("adjoint") != std::string::npos);
     BOOST_TEST(refusal("FieldCoupling = \"coupled\"\n", false).find("geometryDerivatives = None") !=
+               std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"reduced\"\n", false).find("geometryDerivatives = None") !=
+               std::string::npos);
+
+    // The reduced mode is a field that is a function of the transport state,
+    // with no adjoint yet: what it cannot carry is refused, by name, whatever
+    // the case's derivatives.
+    auto reducedRefusal = [&](std::string const &extra, bool dynamics)
+    {
+        try
+        {
+            chooseFieldCoupling(load(minimal + "FieldCoupling = \"reduced\"\n" + extra), spec(D::Analytic),
+                                dynamics);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    BOOST_TEST(reducedRefusal("", true).find("dynamics") != std::string::npos);
+    BOOST_TEST(reducedRefusal("solveAdjoint = true\n", false).find("adjoint") != std::string::npos);
+    BOOST_TEST(reducedRefusal(steady + "SteadyStateTest = \"Objective\"\n", false).find("adjoint") !=
                std::string::npos);
     BOOST_CHECK_THROW(load(minimal + "FieldCoupling = \"couple\"\n"), std::invalid_argument);
 }
@@ -393,6 +418,10 @@ BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_field_solve_settings_throug
     BOOST_TEST(sys.getFieldSolveMaxSweeps() == 3);
     BOOST_TEST(sys.getFieldSolveMaxAdjointSweeps() == 9);
     BOOST_TEST(sys.getFieldSolveAdjointTolerance() == 1e-12);
+
+    applySolverConfig(load(minimal + "FieldSolve = \"krylov\"\n"), sys);
+    BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Krylov));
+    BOOST_CHECK_THROW(applySolverConfig(load(minimal + "FieldSolve = \"gmres\"\n"), sys), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(write_adjoints_reaches_the_solver_and_needs_solve_adjoint)

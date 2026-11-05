@@ -66,6 +66,7 @@ set(MANTA_CORE_SOURCES
   DGStatic.cpp
   DiscretisationEstimate.cpp
   DegreeAdaptation.cpp
+  EquilibriumModel.cpp
   ErrorChecker.cpp
   FieldModel.cpp
   FieldModelEquilibrium.cpp
