@@ -598,6 +598,31 @@ Measured at the point the serialisation landed: **all 14 `.nc` files byte
 identical**, and all 14 `.restart.nc` files identical apart from the one
 deliberately added `int nField = 0`.
 
+### The tier-1 adjoint
+
+`FieldCoupling = "reduced"` solves its adjoint through the transposed response
+(`EquilibriumModel::applyResponseTranspose`), and is checked at two levels, as
+tier 2's is:
+
+| test | what only it sees |
+|---|---|
+| `FieldJacobianTests.cpp::the_reduced_adjoint_inverts_the_transpose_of_the_tier_zero_jacobian` | a wrong `A_g^T` or `G'^T`: `J_red^T z = g` against a finite difference of the tier-0 residual at `cj = 0`, under every `FieldSolve`, plain and superconvergent, with the model's transpose and the assembled one |
+| `FieldJacobianTests.cpp::the_reduced_adjoint_check_sees_a_missing_transpose` | the guard: `A_g^T` zeroed, or a transposed response that does nothing, misses by 6.3 against 2e-8 |
+| `FieldJacobianTests.cpp::the_reduced_adjoint_is_tier_twos_with_psi_eliminated` | tier 1's `z` against tier 2's with psi on its equilibrium, 1e-14 under `exact`; the geometry share of the right-hand side; tier 2's `krylov` adjoint |
+| `FieldJacobianTests.cpp::the_assembled_transpose_is_the_transpose_of_the_response` | the default `applyResponseTranspose` against the adapter's exact one, and its assembly made once per equilibrium |
+| `ThetaPinchRunTests.cpp::the_reduced_gradient_matches_finite_differences_and_tier_two` | the gradient end to end, for objectives reaching it through `G_y`, through `G_geometry` and through both, against central differences of `G` and against tier 2's `G_p` |
+| `ThetaPinchRunTests.cpp::dropping_the_transposed_response_makes_the_reduced_gradient_wrong` | the same guard on the gradient: 6.5-100% wrong |
+| `ThetaPinchRunTests.cpp::a_reduced_adjoint_on_demand_makes_no_physics_call` | an on-demand adjoint asking the case for anything, and the equilibrium solves it makes, pinned |
+| `ThetaPinchRunTests.cpp::a_reused_reduced_adjoint_matches_a_fresh_one_bit_for_bit` | a tier-1 cache surviving `initialize()`, in `G_p` |
+
+**The finite-difference floor is the check's, not the solve's.** The transpose
+check measures 2e-8 to 3e-8 in every mode alike, `exact` included, and its
+bound is the 1e-7 tier 2's transpose checks use; the assembled transpose, a
+forward difference good to about 1e-7 of `G'`, reaches 5e-7 and is bounded at
+1e-6. On the gradient the assembled transpose's error is on the scale of the
+largest entry of `G_p`, so the `B (1 + x^2)` objective, whose entries are 300
+times smaller, is bounded against that scale rather than its own.
+
 ## Superconvergence
 
 `Superconvergent = true` switches the residual and Jacobian to the interpolatory

@@ -115,9 +115,10 @@ Problem definition
        coupling and no adjoint (a run asking for one is refused); a model whose
        field has a differential DOF cannot run that way. ``reduced`` runs it the
        same way and puts its response to the transport state into the Jacobian,
-       so Newton converges as it does coupled, with no unknowns added; it is
-       refused for a case declaring no geometry derivatives, a field with
-       dynamics and a run with an adjoint (see :ref:`field-tier-1`). ``auto``
+       so Newton converges as it does coupled, with no unknowns added, and
+       solves an adjoint through its transposed response; it is refused for a
+       case declaring no geometry derivatives and a field with dynamics (see
+       :ref:`field-tier-1`). ``auto``
        never picks it: with the model's own unknowns to hand, ``coupled`` is the
        same Jacobian without the equilibrium solves. ``auto`` chooses from
        what the case and the model supply and what the run needs — see

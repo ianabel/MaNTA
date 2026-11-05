@@ -468,6 +468,87 @@ tier-1 exact against tier-2 exact with psi on its equilibrium to 2e-15;
 iterative and krylov within the sweep's tolerance of exact; runs against tier
 2 within 2.5e-7 (iterative) and 3.7e-8 (krylov) in N, steady states to 4e-13.
 
+### Step 5: the tier-1 adjoint
+
+* `EquilibriumModel::applyResponseTranspose(dp, e, states, dg, inputPoints,
+  weights, t, geometryPoints)`, dp = G'^T dg. The default assembles G' column by
+  column through `applyResponse` -- one column per input component, (3 nVars +
+  nAux) N(k+1), not the N(k+1) the tier-1 section above counted, since a black
+  box cannot say which components it reads -- and keeps it on the `Equilibrium`
+  (a private cache the base class owns), so it is built once per equilibrium
+  and cannot outlive it. `FieldModelEquilibrium` transposes exactly,
+  -(dR/dp)^T B^-T (dGeometry/dpsi)^T dg, through the linearisation the forward
+  response already caches.
+* The adjoint solves `(A^T + P^T G'^T A_g^T) z = G_y + P^T G'^T G_g`, G_g being
+  the objective's weighted dg/dgeometry at the physics nodes
+  (`assembleObjectiveGradient`'s new `dGdgeom` output, `G_geometry`). Written
+  once for both tiers as the transposed block system in the coupling
+  variable's adjoint, `A^T z = g_x + L^T zeta, zeta = g_c - C^T z`
+  (`AdjointCouplingOperator`): a sweep, GMRES and the dense solve, all stopping
+  on the relative backward error tier 2's sweep uses (row two holds exactly,
+  row one's residual is L^T of the last change). Tier 1 runs all three
+  (`solveReducedAdjoint`: sweep, then GMRES, then exact); tier 2's `krylov`
+  adjoint is now the same GMRES with zeta = B^T z_psi, where step 4 left it on
+  the transposed sweep. Tier 2's `iterative` and `exact` adjoints are the
+  existing functions, untouched.
+* `A_g^T` is materialised (`Ag_transpose_cellwise`) beside A1^T and A2^T, and
+  the record of a Jacobian build carries tier 1's blocks
+  (`PhysicsDerivatives::reduced`, built by `buildReducedBlocks` in both the
+  build and `adjointDerivativesAt`), so an adjoint on demand makes no physics
+  call. `ReducedBlocks::states` became a `shared_ptr<GlobalState const>`: the
+  blocks are now copied into records, and a `std::optional` would have copied
+  through `GlobalState`'s shape-checked assignment again.
+* The tier-1 refusal is lifted in `initialize()`, `assembleAdjointOperator`
+  (which still refuses tier 0) and `chooseFieldCoupling` (`"reduced"` with
+  `solveAdjoint` or the `Objective` steady test is accepted). `auto` with an
+  adjoint still picks `coupled`: the tier-2 adjoint transposes the model's own
+  blocks and needs no response. The objective's value and parameter derivative
+  are taken on geometry-filled states at tier 1 as at tier 2, and both
+  objective estimates (`estimateObjective`, the `Objective` steady test's
+  `estimateObjectiveError`) gain G_g . G'P delta, one forward response each.
+
+Measured on the theta pinch (5 cells, k = 3 for the operator checks; 6 cells,
+k = 3, a PseudoTransient steady state at 1e-11 for the gradients):
+
+| check | result |
+|---|---|
+| J_red^T z = g against a finite difference of the tier-0 residual at cj = 0, every solve, plain and superconvergent | 1.9e-8 to 2.7e-8 with the model's transpose (the difference's own error: the exact solve sits there too); 5.2e-7 to 5.5e-7 assembled |
+| ...with A_g^T zeroed, or a transposed response that does nothing | 6.29 against 2.1e-8 |
+| tier-1 z against tier-2 exact z, psi on its equilibrium, G_psi = sum_j (dg/dpsi_j)^T G_g | exact 8.6e-15 / 9.3e-15 (plain / superconvergent); krylov 3.7e-11 / 9.0e-11; iterative 1.5e-9 / 2.0e-10 |
+| tier-2 krylov (new) and iterative against tier-2 exact | 3.4e-9 / 2.6e-9 and 5.8e-10 / 4.5e-10 |
+| assembled G'^T dg against the exact one | 1.1e-7 relative; 101 Newton iterations to assemble 96 columns, none on a second call |
+| steady G_p, three objectives (u^2; B(1+x^2), geometry only; u V', both), against tier 2 | 8.3e-12 iterative, 8.3e-12 exact, 3.5e-12 krylov; 1.1e-7 of max |G_p| assembled |
+| ...against central differences of G | ~1e-9 relative with the model's transpose; within 1e-6 of max |G_p| assembled (the B objective's entries are 300x smaller, so 6e-6 of themselves) |
+| gradient with no transposed response / A_g^T zeroed | wrong by 6.7%, 100%, 8.2% / 6.5% |
+| adjoint on demand after a transient, two objectives | 0 physics calls; 1 equilibrium solve with the model's transpose (the objective's geometry at the state asked about, which the cache does not hold after a time march), 97 assembled (96 columns + that one); a second call 0 |
+| adjoint iterations, transpose check | 7-8 sweeps; 6 GMRES iterations |
+| a reused tier-1 adjoint run against a fresh one, both responses | G_p bit for bit |
+
+**Step 4's step counts are samples, and this step measured their spread.**
+The forward tier-1 run with the differenced response under `krylov` went from
+157 steps to 197 at the same settings, on a rebuild whose only effect on it is
+the test binary's code generation. Over rtol x {0.9, 0.95, 1, 1.05, 1.1} on the
+same theta pinch, tier 2 itself takes 210, 174, 144, 175 and 146 steps, and the
+tier-1 modes 150 to 172 (the exact response under `iterative` and `krylov`,
+tier 2 under `krylov` matching the latter step for step). So "tier 1 takes
+about tier 2's steps" holds as a range, not as a number, and
+`a_reduced_theta_pinch_reaches_the_coupled_answer` now bounds steps at 1.5
+times tier 2's nominal count -- its own best case -- and below three quarters of
+tier 0's.
+
+The tier-0 and tier-2 paths are unchanged: every regression config and the five
+theta-pinch variants `cmp` equal against step 3's binary (40 files, the
+`AdjointTestProblem` adjoint run among them), and so do three more matching the
+theta pinch's tier-2 adjoint tests -- a PseudoTransient steady state at 1e-11
+under `iterative` and `exact`, and a superconvergent transient. No config can
+run a field adjoint, so those are checked through the unit tests' printed
+gradients: `field_adjoint_tests`' are identical to 17 digits between the two
+binaries. The theta pinch's tier-2 adjoint tests differ in the last digit or
+two (1e-16 in the state, which their central differences amplify to 1e-11):
+their translation unit, which inlines the case, changed in steps 4 and 5, and
+`MaNTA` running the same configurations is byte identical, so this is the test
+binary's code generation, not the solver's arithmetic.
+
 ## Not in this work
 
 * A field computed for output only, beside a geometry-blind case.

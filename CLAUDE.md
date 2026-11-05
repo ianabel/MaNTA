@@ -1410,14 +1410,29 @@ weights for it.
 Three things are load-bearing. **The tier-2 sweep is byte identical across
 that split**: `fieldCouplingOperator`'s `affine` is the old arithmetic
 operation for operation; re-run the theta-pinch `cmp` after touching it.
-**`ReducedBlocks::states` is a `std::optional`**, because `GlobalState`'s copy
-*assignment* copies `Aux` only into an object already sized for it -- a
-default-constructed one dropped the pressure, and the model then read a state
-with no aux rows. And **`reducedBlocks` is cleared in `initialize()`'s
-unconditional part**, the `RF_cellwise` trap again: it holds an equilibrium of
-the last run's. No adjoint at tier 1 (refused by name); `auto` never picks it,
-since with psi available `coupled` is the same Jacobian without the
-equilibrium solves.
+**`ReducedBlocks::states` is a `shared_ptr<GlobalState const>`**, never assigned,
+because `GlobalState`'s copy *assignment* copies `Aux` only into an object
+already sized for it -- a default-constructed one dropped the pressure, and the
+model then read a state with no aux rows -- and the blocks are copied into every
+`PhysicsDerivatives` record and every adjoint. And **`reducedBlocks` and
+`adjointReducedBlocks` are cleared in `initialize()`'s unconditional part**, the
+`RF_cellwise` trap again: they hold an equilibrium of the last run's.
+
+**The tier-1 adjoint** solves `(A^T + P^T G'^T A_g^T) z = G_y + P^T G'^T G_g`
+through the transposed coupling code (`AdjointCouplingOperator`:
+`adjointCouplingSweep`, `adjointCouplingKrylov`, `adjointCouplingExact`), in
+the coupling variable's adjoint `zeta = G_g - A_g^T z`; tier 2's `krylov`
+adjoint is the same GMRES with `zeta = B^T z_psi`. It needs
+`EquilibriumModel::applyResponseTranspose`, whose default assembles G' column
+by column through `applyResponse` -- (3 nVars + nAux) N(k+1) columns, each an
+equilibrium solve when differenced -- and caches it on the `Equilibrium`
+itself, so it cannot outlive the equilibrium it differentiates.
+`FieldModelEquilibrium` transposes exactly. The same discipline as A1^T and
+A2^T: **`Ag_transpose_cellwise` is materialised** in `assembleAdjointOperator`
+so a test can zero it, and **the record carries the blocks**
+(`PhysicsDerivatives::reduced`, from `buildReducedBlocks`), so an adjoint on
+demand makes no physics call. `auto` still couples a field model for an
+adjoint: the tier-2 adjoint needs no transposed response.
 
 **The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
 read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the

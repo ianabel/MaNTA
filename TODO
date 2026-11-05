@@ -461,8 +461,8 @@ reason it was not made:
     ManufacturedFieldVector at strength 40 (rho = 1.87) it reaches the exact
     solve in 5 iterations. What is left is the default: iterative stays the
     default at tier 2, and nothing yet measures krylov against it over whole
-    runs. Nor is there a transposed GMRES -- a krylov run's adjoint takes the
-    transposed sweep.
+    runs. Its adjoint is GMRES too, on the transposed system
+    (adjointCouplingKrylov), at both tiers.
 
     rho(M) was measured at 1.611 (cj = 0) and 1.571 (cj = 1e8) on
     RichGeometricDiffusion: a property of the coupling, not of the time step.

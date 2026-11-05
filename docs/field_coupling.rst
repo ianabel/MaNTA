@@ -367,7 +367,9 @@ How the coupled Jacobian is solved
    converge escalates to the exact solve. Irons–Tuck is a rank-one secant and
    removes one eigendirection of the sweep; GMRES removes them all, so this is
    the mode for a coupling whose sweep has several eigenvalues outside the unit
-   circle. The adjoint of a ``krylov`` run takes the transposed sweep.
+   circle. The adjoint of a ``krylov`` run is GMRES too, on the transposed
+   system (:ref:`field-tier-1-adjoint`), escalating to the exact transposed
+   solve.
 
 **What that test is measured in, and against what, were both settled by what
 each costs IDA**, on the manufactured theta pinch at :math:`10^{-9}/10^{-11}`
@@ -673,9 +675,75 @@ increment :math:`\delta g` in the role :math:`\delta\psi` plays at tier 2:
    column, one transport solve and one response per geometry value at every
    physics node, and solved densely. It is what tier 1 is checked with.
 
-``reduced`` has **no adjoint** yet -- the transposed response is not built -- and
-a run asking for one is refused, as is a field with dynamics: like the black
-box, tier 1 is a field that is a function of the transport state.
+A field with dynamics is refused: like the black box, tier 1 is a field that
+is a function of the transport state.
+
+.. _field-tier-1-adjoint:
+
+The adjoint at tier 1
+~~~~~~~~~~~~~~~~~~~~~
+
+The adjoint solves :math:`J_\text{red}^T z = \partial G/\partial y`, where an
+objective reading the geometry contributes through the response too:
+
+.. math::
+
+   \left(A^T + P^T G'^T A_g^T\right) z
+   = G_y + P^T G'^T G_g,
+
+:math:`G_g` being :math:`w_j\,\partial g/\partial(\text{geometry})` at the physics
+nodes, as tier 2's :math:`G_\psi` is before its chain through
+:math:`\partial g/\partial\psi`. It needs one thing a forward run does not, the
+transposed response, which a model supplies through
+
+.. code-block:: cpp
+
+   void applyResponseTranspose(GlobalState &dp, Equilibrium const &e,
+                               GlobalState const &states, Matrix const &dg,
+                               std::vector<Position> const &inputPoints,
+                               Vector const &weights, Time t,
+                               std::vector<Position> const &geometryPoints);
+
+:math:`\delta p = G'(p)^T \delta g`. **The default assembles** :math:`G'`: one
+``applyResponse`` per component of the input -- :math:`3 n_\text{vars} +
+n_\text{aux}` at each of the :math:`N(k+1)` input points -- and keeps the matrix
+on the equilibrium, so it is built once per equilibrium whatever number of
+objectives or iterations transpose it. Under the differenced response that is
+one equilibrium solve per column, free on the measure the costs here are
+counted in, and the only transpose a forward difference has.
+``FieldModelEquilibrium`` supplies the exact transpose,
+:math:`-(\partial R/\partial p)^T B^{-T} (\partial g/\partial\psi)^T \delta g`,
+which costs no equilibrium solve at all.
+
+The solve is tier 2's in the coupling variable :math:`\zeta`, the adjoint of the
+geometry increment:
+
+.. math::
+
+   A^T z = G_y + P^T G'^T \zeta, \qquad \zeta = G_g - A_g^T z,
+
+with :math:`A^T` the transposed transport operator ``assembleAdjointOperator``
+builds and :math:`A_g^T` materialised beside :math:`A_1^T` and :math:`A_2^T`, so
+that a test can zero it and see the gradient go wrong. ``iterative`` is the
+transposed sweep with Irons–Tuck on :math:`\zeta`, stopping on the same relative
+backward error ``FieldSolveAdjointTolerance`` bounds at tier 2; ``krylov`` is
+GMRES on :math:`(I + A_g^T A^{-T} P^T G'^T)\,\zeta = G_g - A_g^T A^{-T} G_y`,
+whose residual is that backward error; ``exact`` assembles the same system.
+The sweep escalates to GMRES and GMRES to the exact solve, so an adjoint at
+tier 1 is never taken from an unconverged solve. An adjoint on demand makes no
+physics call, as at tier 2: the record of the last Jacobian build carries tier
+1's blocks and its equilibrium.
+
+With ``FieldModelEquilibrium``'s exact transpose the tier-1 adjoint is tier 2's
+with :math:`\psi` eliminated, and the two agree: on the theta pinch the
+transport block of :math:`z` to :math:`10^{-14}` under ``exact``, and steady
+gradients to :math:`10^{-11}` under every solve, each within :math:`10^{-9}` of a
+central difference of :math:`G`. The assembled transpose is a forward
+difference and good to about :math:`10^{-7}` of :math:`G'`, which reaches the
+gradient on the scale of its largest entry: :math:`1.1\times10^{-7}` of it
+against tier 2.
+``auto`` still couples a field model when the run solves an adjoint, since the
+tier-2 adjoint needs no transposed response at all.
 
 **Tier 1 costs the case what tier 2 does.** The response is field-side work
 -- free on the measure that matters -- and ``A_g`` is the evaluation tier 2
@@ -784,10 +852,12 @@ solves an adjoint (``solveAdjoint``, or ``SteadyStateTest = "Objective"``),
 whatever the derivatives cost — and refuses, naming why, when the case declares
 none. ``"coupled"`` and ``"consistent"`` take the mode as given; the first is
 refused for a case declaring no derivatives, the second for a field with
-dynamics or a run with an adjoint. ``"reduced"`` (:ref:`field-tier-1`) is
-never ``auto``'s choice for a field model: with the model's own unknowns to
-hand, ``"coupled"`` is the same Jacobian without the equilibrium solves, at the
-same cost to the case.
+dynamics or a run with an adjoint. ``"reduced"`` (:ref:`field-tier-1`) carries
+an adjoint and is refused only for a field with dynamics, but it is never
+``auto``'s choice for a field model: with the model's own unknowns to hand,
+``"coupled"`` is the same Jacobian without the equilibrium solves, at the same
+cost to the case, and its adjoint transposes the model's own blocks rather than
+a response.
 
 **The rest of the table is a measurement.** ``ThetaPinchDiffusion`` on five
 cells at :math:`k = 4`, ``rtol`` :math:`10^{-6}`, ``atol`` :math:`10^{-8}`, to
