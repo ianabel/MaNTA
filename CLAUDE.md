@@ -1390,6 +1390,35 @@ re-run the theta-pinch `cmp` (the regression config, a `Superconvergent` and a
 `a_build_spends_what_its_geometry_derivatives_declare` pins that and the call
 counts.
 
+**Tier 1 is `FieldCoupling = "reduced"`: the equilibrium coupled through its
+response** (`EquilibriumModel::applyResponse`, `solveReducedJac`). The
+Jacobian is `A + A_g G' P` with no unknowns added; `A_g` is A1 without the
+chain through dGeometry/dpsi, built per Jacobian build into `reducedBlocks`
+beside the equilibrium at `yJac`, and the response defaults to a forward
+difference of `Solve` (`FieldModelEquilibrium` supplies the exact one, tier 2
+with psi eliminated). The coupled solves are written once for both tiers over
+a *coupling variable* (`CouplingOperator`: dpsi at tier 2, the geometry
+increment at the physics nodes at tier 1): `couplingSweep`, `couplingKrylov`
+(SUNDIALS SPGMR on c itself, `(I + L A^-1 C) c = c0 + L A^-1 r`, scaled by c's
+error weights, so its residual is the change one more sweep would make to c)
+and `couplingExact`. At tier 1 the sweep re-solves dx against the accepted c
+before returning -- the transport increment is the whole Newton update there,
+and handing back the one solved against the previous c cost IDA 199 steps
+against the exact solve's 163 -- and GMRES weights c by the AlgebraicMax rule
+applied to the geometry (`ReducedBlocks::geometryWeights`), since IDA has no
+weights for it.
+Three things are load-bearing. **The tier-2 sweep is byte identical across
+that split**: `fieldCouplingOperator`'s `affine` is the old arithmetic
+operation for operation; re-run the theta-pinch `cmp` after touching it.
+**`ReducedBlocks::states` is a `std::optional`**, because `GlobalState`'s copy
+*assignment* copies `Aux` only into an object already sized for it -- a
+default-constructed one dropped the pressure, and the model then read a state
+with no aux rows. And **`reducedBlocks` is cleared in `initialize()`'s
+unconditional part**, the `RF_cellwise` trap again: it holds an equilibrium of
+the last run's. No adjoint at tier 1 (refused by name); `auto` never picks it,
+since with psi available `coupled` is the same Jacobian without the
+equilibrium solves.
+
 **The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
 read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
 physics). Three things about it are load-bearing. Its pressure crosses as the

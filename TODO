@@ -455,9 +455,14 @@ reason it was not made:
     eigendirection for nField > 1 -- but only that one, so a coupling with two
     comparable eigenvalues outside the unit circle can still fall back to the
     exact Schur solve. The depth-m generalisation is Anderson acceleration, which
-    for an affine map is GMRES on the Schur complement; that is the right answer
-    for the large nField this path exists to serve, and is a separate piece of
-    work.
+    for an affine map is GMRES on the Schur complement. **That now exists as
+    FieldSolve = krylov** (couplingKrylov: SPGMR on the field increment, the
+    system the sweep iterates on, in the field's error weights), at both tiers; on
+    ManufacturedFieldVector at strength 40 (rho = 1.87) it reaches the exact
+    solve in 5 iterations. What is left is the default: iterative stays the
+    default at tier 2, and nothing yet measures krylov against it over whole
+    runs. Nor is there a transposed GMRES -- a krylov run's adjoint takes the
+    transposed sweep.
 
     rho(M) was measured at 1.611 (cj = 0) and 1.571 (cj = 1e8) on
     RichGeometricDiffusion: a property of the coupling, not of the time step.

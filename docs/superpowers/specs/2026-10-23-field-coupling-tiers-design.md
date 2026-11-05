@@ -376,6 +376,88 @@ coupled under every solver, although with the hooks priced like a derivative
 it loses the steady solves by up to 1.6x: `auto` cannot know the hooks' price,
 and the loss is bounded.
 
+### Step 4: tier 1, `FieldCoupling = "reduced"`
+
+* `EquilibriumModel::applyResponse(dg, e, states, dp, inputPoints, weights, t,
+  geometryPoints)`, defaulting to a forward difference of `Solve` warm-started
+  from `e` at a step of `responseStep()` (sqrt(eps)) times the input's RMS over
+  the direction's. `EquilibriumSpec::response` (`Differenced` / `Model`)
+  declares which. `FieldModelEquilibrium` supplies the exact response,
+  -dg/dpsi B^-1 dR/dp, linearised once per equilibrium and cached on it, and
+  takes a constructor flag to fall back to the difference.
+* Selected by `FieldCoupling = "reduced"` (`setEquilibriumModel(model,
+  EquilibriumCoupling::Reduced)`), refused for `geometryDerivatives = None`, a
+  field with dynamics and an adjoint. `auto` never picks it: with psi to hand,
+  tier 2 is the same Jacobian without the equilibrium solves.
+* The coupled solves are written once over a coupling variable c
+  (`CouplingOperator`): dpsi at tier 2, the geometry increment at every physics
+  node at tier 1. `couplingSweep` is the old `solveCoupledJacIterative` loop with
+  the field operations behind the operator, and tier 2 is byte identical
+  across the split (the theta-pinch regression config, its `Superconvergent`
+  and `Newton` variants, the tier-0 transient and Newton variants and every
+  other regression config, against step 3's binary). `couplingKrylov` is SPGMR
+  on c itself, (I + L A^-1 C) c = c0 + L A^-1 r, with no product with A and
+  scaled by c's error weights, so its residual is the change one more sweep
+  would make to c; `couplingExact` is tier 1's oracle. `FieldSolve = "krylov"` is offered at both tiers; at tier 1
+  the sweep escalates to it, at tier 2 it escalates to the exact solve, and a
+  tier-2 adjoint under it takes the transposed sweep.
+* A_g is built per Jacobian build at yJac with the equilibrium there, at no
+  physics cost beyond the existing `FieldCoupling` plan site, which tier 1
+  lists exactly as tier 2 does.
+
+**Three departures from the design, each a measurement** (theta pinch, six
+cells, k = 3, to t = 0.5, rtol 1e-6, atol 1e-8; tier 2 takes 144 steps):
+
+* *GMRES runs on c, not on dx.* Left-preconditioned GMRES over the transport
+  increment, scaled by the run's error weights, stopped where the sweep's test
+  on dx alone would and cost 170 steps against the exact solve's 163. On c,
+  `(I + L A^-1 C) c = c0 + L A^-1 r` in c's own weights, its residual is the
+  change one more sweep makes to c, and it takes 157. c has no IDA weights at
+  tier 1, so it is given the AlgebraicMax rule applied to the geometry,
+  `1/(rtol (|g| + max|g_slot|))`; at tier 2 it takes psi's own.
+* *The tier-1 sweep re-solves dx against the accepted c.* Handing IDA the dx
+  solved against the previous c, as tier 2 does with its pair, cost 199 steps
+  against 163: at tier 2 IDA is given the accepted dpsi itself, but at tier 1
+  the transport increment is the whole Newton update. Measuring c in the stop
+  test instead changed nothing (199); a 10x tighter tolerance did (163), as
+  does the re-solve, in a third fewer sweeps (671 against 1025). One transport
+  solve per Jacobian solve.
+* *`IDACalcIC` keeps its line search at tier 1.* Tier 0 turns it off because its
+  Jacobian lacks the coupling; tier 1's has it, and on the theta pinch at
+  T = 0.3 and 0.9, 5 and 32 cells, the runs are step for step identical either
+  way.
+
+Costs, in the step-3 setup (5 cells, k = 4, to t = 1; steady solves to
+SteadyStateTolerance 1e-8 -- the transient and Newton rows reproduce step 3's
+table to the call, the PseudoTransient ones are 625 / 1,625 / 700 here at
+1e-4, 1e-6 and 1e-8 alike, so step 3 measured them in some other setup):
+
+| | transient | PTC | Newton |
+|---|---|---|---|
+| T = 0.3, tier 2, Analytic | 6,375 (+1,000) | 625 (+400) | 325 (+200) |
+| T = 0.3, tier 1, Analytic | 6,700 (+1,050) | 625 (+400) | 325 (+200) |
+| T = 0.3, tier 2, Differenced | 8,875 | 1,625 | 825 |
+| T = 0.3, tier 1, Differenced | 9,325 | 1,625 | 825 |
+| T = 0.3, tier 0 | 13,150 | 700 | 400 |
+| T = 0.9, tier 2, Analytic | 10,250 (+1,150) | 625 (+400) | 325 (+200) |
+| T = 0.9, tier 1, Analytic | 7,350 (+1,050) | 625 (+400) | 325 (+200) |
+| T = 0.9, tier 2, Differenced | 13,125 | 1,625 | 1,025 |
+| T = 0.9, tier 1, Differenced | 9,975 | 1,625 | 825 |
+| T = 0.9, tier 0 | 34,275 | 700 | 475 |
+
+The model's response and the differenced default give identical counts (the
+difference is equilibrium solves). Transient steps: tier 2 175 / 269, tier 1
+183 / 215, tier 0 341 / 937. So tier 1 is 0.72-1.05x tier 2 and 1.4-4.7x
+cheaper than tier 0 on transients, and tier 2's steady trade-off carries over
+unchanged -- which is what `auto` will want for a native equilibrium model:
+the same rule as for a field model, with "coupled" meaning "reduced".
+
+Agreement: J_red against a finite difference of the tier-0 residual to 1e-8
+(model response) and 2e-6 (differenced; the response itself is good to 3e-7);
+tier-1 exact against tier-2 exact with psi on its equilibrium to 2e-15;
+iterative and krylov within the sweep's tolerance of exact; runs against tier
+2 within 2.5e-7 (iterative) and 3.7e-8 (krylov) in N, steady states to 4e-13.
+
 ## Not in this work
 
 * A field computed for output only, beside a geometry-blind case.

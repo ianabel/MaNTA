@@ -113,7 +113,13 @@ Problem definition
        box: solved to convergence at each transport state the physics is
        evaluated at, held as a cache rather than as unknowns, with no Jacobian
        coupling and no adjoint (a run asking for one is refused); a model whose
-       field has a differential DOF cannot run that way. ``auto`` chooses from
+       field has a differential DOF cannot run that way. ``reduced`` runs it the
+       same way and puts its response to the transport state into the Jacobian,
+       so Newton converges as it does coupled, with no unknowns added; it is
+       refused for a case declaring no geometry derivatives, a field with
+       dynamics and a run with an adjoint (see :ref:`field-tier-1`). ``auto``
+       never picks it: with the model's own unknowns to hand, ``coupled`` is the
+       same Jacobian without the equilibrium solves. ``auto`` chooses from
        what the case and the model supply and what the run needs — see
        :ref:`field-coupling-mode`. Anything but ``auto`` is refused without a
        ``FieldModel``.
@@ -624,9 +630,14 @@ the coupling on.
      - ``"iterative"``
      - How the coupled Jacobian is solved. ``iterative`` is block Gauss–Seidel
        between the transport and field blocks with Irons–Tuck acceleration, at
-       one transport solve per sweep. ``exact`` forms the Schur complement onto
-       the field block, at :math:`\texttt{nField}+1` transport solves per
-       Jacobian solve.
+       one transport solve per sweep. ``krylov`` is GMRES on the transport
+       increment with the field eliminated, also at one transport solve per
+       iteration, stopping on the same test. ``exact`` forms the Schur
+       complement onto the field block, at :math:`\texttt{nField}+1` transport
+       solves per Jacobian solve. Under ``FieldCoupling = "reduced"`` the same
+       three solve the reduced Jacobian, ``iterative`` going on to ``krylov`` at
+       its cap and ``exact`` assembling the reduced system, one transport solve
+       per geometry value at every physics node -- see :ref:`field-tier-1`.
    * - ``FieldSolveTolerance``
      - ``1e-4``
      - Where the forward sweep stops: once one sweep changes the whole Newton
@@ -647,8 +658,10 @@ the coupling on.
        right-hand side. Reaching the cap escalates to the exact solve.
    * - ``FieldSolveMaxSweeps``
      - ``20``
-     - Sweep cap for the forward solve. Reaching it escalates to the exact
-       solve; it does not return an under-converged answer.
+     - Sweep cap for the forward solve, and the Krylov dimension of
+       ``krylov`` (restarted up to four times). Reaching it escalates -- to the
+       exact solve, or under ``FieldCoupling = "reduced"`` to ``krylov`` -- and
+       never returns an under-converged answer.
    * - ``FieldSolveMaxAdjointSweeps``
      - ``100``
      - The same cap for the adjoint solve. Separate, and larger, because the
