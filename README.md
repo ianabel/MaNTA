@@ -413,4 +413,4 @@ For a summary of contributors, see the [contributors](http://github.com/ianabel/
 
 ## License
 
-This project is licensed under the 3-Clause BSD Licence - see the [LICENSE.md](LICENSE.md) file for details
+This project is licensed under the 3-Clause BSD Licence - see the [LICENCE.md](LICENCE.md) file for details
