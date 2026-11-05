@@ -16,6 +16,7 @@
 
 #include "MMSHarness.hpp"
 #include "ManufacturedFields.hpp"
+#include "../../FieldModelEquilibrium.hpp"
 
 #include <cmath>
 #include <map>
@@ -142,6 +143,17 @@ Rates const &iterativeSweep(Index k)
     if (it == cache.end())
         it = cache.emplace(k, solveCoupledAndMeasure<ManufacturedField>(k, kCells)).first;
     return it->second;
+}
+
+/// Tier 0: the same model as a black box, through FieldModelEquilibrium, and
+/// psi read back from the equilibrium the final state maps to.
+template <ManufacturedFieldModel M>
+FieldTier<M> consistentTier()
+{
+    return {[](SystemSolver &sys, std::shared_ptr<M> const &model)
+            { sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(model)); },
+            [](SystemSolver &sys, Time t) -> Vector
+            { return FieldModelEquilibrium::psi(sys.equilibriumAt(sys.yJac, t)); }};
 }
 
 } // namespace
@@ -379,6 +391,62 @@ BOOST_AUTO_TEST_CASE(superconvergent_coupling_reaches_k_plus_two)
                                << " (flag off " << off.localStar[i] << ", flag on "
                                << on.localStar[i] << ")");
     }
+}
+
+// Tier 0: both manufactured models as black boxes (FieldModelEquilibrium,
+// FieldCoupling = "consistent"), through the same harness and tolerances as the
+// tier-2 studies above. Taking psi out of the state must cost no order, and must
+// not move the answer: the errors agree with tier 2's to the run's own rtol.
+// Measured, local orders in u and psi on 4, 8, 16, 32 cells:
+//
+//     scalar, k = 1   u 1.90, 1.96, 1.98   psi 2.09, 2.07, 2.04
+//     scalar, k = 2   u 2.95, 2.98, 2.99   psi 4.82, 3.93, 3.87
+//     scalar, k = 3   u 3.96, 3.99, 4.00   psi 5.12, 4.37, 4.10
+//     vector, k = 2   u 2.93, 2.98, 2.99   psi 4.03, 4.01, 4.01
+//
+// -- tier 2's psi tables to the digit (psi_converges_too,
+// the_multi_dof_field_converges_the_same_way). Unlike the theta pinch, the
+// coupling here is weak enough that tier 0 costs IDA little: the whole study is
+// a second or two.
+BOOST_AUTO_TEST_CASE(the_consistent_tier_converges_at_k_plus_one)
+{
+    for (Index k = 1; k <= 3; ++k)
+    {
+        const Rates &coupled = iterativeSweep(k);
+        const Rates consistent = solveCoupledAndMeasure<ManufacturedField>(
+            k, kCells, false, SystemSolver::FieldSolveMode::Iterative, 0.25, {},
+            consistentTier<ManufacturedField>());
+        BOOST_TEST_MESSAGE("tier 0, k = " << k << " local orders in u: " << format(consistent.localU)
+                                          << "  psi: " << format(consistent.localExtra) << consistent.detail);
+        for (double o : consistent.localU)
+            BOOST_CHECK_GT(o, k + 1 - 0.25);
+        if (k >= 2)
+            for (double o : consistent.localExtra)
+                BOOST_CHECK_GT(o, 2.75);
+
+        // The same discrete solution as tier 2, to the run's tolerance: an
+        // error in u that agrees to rtol relative to itself, at every grid.
+        const double rtol = Tolerances{}.relative;
+        double worstGap = 0.0;
+        for (size_t i = 0; i < kCells.size(); ++i)
+            worstGap = std::max(worstGap, std::abs(consistent.coupledU[i] - coupled.coupledU[i]));
+        BOOST_TEST_MESSAGE(std::format("    worst gap to tier 2 in the u error: {:.2e}", worstGap));
+        for (size_t i = 0; i < kCells.size(); ++i)
+            BOOST_TEST(std::abs(consistent.coupledU[i] - coupled.coupledU[i]) <= 10 * rtol,
+                       "k = " << k << ", n = " << kCells[i] << ": u error " << consistent.coupledU[i]
+                              << " at tier 0 against " << coupled.coupledU[i] << " at tier 2");
+    }
+
+    const Rates vector = solveCoupledAndMeasure<ManufacturedFieldVector>(
+        2, kCells, false, SystemSolver::FieldSolveMode::Iterative, 0.25, {},
+        consistentTier<ManufacturedFieldVector>());
+    BOOST_TEST_MESSAGE("tier 0, multi-DOF local orders in u: " << format(vector.localU)
+                                                               << "  psi: " << format(vector.localExtra)
+                                                               << vector.detail);
+    for (double o : vector.localU)
+        BOOST_CHECK_GT(o, 2.75);
+    for (double o : vector.localExtra)
+        BOOST_CHECK_GT(o, 2.75);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

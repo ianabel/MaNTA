@@ -18,12 +18,18 @@
 // the answer. Read LOCAL orders, as MMSFieldTests.cpp says why. A third case
 // runs one refinement under both FieldSolve modes and compares their step
 // counts, which is the only place a sweep that stalls IDA shows up.
+//
+// The mesh study runs at every field-coupling tier built (`Tier`), transient
+// and -- with the solution frozen at tFinal -- steady, and holds each lower tier
+// to tier 2's answer as well as to its orders.
 #include <boost/test/unit_test.hpp>
+#include <boost/test/data/test_case.hpp>
 
 #include "CapturedOutput.hpp"
 #include "MMSHarness.hpp"
 #include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
 #include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
+#include "../../FieldModelEquilibrium.hpp"
 
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 #include <boost/math/tools/roots.hpp>
@@ -32,6 +38,8 @@
 #include <ida/ida.h>
 #include <nvector/nvector_serial.h>
 #include <algorithm>
+#include <map>
+#include <tuple>
 #include <format>
 #include <memory>
 #include <vector>
@@ -54,27 +62,38 @@ constexpr double kT = 0.3, kD0 = 0.5, kGamma = 2.0;
 
 constexpr double kPi = M_PI;
 
+// The steady solves' stopping tolerance: far below any spatial error measured.
+constexpr double steadyTolerance = 1e-8;
+
 /// The manufactured solution and everything derived from it, in normalised
 /// units (a = B0 = 1, so Phi_a = pi and the wall area is pi).
+///
+/// Frozen at a time, it is a steady solution instead: n is the transient one at
+/// that time, n_t = 0, so C is constant and the source is -d_x sigma_hat alone.
 class PinchExact
 {
 public:
-    static double n(double x, double t) { return (1.0 + 0.5 * std::cos(kPi * x)) * (1.0 + t); }
-    static double n_x(double x, double t) { return -0.5 * kPi * std::sin(kPi * x) * (1.0 + t); }
-    static double n_xx(double x, double t) { return -0.5 * kPi * kPi * std::cos(kPi * x) * (1.0 + t); }
-    static double n_t(double x, double) { return 1.0 + 0.5 * std::cos(kPi * x); }
+    PinchExact() = default;
+    explicit PinchExact(double frozenAt) : frozen(frozenAt) {}
+
+    bool isSteady() const { return frozen >= 0.0; }
+
+    double n(double x, double t) const { return (1.0 + 0.5 * std::cos(kPi * x)) * (1.0 + at(t)); }
+    double n_x(double x, double t) const { return -0.5 * kPi * std::sin(kPi * x) * (1.0 + at(t)); }
+    double n_xx(double x, double t) const { return -0.5 * kPi * kPi * std::cos(kPi * x) * (1.0 + at(t)); }
+    double n_t(double x, double) const { return isSteady() ? 0.0 : 1.0 + 0.5 * std::cos(kPi * x); }
 
     /// C(t), from Int_0^1 1 / sqrt(C - T n) dx = 1.
     double C(double t) const
     {
-        refresh(t);
+        refresh(at(t));
         return cachedC;
     }
 
     /// dC/dt, from differentiating the wall constraint: Int V'_t dx = 0.
     double Cdot(double t) const
     {
-        refresh(t);
+        refresh(at(t));
         return cachedCdot;
     }
 
@@ -131,6 +150,8 @@ public:
 private:
     using GK = boost::math::quadrature::gauss_kronrod<double, 61>;
 
+    double at(double t) const { return isSteady() ? frozen : t; }
+
     void refresh(double t) const
     {
         if (haveCache && t == cachedT)
@@ -157,12 +178,16 @@ private:
         haveCache = true;
     }
 
+    double frozen = -1.0;
     mutable bool haveCache = false;
     mutable double cachedT = 0.0, cachedC = 0.0, cachedCdot = 0.0;
 };
 
 /// The registered transport case with a manufactured source, wall datum and
 /// initial state. Its flux, aux row and parameters are ThetaPinchDiffusion's own.
+///
+/// The initial state is always the transient solution at t = 0, so a steady
+/// solve towards a frozen `e` starts away from its answer and has to get there.
 class ManufacturedThetaPinch : public ThetaPinchDiffusion
 {
 public:
@@ -181,39 +206,93 @@ public:
 
     autodiff::dual2nd InitialFunction(Index, autodiff::dual2nd x, autodiff::dual2nd t) const override
     {
-        const double C = exact.C(t.val.val);
+        const double C = start.C(t.val.val);
         const autodiff::dual2nd n = (1.0 + 0.5 * cos(kPi * x)) * (1.0 + t);
         return kPi / sqrt(C - kT * n) * n;
     }
 
-    Value InitialAuxValue(Index, Position x, Time t) const override { return kT * PinchExact::n(x, t); }
+    Value InitialAuxValue(Index, Position x, Time t) const override { return kT * start.n(x, t); }
 
 private:
     PinchExact const &exact;
+    const PinchExact start; // transient, whatever exact is
 };
 
 struct Errors
 {
     double N, Vp, C;
+    // Time steps for a transient, Newton iterations for a steady solve.
     long steps = 0, solves = 0, fallbacks = 0;
+    // Tier 0 only: equilibrium solves, one per distinct transport state.
+    long equilibria = 0;
 };
 
 constexpr double tFinal = 0.25;
 
-/// One coupled run to tFinal, and its errors in N, in V' and in C.
-Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
-                 SystemSolver::FieldSolveMode mode = SystemSolver::FieldSolveMode::Iterative)
+/// Which field-coupling tier carries the field
+/// (docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md).
+enum class Tier
 {
-    const PinchExact exact;
-    Grid grid(0.0, 1.0, nCells);
+    Coupled,    // tier 2: psi in the DAE, the coupled Jacobian (FieldCoupling = "coupled")
+    Consistent, // tier 0: the same model as a black box, FieldModelEquilibrium ("consistent")
+    Reduced,    // tier 1: the black box with G' in the Jacobian -- not built yet
+};
+
+const char *tierName(Tier tier)
+{
+    switch (tier)
+    {
+    case Tier::Coupled:
+        return "coupled (tier 2)";
+    case Tier::Consistent:
+        return "consistent (tier 0)";
+    case Tier::Reduced:
+        return "reduced (tier 1)";
+    }
+    return "?";
+}
+
+/// Attach the registered field model to `sys` the way the tier does.
+void attachField(SystemSolver &sys, std::shared_ptr<ThetaPinchEquilibrium> const &field, Tier tier,
+                 SystemSolver::FieldSolveMode mode)
+{
+    switch (tier)
+    {
+    case Tier::Coupled:
+        sys.setFieldModel(field);
+        sys.setFieldSolveMode(mode);
+        return;
+    case Tier::Consistent:
+        sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(field));
+        return;
+    case Tier::Reduced:
+        break;
+    }
+    throw std::logic_error("ThetaPinchMMSTests: tier 1 (reduced) is not built yet");
+}
+
+struct Run
+{
+    Index k = 1, nCells = 8, intervalsPerCell = 1;
+    SystemSolver::FieldSolveMode mode = SystemSolver::FieldSolveMode::Iterative;
+    Tier tier = Tier::Coupled;
+    // A transient to tFinal against the transient solution, or a steady Newton
+    // solve against that solution frozen at tFinal, from the transient's t = 0.
+    bool steady = false;
+};
+
+/// One run, and its errors in N, in V' and in C.
+Errors solveOnce(Run const &run)
+{
+    const PinchExact exact = run.steady ? PinchExact(tFinal) : PinchExact();
+    Grid grid(0.0, 1.0, run.nCells);
     ManufacturedThetaPinch problem(exact, grid);
     auto field = std::make_shared<ThetaPinchEquilibrium>(
-        ThetaPinchEquilibrium::Parameters{.intervalsPerCell = intervalsPerCell}, grid);
+        ThetaPinchEquilibrium::Parameters{.intervalsPerCell = run.intervalsPerCell}, grid);
 
-    SystemSolver sys(grid, k, &problem);
+    SystemSolver sys(grid, run.k, &problem);
     sys.setTau(1.0);
-    sys.setFieldModel(field);
-    sys.setFieldSolveMode(mode);
+    attachField(sys, field, run.tier, run.mode);
     sys.resetCoeffs();
     sys.setInputFile("theta_pinch_mms");
     sys.setOutputCadence(tFinal);
@@ -222,6 +301,11 @@ Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
     sys.setMinStepSize(1e-14);
     const mms::Tolerances tol;
     sys.setTolerances({tol.absolute}, tol.relative);
+    if (run.steady)
+    {
+        sys.setSteadyStateTolerance(steadyTolerance);
+        sys.setSteadyMode(SystemSolver::SteadyMode::Newton);
+    }
     sys.setWriteOutput(false);
     sys.setWriteDatFile(false);
     long steps = 0;
@@ -229,11 +313,19 @@ Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
         CapturedOutput quiet;
         sys.initialize();
         sys.integrate(tFinal);
-        IDAGetNumSteps(sys.IDA_mem, &steps);
+        if (run.steady)
+            steps = sys.lastSteadyStats().newtonIters;
+        else
+            IDAGetNumSteps(sys.IDA_mem, &steps);
         sys.destroySundials();
     }
 
-    const Vector psi = sys.getSolution().getField();
+    // The geometry and C through the solver's own provider, so every tier is
+    // measured the same way: from psi in the state at tier 2, from the
+    // equilibrium the final state maps to at tier 0.
+    const double C = run.tier == Tier::Coupled
+                         ? sys.getSolution().getField().tail(1)(0)
+                         : FieldModelEquilibrium::psi(sys.equilibriumAt(sys.yJac, tFinal)).tail(1)(0);
     const double Nerr = mms::l2ErrorAgainst([&](double x) { return sys.yJac.u(0)(x); },
                                             [&](double x, double t) { return exact.N(x, t); }, grid, tFinal);
     Vector g(4);
@@ -241,12 +333,19 @@ Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
         [&](double x)
         {
             g.setZero();
-            field->Geometry(g, psi, x, tFinal);
+            sys.geometryAt(g, sys.yJac, x, tFinal);
             return g(ThetaPinchEquilibrium::Vprime);
         },
         [&](double x, double t) { return exact.Vp(x, t); }, grid, tFinal);
     const auto stats = sys.getFieldSweepStats();
-    return {Nerr, Vperr, std::abs(psi(psi.size() - 1) - exact.C(tFinal)), steps, stats.solves, stats.fallbacks};
+    return {Nerr, Vperr, std::abs(C - exact.C(tFinal)), steps, stats.solves, stats.fallbacks,
+            sys.getEquilibriumSolves()};
+}
+
+Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
+                 SystemSolver::FieldSolveMode mode = SystemSolver::FieldSolveMode::Iterative)
+{
+    return solveOnce(Run{.k = k, .nCells = nCells, .intervalsPerCell = intervalsPerCell, .mode = mode});
 }
 
 std::string table(std::vector<Index> const &res, std::vector<Errors> const &e, const char *name)
@@ -254,8 +353,10 @@ std::string table(std::vector<Index> const &res, std::vector<Errors> const &e, c
     std::string s;
     for (size_t i = 0; i < res.size(); ++i)
     {
-        s += std::format("\n      {}={:<4} N {:.3e}  V' {:.3e}  C {:.3e}   ({} steps, {} field solves, {} fallbacks)",
-                         name, res[i], e[i].N, e[i].Vp, e[i].C, e[i].steps, e[i].solves, e[i].fallbacks);
+        s += std::format("\n      {}={:<4} N {:.3e}  V' {:.3e}  C {:.3e}   ({} steps, {} field solves, {} fallbacks, "
+                         "{} equilibria)",
+                         name, res[i], e[i].N, e[i].Vp, e[i].C, e[i].steps, e[i].solves, e[i].fallbacks,
+                         e[i].equilibria);
         if (i > 0)
             s += std::format("\n            local order: N {:.2f}  V' {:.2f}  C {:.2f}",
                              mms::localOrder(res[i - 1], res[i], e[i - 1].N, e[i].N),
@@ -263,6 +364,105 @@ std::string table(std::vector<Index> const &res, std::vector<Errors> const &e, c
                              mms::localOrder(res[i - 1], res[i], e[i - 1].C, e[i].C));
     }
     return s;
+}
+
+/// The tiers built so far. Tier 1 joins by gaining a branch in attachField (and
+/// a psi read-back in solveOnce if it carries none) and an entry here; every
+/// study below then runs it and compares it with tier 2.
+constexpr Tier builtTiers[] = {Tier::Coupled, Tier::Consistent};
+
+/// The grids each study refines over. The steady study starts at 16: at k = 3 the
+/// step from 8 is pre-asymptotic in N (3.89), and a steady solve is cheap enough
+/// to go one further instead.
+std::vector<Index> const &studyCells(bool steady)
+{
+    static const std::vector<Index> transient = {8, 16, 32}, steadyCells = {16, 32, 64};
+    return steady ? steadyCells : transient;
+}
+
+/// One study -- a tier, transient or steady, at degree k, over studyCells -- run
+/// once and kept, so a lower tier is compared with the tier-2 sweep its own test
+/// already ran rather than paying for it again.
+std::vector<Errors> const &study(Tier tier, bool steady, Index k)
+{
+    static std::map<std::tuple<Tier, bool, Index>, std::vector<Errors>> cache;
+    const auto key = std::make_tuple(tier, steady, k);
+    auto it = cache.find(key);
+    if (it == cache.end())
+    {
+        std::vector<Errors> e;
+        for (Index n : studyCells(steady))
+            e.push_back(solveOnce(Run{.k = k, .nCells = n, .tier = tier, .steady = steady}));
+        it = cache.emplace(key, std::move(e)).first;
+    }
+    return it->second;
+}
+
+/// Every local order of N and V': N at the transport's k + 1, V' at k + 1 or the
+/// spline's 4, whichever is lower. And no tier-2 sweep fell back, so the
+/// iterative solve is what was measured.
+void checkOrders(Tier tier, bool steady, Index k)
+{
+    const auto &cells = studyCells(steady);
+    const auto &e = study(tier, steady, k);
+    BOOST_TEST_MESSAGE(tierName(tier) << (steady ? ", steady" : ", transient") << ", k = " << k
+                                      << ", one interval per cell" << table(cells, e, "n"));
+
+    const double wantN = static_cast<double>(k + 1) - 0.1;
+    const double wantVp = std::min<double>(k + 1, 4) - 0.1;
+    for (size_t i = 0; i < cells.size(); ++i)
+    {
+        BOOST_TEST(e[i].fallbacks == 0, tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": "
+                                                       << e[i].fallbacks
+                                                       << " fallbacks, so this measures the exact solve");
+        if (i == 0)
+            continue;
+        const double oN = mms::localOrder(cells[i - 1], cells[i], e[i - 1].N, e[i].N);
+        const double oVp = mms::localOrder(cells[i - 1], cells[i], e[i - 1].Vp, e[i].Vp);
+        BOOST_TEST(oN >= wantN, tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": N at " << oN);
+        BOOST_TEST(oVp >= wantVp, tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": V' at " << oVp);
+    }
+}
+
+/// A tier against tier 2 on the same grids. Both solve the same discrete
+/// equations -- tier 0 differs only in carrying psi as a cache rather than as
+/// unknowns -- so their errors in N and V' must agree to the solve's own
+/// accuracy, not merely converge at one rate: orders alone would pass a tier
+/// that converged to a different function.
+///
+/// The solve's accuracy is rtol ||.|| for a steady solve, where both stop on a
+/// Newton test (measured gaps 3e-13 to 2e-11 against an rtol ||N|| of 4.4e-9).
+/// A transient's is ten times that. The two tiers take different steps -- 580
+/// against 326 at k = 1 on 8 cells -- and IDA holds the *local* error to rtol,
+/// the global one only to a small multiple of it: the gap there is 3.4e-9, 0.77
+/// of rtol ||N||, and the iterative-against-exact comparison above has seen
+/// compilers move such a gap sevenfold. 10 rtol ||N|| is still a tenth of the
+/// smallest spatial error compared, 3.1e-7 at k = 3 on 32 cells.
+void checkAgainstCoupled(Tier tier, bool steady, Index k)
+{
+    const auto &cells = studyCells(steady);
+    const auto &e = study(tier, steady, k);
+    const auto &c = study(Tier::Coupled, steady, k);
+    const double t = tFinal; // a steady study's exact solution is frozen there
+    const PinchExact exact = steady ? PinchExact(tFinal) : PinchExact();
+    for (size_t i = 0; i < cells.size(); ++i)
+    {
+        const Grid grid(0.0, 1.0, cells[i]);
+        const double normN = mms::l2ErrorAgainst([](double) { return 0.0; },
+                                                 [&](double x, double tt) { return exact.N(x, tt); }, grid, t);
+        const double normVp = mms::l2ErrorAgainst([](double) { return 0.0; },
+                                                  [&](double x, double tt) { return exact.Vp(x, tt); }, grid, t);
+        const double rtol = (steady ? 1.0 : 10.0) * mms::Tolerances{}.relative;
+        BOOST_TEST_MESSAGE(std::format("{} against coupled, k = {}, n = {}: N {:.2e}, V' {:.2e} (rtol ||.|| {:.2e}, {:.2e})",
+                                       tierName(tier), k, cells[i], std::abs(e[i].N - c[i].N),
+                                       std::abs(e[i].Vp - c[i].Vp), rtol * normN, rtol * normVp));
+        BOOST_TEST(std::abs(e[i].N - c[i].N) <= rtol * normN,
+                   tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": N error " << e[i].N
+                                  << " against coupled " << c[i].N);
+        BOOST_TEST(std::abs(e[i].Vp - c[i].Vp) <= rtol * normVp,
+                   tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": V' error " << e[i].Vp
+                                  << " against coupled " << c[i].Vp);
+    }
 }
 
 } // namespace
@@ -286,7 +486,7 @@ BOOST_AUTO_TEST_CASE(the_manufactured_source_is_the_cases_own_pde)
         State s(1, 0, 1, 4);
         s.u(0) = exact.N(x, t);
         s.q(0) = exact.N_x(x, t);
-        s.phi(0) = kT * PinchExact::n(x, t);
+        s.phi(0) = kT * exact.n(x, t);
         const Vector g = exact.geometry(x, t);
         for (Index i = 0; i < 4; ++i)
             s.geom(i) = g(i);
@@ -311,7 +511,7 @@ BOOST_AUTO_TEST_CASE(the_manufactured_source_is_the_cases_own_pde)
             // ...and the aux row the field reads is p = T n at the exact state.
             State s(1, 0, 1, 4);
             s.u(0) = exact.N(x, t);
-            s.phi(0) = kT * PinchExact::n(x, t);
+            s.phi(0) = kT * exact.n(x, t);
             const Vector g = exact.geometry(x, t);
             for (Index i = 0; i < 4; ++i)
                 s.geom(i) = g(i);
@@ -384,28 +584,54 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_does_not_stall_ida)
 // 4.1 over the same refinements); it is printed.
 BOOST_AUTO_TEST_CASE(the_coupled_theta_pinch_converges_at_k_plus_one)
 {
-    const std::vector<Index> cells = {8, 16, 32};
     for (Index k : {1, 2, 3})
-    {
-        std::vector<Errors> e;
-        for (Index n : cells)
-            e.push_back(solveOnce(k, n));
-        BOOST_TEST_MESSAGE("k = " << k << ", one interval per cell" << table(cells, e, "n"));
+        checkOrders(Tier::Coupled, false, k);
+}
 
-        const double wantN = static_cast<double>(k + 1) - 0.1;
-        const double wantVp = std::min<double>(k + 1, 4) - 0.1;
-        for (size_t i = 0; i < cells.size(); ++i)
+// Tier 0, the same model as a black box (FieldModelEquilibrium,
+// FieldCoupling = "consistent"), through the same study at the same tolerances:
+// the order of the method has to survive taking psi out of the state. Measured,
+// on the same grids as tier 2 above:
+//
+//     k = 1   N 1.99, 1.99    V' 2.55, 2.49    580, 560, 1416 steps (tier 2: 326, 311, 231)
+//     k = 2   N 3.01, 3.00    V' 3.59, 3.53    410, 388, 284 steps  (178, 154, 126)
+//     k = 3   N 3.95, 3.99    V' 3.97, 3.98    1439, 2234, 521 steps (193, 120, 96)
+//
+// -- tier 2's orders to the digit, and its errors to 6e-11 to 3.4e-9 in N
+// against an rtol ||N|| of 4.4e-9: integration error, which checkAgainstCoupled
+// bounds by ten times that. The cost is IDA's steps, 2 to 18 times tier 2's:
+// the Jacobian carries no coupling, so Newton converges linearly in it. That is
+// affordable only under the default ErrorWeights = "AlgebraicMax": under
+// "Pointwise" the k = 1, 8-cell run went 455 s and then failed in IDASolve,
+// where it takes 3 s now, while tier 2 runs either way. One case per degree,
+// to keep each under a minute.
+BOOST_DATA_TEST_CASE(the_consistent_theta_pinch_converges_at_k_plus_one,
+                     boost::unit_test::data::make({1, 2, 3}), k)
+{
+    checkOrders(Tier::Consistent, false, k);
+    checkAgainstCoupled(Tier::Consistent, false, k);
+}
+
+// The steady solve at every tier: the source frozen at tFinal, Newton from the
+// transient solution at t = 0, on 16, 32 and 64 cells. Measured, alike at both
+// tiers to every printed digit:
+//
+//     k = 1   N 2.00, 2.00    V' 2.52, 2.45
+//     k = 2   N 3.01, 3.00    V' 3.70, 3.62
+//     k = 3   N 3.98, 4.00    V' 3.97, 3.99
+//
+// with 5 Newton iterations at tier 2 and 8 to 14 at tier 0. Cheap -- a second or
+// two per tier -- and it is the path `auto` sends a Differenced case's steady
+// solve down.
+BOOST_AUTO_TEST_CASE(steady_solves_converge_at_k_plus_one_at_every_tier)
+{
+    for (Tier tier : builtTiers)
+        for (Index k : {1, 2, 3})
         {
-            BOOST_TEST(e[i].fallbacks == 0, "k = " << k << ", n = " << cells[i] << ": " << e[i].fallbacks
-                                                   << " fallbacks, so this measures the exact solve");
-            if (i == 0)
-                continue;
-            const double oN = mms::localOrder(cells[i - 1], cells[i], e[i - 1].N, e[i].N);
-            const double oVp = mms::localOrder(cells[i - 1], cells[i], e[i - 1].Vp, e[i].Vp);
-            BOOST_TEST(oN >= wantN, "k = " << k << ", n = " << cells[i] << ": N at " << oN);
-            BOOST_TEST(oVp >= wantVp, "k = " << k << ", n = " << cells[i] << ": V' at " << oVp);
+            checkOrders(tier, true, k);
+            if (tier != Tier::Coupled)
+                checkAgainstCoupled(tier, true, k);
         }
-    }
 }
 
 // The field's own resolution, where it is what limits the answer: at k = 6 on
