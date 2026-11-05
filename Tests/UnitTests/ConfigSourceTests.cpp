@@ -376,6 +376,117 @@ BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
     BOOST_CHECK_THROW(load(minimal + "FieldCoupling = \"couple\"\n"), std::invalid_argument);
 }
 
+// A native EquilibriumModel: ProblemSelection like FieldModel, exclusive with it,
+// and never "coupled", all refused at load.
+BOOST_AUTO_TEST_CASE(the_equilibrium_model_key_is_problem_selection_and_exclusive)
+{
+    BOOST_TEST(load(minimal).EquilibriumModel == "");
+    BOOST_TEST(load(minimal + "EquilibriumModel = \"SomeModel\"\n").EquilibriumModel == "SomeModel");
+
+    MapConfigSource src;
+    src.values = {
+        {"Polynomial_degree", 2u}, {"Grid_size", 8}, {"delta_t", 0.1},
+        {"Lower_boundary", 0.0},   {"Upper_boundary", 1.0},
+        {"OutputFilename", std::string("out")},
+        {"EquilibriumModel", std::string("SomeModel")},
+    };
+    BOOST_CHECK_THROW(loadSolverConfig(src, ConfigSchema::Reader::Dict), std::invalid_argument);
+
+    auto refusal = [&](std::string const &extra)
+    {
+        try
+        {
+            load(minimal + extra);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    const std::string both = refusal("FieldModel = \"A\"\nEquilibriumModel = \"B\"\n");
+    BOOST_TEST(both.find("one source of geometry") != std::string::npos, both);
+    const std::string coupled = refusal("EquilibriumModel = \"B\"\nFieldCoupling = \"coupled\"\n");
+    BOOST_TEST(coupled.find("\"coupled\"") != std::string::npos, coupled);
+    BOOST_TEST(coupled.find("has none") != std::string::npos, coupled);
+    BOOST_TEST(refusal("EquilibriumModel = \"B\"\nFieldCoupling = \"reduced\"\n").empty());
+    BOOST_TEST(refusal("EquilibriumModel = \"B\"\nFieldCoupling = \"consistent\"\n").empty());
+}
+
+// FieldCoupling for a native model: the field-model rule with "reduced" for
+// "coupled", except that a differenced response sends steady solves to
+// "consistent", and an adjoint -- which a native model has only at tier 1 --
+// is reduced whatever the derivatives cost.
+BOOST_AUTO_TEST_CASE(equilibrium_coupling_auto_takes_what_the_case_the_model_and_the_run_allow)
+{
+    using M = FieldCouplingMode;
+    using D = GeometryDerivatives;
+    auto spec = [](D d)
+    {
+        return SystemSpec{.variables = {{"u", "", ""}}, .readsGeometry = true, .geometryDerivatives = d};
+    };
+    const std::string steady = "SteadyStateTolerance = 1e-6\n";
+    const std::string newton = steady + "SteadyStateSolver = \"Newton\"\n";
+
+    struct Row
+    {
+        std::string extra;
+        D derivatives;
+        bool differencedResponse;
+        M want;
+    };
+    for (Row const &r : {
+             Row{"", D::Analytic, false, M::Reduced},
+             Row{"", D::Differenced, false, M::Reduced},
+             Row{"", D::None, false, M::Consistent},
+             Row{"", D::Analytic, true, M::Reduced},
+             Row{"", D::Differenced, true, M::Reduced},
+             Row{steady, D::Analytic, false, M::Reduced},
+             Row{newton, D::Analytic, false, M::Reduced},
+             Row{steady, D::Differenced, false, M::Consistent},
+             Row{newton, D::Differenced, false, M::Consistent},
+             Row{steady, D::Analytic, true, M::Consistent},
+             Row{newton, D::Analytic, true, M::Consistent},
+             Row{"SteadyStateSolve = true\n", D::Differenced, false, M::Consistent},
+             Row{steady + "SteadyStateSolver = \"TimeMarch\"\n", D::Differenced, true, M::Reduced},
+             Row{steady, D::None, false, M::Consistent},
+             Row{steady + "solveAdjoint = true\n", D::Differenced, true, M::Reduced},
+             Row{newton + "SteadyStateTest = \"Objective\"\nsolveAdjoint = true\n", D::Analytic, true, M::Reduced},
+             Row{"FieldCoupling = \"consistent\"\n", D::Analytic, false, M::Consistent},
+             Row{"FieldCoupling = \"reduced\"\n" + steady, D::Differenced, true, M::Reduced},
+             Row{"FieldCoupling = \"reduced\"\nsolveAdjoint = true\n", D::Analytic, false, M::Reduced},
+         })
+    {
+        CapturedOutput quiet;
+        const M got =
+            chooseEquilibriumCoupling(load(minimal + r.extra), spec(r.derivatives), r.differencedResponse);
+        BOOST_TEST((got == r.want), "[" << r.extra << "] derivatives " << static_cast<int>(r.derivatives)
+                                         << ", differenced response " << r.differencedResponse);
+    }
+
+    auto refusal = [&](std::string const &extra, D d)
+    {
+        try
+        {
+            CapturedOutput quiet;
+            chooseEquilibriumCoupling(load(minimal + extra), spec(d), false);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    // Tier 0 has no adjoint; "auto" with one and no derivatives has no tier to
+    // go to; "reduced" needs the derivatives.
+    const std::string t0 = refusal("FieldCoupling = \"consistent\"\nsolveAdjoint = true\n", D::Analytic);
+    BOOST_TEST(t0.find("adjoint") != std::string::npos, t0);
+    BOOST_TEST(refusal("solveAdjoint = true\n", D::None).find("geometryDerivatives = None") != std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"reduced\"\n", D::None).find("geometryDerivatives = None") !=
+               std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"coupled\"\n", D::Analytic).find("no unknowns") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_with)
 {
     // Two defaults that have to agree: the schema's, and SystemSolver's own

@@ -528,6 +528,15 @@ value of `Tier` in the file: `Coupled`, `Consistent`, and `Reduced` and
   tier 2's `u` and `psi` orders to the digit, with gaps of at most 1.3e-10 in the
   `u` error; about a second per tier, the coupling there being too weak to slow
   IDA. Both declare `Analytic` geometry derivatives, so tier 1 runs on both.
+* *The native model* (`ThetaPinchPressureBalance`, `EquilibriumModel`, tier 1)
+  is a different discretisation of the same balance, so it is held to tier 2's
+  answer at the discretisation error, not at `rtol`: the distance between the
+  two runs' `N` must converge at `k + 1` and stay within 5 times tier 2's own
+  error (measured 0.10 - 4.2). Its orders are `k + 1` transient on 16, 32, 64
+  cells and steady on 32, 64, 128, one level finer than the others because its
+  five-cell gradient fit is pre-asymptotic at `k = 3` on 8. Read off `p_h`
+  instead, the gradient costs an order; `EquilibriumRegistryTests.cpp` pins the
+  slots on an exact pressure.
 
 **Two findings about the method came out of this study, and each has a test
 that only a run can provide.**
@@ -574,7 +583,8 @@ catches:
 | `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
 | `ThetaPinchEquilibriumTests.cpp` | the theta pinch's spline, its derivatives, its sparse block solve in both directions, and its equilibrium against the closed form `V' = Phi / sqrt(C - p)`, at local orders 3.8-3.9 in the field resolution |
 | `FieldJacobianTests.cpp` (theta pinch cases) | the coupled Jacobian of a model whose `A2` lives only in an aux column and whose `A1` runs through four slots; that its sweep contracts at every `cj`, so a sweep that diverges on it is the sweep's defect |
-| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA; a tier that converges to something other than tier 2's answer |
+| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA; a tier that converges to something other than tier 2's answer; a native equilibrium that loses an order |
+| `EquilibriumRegistryTests.cpp` | the equilibrium registry's throws; the native theta pinch's table, and a slot of its balance -- `dV'/dx` above all -- converging below `k + 1` on an exact pressure |
 | `ThetaPinchRunTests.cpp` | a degree-changing restart losing psi; diagnostics evaluated without geometry; a reused solver; the coupled gradient for a parameter that reaches the transport only through the field (`T`); `G_field` against differences of the reported `G`; the objective estimate's field share; the adjoint sweep falling back when it should converge |
 
 **The restart case's oracle is the raw netCDF array, not `getSolution()`, and

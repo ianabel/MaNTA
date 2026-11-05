@@ -328,6 +328,12 @@ const std::vector<Entry> &table()
         // accepted and ignored.
         {"FieldModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
          "Name of a registered magnetic-field model to couple to; absent means no coupling."},
+        // ProblemSelection for the same reason as FieldModel, and exclusive with
+        // it: a run has one source of geometry.
+        {"EquilibriumModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
+         "Name of a registered native equilibrium model to take the geometry from, in place of a "
+         "FieldModel; FieldCoupling chooses consistent or reduced for it (see "
+         "docs/field_coupling.rst)."},
         // How runManta attaches the FieldModel, so a ProblemSelection key for the
         // same reason: a dict has no FieldModel for it to apply to.
         {"FieldCoupling", {}, Type::String, Category::ProblemSelection, false, false,

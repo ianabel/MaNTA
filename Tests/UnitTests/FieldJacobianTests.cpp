@@ -21,6 +21,7 @@
 #include "../../SystemSolver.hpp"
 #include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
 #include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
+#include "../../PhysicsCases/ThetaPinchPressureBalance.hpp"
 #include "../../Types.hpp"
 
 #include <nvector/nvector_serial.h>
@@ -2229,6 +2230,159 @@ BOOST_AUTO_TEST_CASE(the_assembled_transpose_is_the_transpose_of_the_response)
                                                            << " Newton iterations");
     BOOST_TEST(a.norm() > 1e-3);
     BOOST_TEST(diff < 1e-6);
+}
+
+// ------------------------------- a native equilibrium: the pressure balance --
+//
+// ThetaPinchPressureBalance, an EquilibriumModel of its own rather than a
+// FieldModel run as one, through the same checks: its G' in J_red against a
+// finite difference of the tier-0 residual, which re-solves its balance at every
+// perturbation, and its exact transpose in the adjoint against J_red^T.
+
+/// A tier-1 solver at a state on the native model, its Jacobian blocks built.
+CoupledSolver nativeThetaPinch(Index nCells, Index k, bool differencedResponse, bool superconvergent = false)
+{
+    using namespace toml::literals::toml_literals;
+    static const toml::value config = u8R"(
+        [ThetaPinchDiffusion]
+        Temperature = 0.3
+        D0 = 0.5
+        Gamma = 2.0
+    )"_toml;
+    CoupledSolver h;
+    h.grid = std::make_unique<Grid>(0.0, 1.0, nCells);
+    h.problem = std::make_unique<ThetaPinchDiffusion>(config, *h.grid);
+    h.sys = std::make_unique<SystemSolver>(*h.grid, k, h.problem.get());
+    h.sys->setTau(0.75);
+    h.sys->setInitialTime(0.0);
+    h.sys->setSuperconvergent(superconvergent);
+    h.sys->setEquilibriumModel(std::make_shared<ThetaPinchPressureBalance>(
+                                   ThetaPinchPressureBalance::Parameters{.differencedResponse = differencedResponse},
+                                   *h.grid),
+                               SystemSolver::EquilibriumCoupling::Reduced);
+    h.sys->resetCoeffs();
+    h.sys->initialiseMatrices();
+
+    const size_t dof = h.sys->getSolution().getDoF();
+    h.Y = N_VNew_Serial(dof, h.sys->ctx);
+    h.dYdt = N_VClone(h.Y);
+    N_VConst(0.0, h.Y);
+    N_VConst(0.0, h.dYdt);
+    h.sys->setInitialConditions(h.Y, h.dYdt);
+
+    h.cj = 1.7;
+    h.t = 0.0;
+    h.sys->setJacTime(h.t);
+    h.sys->setAlpha(h.cj);
+    h.sys->setJacEvalY(h.Y, h.dYdt);
+    h.sys->updateBoundaryConditions(h.t);
+    h.sys->updateMatricesForJacSolve();
+    return h;
+}
+
+// Measured 9e-10 to 1.4e-9 in the solution and 1.2e-10 to 1.9e-10 in the
+// residual with the model's own G' -- the finite difference's own error -- and
+// 9e-8 to 2e-7 / 5e-9 to 8e-9 with the differenced one. Zeroing A_g takes the
+// residual to 0.18, nine orders up.
+BOOST_AUTO_TEST_CASE(the_native_reduced_solve_inverts_the_finite_differenced_tier_zero_jacobian)
+{
+    for (bool differenced : {false, true})
+        for (bool superconvergent : {false, true})
+        {
+            const double solutionBound = differenced ? 1e-5 : 1e-6, residualBound = differenced ? 1e-6 : 1e-7;
+            BOOST_TEST_CONTEXT("differenced response = " << differenced << ", superconvergent = " << superconvergent)
+            {
+                auto pinch = nativeThetaPinch(5, 3, differenced, superconvergent);
+                for (int trial = 0; trial < 2; ++trial)
+                {
+                    const SolveReport r = checkReducedSolve(pinch, trial);
+                    BOOST_TEST_MESSAGE("trial " << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                                                << ", ||J dy* - g||/||g|| = " << r.residual);
+                    BOOST_TEST(r.nDirichlet == 1);
+                    BOOST_TEST(r.solutionError < solutionBound);
+                    BOOST_TEST(r.residual < residualBound);
+                }
+            }
+        }
+
+    // Not vacuous: tier 0's Jacobian, A_g zeroed, misses by orders more.
+    auto pinch = nativeThetaPinch(5, 3, false);
+    const SolveReport coupled = checkReducedSolve(pinch, 0);
+    for (Matrix &Ag : pinch->reducedBlocks.Ag)
+        Ag.setZero();
+    const SolveReport blind = checkReducedSolve(pinch, 0);
+    BOOST_TEST_MESSAGE("residual " << coupled.residual << " coupled, " << blind.residual << " with A_g zeroed");
+    BOOST_TEST(blind.residual > 1e3 * coupled.residual);
+}
+
+// The model's G' and G'^T against what the base class makes of its Solve: a
+// forward difference, and the matrix assembled from it. Agreement to the
+// difference's own error, a transpose that is a transpose, and no Solve made by
+// either exact direction.
+BOOST_AUTO_TEST_CASE(the_native_response_and_its_transpose_are_the_derivative_of_its_solve)
+{
+    auto pinch = nativeThetaPinch(5, 3, false);
+    auto &b = pinch->reducedBlocks;
+    using Parameters = ThetaPinchPressureBalance::Parameters;
+    ThetaPinchPressureBalance exact(Parameters{}, *pinch.grid),
+        differenced(Parameters{.differencedResponse = true}, *pinch.grid);
+    const auto eq = exact.Solve(*b.states, b.inputPoints, b.weights, b.t, nullptr);
+    const long afterSolve = exact.solves();
+
+    const Eigen::Index nPoints = static_cast<Eigen::Index>(b.physicsPoints.size());
+    GlobalState dp = b.states->zeroedLike();
+    for (Eigen::Index j = 0; j < dp.Aux().cols(); ++j)
+        dp.Aux()(0, j) = std::cos(0.3 + 0.8 * static_cast<double>(j));
+    // A direction in rows the balance does not read changes nothing.
+    dp.Variable().setConstant(1.0);
+
+    Matrix dgExact(4, nPoints), dgDiff(4, nPoints);
+    exact.applyResponse(dgExact, *eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    differenced.applyResponse(dgDiff, *eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const double forward = (dgExact - dgDiff).norm() / dgExact.norm();
+
+    Matrix dg(4, nPoints);
+    for (Eigen::Index j = 0; j < dg.size(); ++j)
+        dg.data()[j] = std::sin(0.2 + 1.3 * static_cast<double>(j));
+    GlobalState zExact = b.states->zeroedLike(), zDiff = b.states->zeroedLike();
+    exact.applyResponseTranspose(zExact, *eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    differenced.applyResponseTranspose(zDiff, *eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const double transpose = (zExact.Aux() - zDiff.Aux()).norm() / zExact.Aux().norm();
+
+    // <dg, G' dp> = <G'^T dg, dp>, both from the model's exact directions.
+    const double lhs = (dg.array() * dgExact.array()).sum();
+    const double rhs = (zExact.Aux().array() * dp.Aux().array()).sum();
+
+    BOOST_TEST_MESSAGE("G' dp, exact against differenced: " << forward << "; G'^T dg: " << transpose
+                                                            << "; <dg, G'dp> - <G'^T dg, dp> = " << lhs - rhs
+                                                            << " against " << lhs);
+    BOOST_TEST(dgExact.norm() > 1e-3);
+    BOOST_TEST(forward < 1e-6);
+    BOOST_TEST(transpose < 1e-6);
+    BOOST_TEST(std::abs(lhs - rhs) < 1e-12 * std::abs(lhs));
+    BOOST_TEST(zExact.Variable().norm() == 0.0);
+    BOOST_TEST(zExact.Derivative().norm() == 0.0);
+    BOOST_TEST(zExact.Flux().norm() == 0.0);
+    BOOST_TEST(exact.solves() == afterSolve);
+}
+
+// The native adjoint inverts J_red^T, the transpose of a finite difference of
+// the tier-0 residual at cj = 0, in every FieldSolve mode.
+BOOST_AUTO_TEST_CASE(the_native_reduced_adjoint_inverts_the_transpose_of_the_tier_zero_jacobian)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    for (bool superconvergent : {false, true})
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto pinch = nativeThetaPinch(5, 3, false, superconvergent);
+            for (Mode mode : {Mode::Exact, Mode::Iterative, Mode::Krylov})
+            {
+                const double r = reducedAdjointResidual(pinch, mode, 0);
+                BOOST_TEST_MESSAGE("mode " << static_cast<int>(mode) << ": ||J^T z - g||/||g|| = " << r);
+                BOOST_TEST(r < 1e-7);
+                BOOST_TEST(!pinch->getFieldSweepStats().adjointFellBack);
+            }
+        }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

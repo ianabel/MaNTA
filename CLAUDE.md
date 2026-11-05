@@ -1434,6 +1434,20 @@ so a test can zero it, and **the record carries the blocks**
 demand makes no physics call. `auto` still couples a field model for an
 adjoint: the tier-2 adjoint needs no transposed response.
 
+**A native `EquilibriumModel` has a registry of its own** (`EquilibriumModels`,
+`EquilibriumModel = "<name>"`), the field models' exactly, and the two keys are
+refused together. It runs at `consistent` or `reduced` only;
+`chooseEquilibriumCoupling` is its own function beside `chooseFieldCoupling`,
+and takes the model's response as an input, since a differenced one multiplies
+equilibrium solves on a steady solve. `ThetaPinchPressureBalance` is the
+registered one: the theta pinch's balance in closed form on the transport's own
+`p_h`. **Its `dV'/dx` reads `p_x` from a fit to cell means, and that is
+load-bearing**: read off `p_h` the manufactured study goes at k, and fitted to
+`p_h`'s nodal values it decays to order 1 at k = 1, because the fit
+differentiates the shape the interpolation error repeats in every cell. The
+spec's "The equilibrium registry" has the measurements;
+`the_native_balance_converges_slot_by_slot` is the guard.
+
 **The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
 read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
 physics). Three things about it are load-bearing. Its pressure crosses as the

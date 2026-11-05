@@ -105,6 +105,17 @@ Problem definition
        :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
+   * - ``EquilibriumModel``
+     - ``""``, *file only*
+     - Name of a registered native equilibrium model to take the geometry from,
+       as registered by ``REGISTER_EQUILIBRIUM_MODEL_IMPL``, in place of a
+       ``FieldModel``: the two are refused together. It has no unknowns, so
+       ``FieldCoupling`` is ``consistent`` or ``reduced`` for it, ``coupled``
+       being refused, and ``auto`` chooses as :ref:`native-coupling-mode`
+       describes. An unrecognised name is an error listing what *is*
+       registered; ``ThetaPinchPressureBalance`` is the one in this tree. A
+       ``ProblemSelection`` key, like ``FieldModel``. See
+       :ref:`native-equilibrium`.
    * - ``FieldCoupling``
      - ``"auto"``, *file only*
      - How the ``FieldModel`` is attached. ``coupled`` puts its unknowns in the
@@ -122,8 +133,9 @@ Problem definition
        never picks it: with the model's own unknowns to hand, ``coupled`` is the
        same Jacobian without the equilibrium solves. ``auto`` chooses from
        what the case and the model supply and what the run needs — see
-       :ref:`field-coupling-mode`. Anything but ``auto`` is refused without a
-       ``FieldModel``.
+       :ref:`field-coupling-mode`; for an ``EquilibriumModel``, see
+       :ref:`native-coupling-mode`. Anything but ``auto`` is refused without a
+       ``FieldModel`` or an ``EquilibriumModel``.
    * - ``FieldModel``
      - ``""``, *file only*
      - Name of a registered magnetic-field model to couple to, as registered by

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace
 {
@@ -128,4 +129,46 @@ void EquilibriumModel::applyResponseTranspose(GlobalState &dp, Equilibrium const
             for (Eigen::Index j = 0; j < nIn; ++j, ++c)
                 out(row, j) = product(c);
     }
+}
+
+// ---- the registry -------------------------------------------------------------
+//
+// std::invalid_argument, as FieldModel.cpp and PhysicsCases.cpp throw: runManta
+// catches the three the same way.
+
+EquilibriumModels::map_type *EquilibriumModels::map = nullptr;
+
+EquilibriumModels::map_type *EquilibriumModels::getMap()
+{
+    // Never deleted: this runs during static initialisation and the map must
+    // outlive every translation unit that registers into it.
+    if (!map)
+        map = new map_type;
+    return map;
+}
+
+void EquilibriumModels::RegisterEquilibriumModel(std::string const &s, function_type creator)
+{
+    auto *m = getMap();
+    if (m->count(s) > 0)
+        throw std::invalid_argument("Duplicate equilibrium model name '" + s + "'");
+    m->insert(std::make_pair(s, creator));
+}
+
+std::unique_ptr<EquilibriumModel> EquilibriumModels::InstantiateEquilibriumModel(std::string const &s,
+                                                                                 toml::value const &config,
+                                                                                 Grid const &grid)
+{
+    auto *m = getMap();
+    auto it = m->find(s);
+    if (it == m->end())
+    {
+        std::string known;
+        for (auto const &e : *m)
+            known += (known.empty() ? "" : ", ") + e.first;
+        throw std::invalid_argument("Unknown equilibrium model '" + s +
+                                    "'. Registered equilibrium models are: " +
+                                    (known.empty() ? "(none)" : known));
+    }
+    return it->second(config, grid);
 }

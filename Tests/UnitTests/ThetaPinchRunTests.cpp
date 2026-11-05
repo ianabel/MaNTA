@@ -8,6 +8,7 @@
 #include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
 #include "../../FieldModelEquilibrium.hpp"
 #include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
+#include "../../PhysicsCases/ThetaPinchPressureBalance.hpp"
 #include "../../SystemSolver.hpp"
 #include "../../Types.hpp"
 
@@ -68,6 +69,10 @@ struct Options
     bool count = false;
     // Tier 1 with a transposed response that does nothing.
     bool blindTranspose = false;
+    // The native model, ThetaPinchPressureBalance, in place of the field model:
+    // at tier 1 unless `consistent`, with its own response unless
+    // `differencedResponse`.
+    bool native = false;
 };
 
 /// The tier-1 adapter, counting its equilibrium solves -- including the ones
@@ -136,6 +141,7 @@ struct Run
     std::unique_ptr<ThetaPinchDiffusion> problem;
     std::shared_ptr<ThetaPinchEquilibrium> field;
     std::shared_ptr<CountingEquilibrium> equilibrium;
+    std::shared_ptr<ThetaPinchPressureBalance> native;
     std::unique_ptr<SystemSolver> sys;
 };
 
@@ -167,7 +173,14 @@ Run makeRun(Options const &o, std::string const &stem,
     sys.setTolerances({1e-8}, 1e-6);
     sys.setWriteOutput(o.writeOutput);
     sys.setWriteDatFile(false);
-    if (o.consistent)
+    if (o.native)
+    {
+        r.native = std::make_shared<ThetaPinchPressureBalance>(
+            ThetaPinchPressureBalance::Parameters{.differencedResponse = o.differencedResponse}, *r.grid);
+        sys.setEquilibriumModel(r.native, o.consistent ? SystemSolver::EquilibriumCoupling::Consistent
+                                                       : SystemSolver::EquilibriumCoupling::Reduced);
+    }
+    else if (o.consistent)
         sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(r.field));
     else if (o.reduced)
     {
@@ -1243,6 +1256,123 @@ BOOST_AUTO_TEST_CASE(a_reused_reduced_adjoint_matches_a_fresh_one_bit_for_bit)
         BOOST_TEST((fresh - reused).cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
     }
     removeOutput("theta_pinch_t1_reuse");
+}
+
+// ------------------------------- a native equilibrium: the pressure balance --
+//
+// ThetaPinchPressureBalance, the registered native EquilibriumModel, through the
+// run tests tiers 0 and 1 of the field model take: reuse, the gradient and the
+// adjoint on demand.
+
+BOOST_AUTO_TEST_CASE(a_reused_native_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)
+{
+    struct Case
+    {
+        const char *name;
+        Options o;
+    };
+    for (Case const &c : {Case{"tier 1, model G'", {.reduced = true, .native = true}},
+                          Case{"tier 1, differenced G'", {.reduced = true, .differencedResponse = true, .native = true}},
+                          Case{"tier 0", {.consistent = true, .native = true}}})
+        BOOST_TEST_CONTEXT(c.name)
+        {
+            auto fresh = makeRun(c.o, "theta_pinch_native_fresh");
+            auto reused = makeRun(c.o, "theta_pinch_native_reused");
+            {
+                CapturedOutput quiet;
+                fresh.sys->runSolver(0.5);
+                reused.sys->runSolver(0.5);
+                reused.sys->runSolver(0.5);
+            }
+            const Vector want = sampleWithGeometry(*fresh.sys), got = sampleWithGeometry(*reused.sys);
+            BOOST_TEST((want - got).cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
+            // Not vacuous: the field has left the vacuum, B = 1.
+            BOOST_TEST((want.tail(5).array() - 1.0).abs().maxCoeff() > 1e-2);
+        }
+}
+
+// The native tier-1 gradient against central differences of G, with the model's
+// exact transpose and with the base class's assembly of its differenced
+// response, on the three objectives of the_reduced_gradient_matches_finite_
+// differences_and_tier_two.
+BOOST_AUTO_TEST_CASE(the_native_gradient_matches_finite_differences)
+{
+    for (bool differenced : {false, true})
+        BOOST_TEST_CONTEXT("differenced response = " << differenced)
+        {
+            const Options o{.reduced = true, .differencedResponse = differenced, .native = true};
+            Matrix gradient;
+            steadyObjectives(o, 0, 0.0, &gradient, "theta_pinch_native_gradient");
+            BOOST_REQUIRE_EQUAL(gradient.rows(), 3);
+            const double scale = gradient.cwiseAbs().maxCoeff();
+            for (Index which : {ThetaPinchDiffusion::pD0, ThetaPinchDiffusion::pTemperature})
+            {
+                const double h = 1e-5;
+                const Vector fd = (steadyObjectives(o, which, +h, nullptr, "theta_pinch_native_gradient") -
+                                   steadyObjectives(o, which, -h, nullptr, "theta_pinch_native_gradient")) /
+                                  (2.0 * h);
+                for (Index g = 0; g < 3; ++g)
+                {
+                    BOOST_TEST_MESSAGE("objective " << g << ", parameter " << which << ": adjoint "
+                                                    << gradient(g, which) << " against " << fd(g));
+                    BOOST_TEST(std::abs(fd(g)) > 1e-4);
+                    // As for the field model's: the assembled transpose of a
+                    // forward difference is good to about 1e-7 of G', so on the
+                    // scale of the whole gradient; the exact one entry by entry.
+                    if (differenced)
+                        BOOST_TEST(std::abs(gradient(g, which) - fd(g)) < 1e-6 * scale);
+                    else
+                        BOOST_TEST(gradient(g, which) == fd(g), boost::test_tools::tolerance(1e-6));
+                }
+            }
+        }
+    removeOutput("theta_pinch_native_gradient");
+}
+
+// The native adjoint on demand makes no physics call, and its equilibrium
+// solves are pinned: one for the objective's geometry and, with the exact
+// transpose, no more -- it assembles G' from duals, not from Solve. With the
+// differenced response the base class's assembly makes one per input component
+// per point, once per equilibrium.
+BOOST_AUTO_TEST_CASE(a_native_adjoint_on_demand_makes_no_physics_call)
+{
+    for (bool differenced : {false, true})
+        BOOST_TEST_CONTEXT("differenced response = " << differenced)
+        {
+            Options o{.reduced = true, .differencedResponse = differenced, .count = true, .native = true};
+            auto run = makeRun(o, "theta_pinch_native_on_demand");
+            AutodiffAdjointProblem objective(run.problem.get());
+            addGeometricObjectives(objective);
+            SystemSolver &sys = *run.sys;
+            {
+                CapturedOutput quiet;
+                sys.runSolver(0.5);
+            }
+            auto const &c = static_cast<CountingThetaPinch const &>(*run.problem);
+            const long values = c.values, derivatives = c.derivatives, hooks = c.geometryHookNodes;
+            const long solves = run.native->solves();
+
+            DGSoln state = sys.getSolution();
+            std::vector<double> copy(state.data(), state.data() + state.getDoF());
+            DGSoln at(sys.nVars, *run.grid, sys.k, copy.data(), 0, sys.nAux, 0);
+            sys.solveAdjointAt(objective, {0, 1}, at);
+            const long first = run.native->solves() - solves;
+            sys.solveAdjointAt(objective, {0, 1}, at);
+            const long second = run.native->solves() - solves - first;
+
+            const long components = 3 * sys.nVars + sys.nAux;
+            const long inputs = components * static_cast<long>(run.grid->getNCells()) * (o.k + 1);
+            BOOST_TEST_MESSAGE("physics calls " << c.values - values << " / " << c.derivatives - derivatives
+                                                << " / " << c.geometryHookNodes - hooks << "; equilibrium solves "
+                                                << first << " then " << second);
+            BOOST_TEST(c.values == values);
+            BOOST_TEST(c.derivatives == derivatives);
+            BOOST_TEST(c.geometryHookNodes == hooks);
+            BOOST_TEST(first == 1 + (differenced ? inputs : 0));
+            BOOST_TEST(second == 0);
+            BOOST_TEST(sys.adjointSolution(0, at) != nullptr);
+        }
+    removeOutput("theta_pinch_native_on_demand");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -321,6 +321,9 @@ check_ref_case( "NeumannTestUpper" )
 check_ref_case( "SuperconvergentADTest" )
 # The coupled case: the registered field model, its field group compared too.
 check_ref_case( "ThetaPinch" )
+# The same pinch on the registered native equilibrium model, at tier 1: no
+# unknowns, so its group is the geometry alone.
+check_ref_case( "ThetaPinchNative" )
 
 
 # ---------------------------------------------------------------- restarts --

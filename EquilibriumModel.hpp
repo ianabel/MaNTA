@@ -202,4 +202,58 @@ protected:
     EquilibriumSpec spec;
 };
 
+// ---- the registry -------------------------------------------------------------
+//
+// The FieldModel registry's pattern exactly: a process-global map filled by
+// static initialisers, a duplicate name and an unknown one both thrown, and
+// each model handed the parsed config file and the grid, so it reads its own
+// table. `EquilibriumModel = "<name>"` selects one; a model built outside this
+// tree reaches the map through PhysicsPlugins the way a physics case does.
+
+#include "gridStructures.hpp"
+#include <toml.hpp>
+
+#include <functional>
+#include <map>
+
+template <typename T>
+std::unique_ptr<EquilibriumModel> createEquilibriumModel(toml::value const &config, Grid const &grid)
+{
+    return std::make_unique<T>(config, grid);
+}
+
+struct EquilibriumModels
+{
+public:
+    typedef std::function<std::unique_ptr<EquilibriumModel>(toml::value const &, Grid const &)> function_type;
+    typedef std::map<std::string, function_type> map_type;
+
+    static std::unique_ptr<EquilibriumModel> InstantiateEquilibriumModel(std::string const &s,
+                                                                         toml::value const &config,
+                                                                         Grid const &grid);
+
+    // Throws on a duplicate name, as the other two registries do.
+    static void RegisterEquilibriumModel(std::string const &s, function_type creator);
+
+protected:
+    static map_type *getMap();
+
+public:
+    static map_type *map;
+};
+
+template <typename T>
+struct EquilibriumModelRegister
+{
+    explicit EquilibriumModelRegister(std::string const &name)
+    {
+        EquilibriumModels::RegisterEquilibriumModel(name, createEquilibriumModel<T>);
+    }
+};
+
+// A model only appears if its object file is linked in -- nothing references it
+// directly, so a missing entry is a link-line problem with no compile error.
+#define REGISTER_EQUILIBRIUM_MODEL_HEADER(T) static EquilibriumModelRegister<T> registerEquilibriumModel_##T;
+#define REGISTER_EQUILIBRIUM_MODEL_IMPL(T) EquilibriumModelRegister<T> T::registerEquilibriumModel_##T(#T);
+
 #endif // EQUILIBRIUMMODEL_HPP

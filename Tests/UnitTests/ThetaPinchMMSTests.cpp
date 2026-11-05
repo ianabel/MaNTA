@@ -30,7 +30,9 @@
 #include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
 #include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
 #include "../../FieldModelEquilibrium.hpp"
+#include "../../PhysicsCases/ThetaPinchPressureBalance.hpp"
 
+#include <boost/math/quadrature/gauss.hpp>
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 #include <boost/math/tools/roots.hpp>
 
@@ -225,6 +227,37 @@ struct Errors
     long steps = 0, solves = 0, fallbacks = 0;
     // Tiers 0 and 1: equilibrium solves, one per distinct transport state.
     long equilibria = 0;
+    // N and V' at sampleRule's points, so two runs on one grid can be compared
+    // with each other and not only with the exact solution.
+    Vector Nat, Vpat;
+};
+
+/// A 16-point Gauss rule in every cell: points and weights.
+struct SampleRule
+{
+    std::vector<double> x, w;
+    explicit SampleRule(Grid const &grid)
+    {
+        using G = boost::math::quadrature::gauss<double, 16>;
+        for (size_t c = 0; c < grid.getNCells(); ++c)
+        {
+            const double mid = 0.5 * (grid[c].x_l + grid[c].x_u), half = 0.5 * (grid[c].x_u - grid[c].x_l);
+            for (size_t q = 0; q < G::abscissa().size(); ++q)
+                for (double sgn : {-1.0, 1.0})
+                {
+                    x.push_back(mid + sgn * half * G::abscissa()[q]);
+                    w.push_back(half * G::weights()[q]);
+                }
+        }
+    }
+    /// The L2 norm of a - b over the grid.
+    double distance(Vector const &a, Vector const &b) const
+    {
+        double total = 0.0;
+        for (size_t j = 0; j < w.size(); ++j)
+            total += w[j] * (a(j) - b(j)) * (a(j) - b(j));
+        return std::sqrt(total);
+    }
 };
 
 constexpr double tFinal = 0.25;
@@ -237,6 +270,7 @@ enum class Tier
     Consistent, // tier 0: the same model as a black box, FieldModelEquilibrium ("consistent")
     Reduced,    // tier 1: the black box with its exact G' in the Jacobian ("reduced")
     ReducedDifferenced, // tier 1, G' a forward difference of the equilibrium solve
+    Native,     // tier 1 on ThetaPinchPressureBalance: the balance in closed form, no spline
 };
 
 const char *tierName(Tier tier)
@@ -251,13 +285,15 @@ const char *tierName(Tier tier)
         return "reduced (tier 1)";
     case Tier::ReducedDifferenced:
         return "reduced, differenced G' (tier 1)";
+    case Tier::Native:
+        return "native pressure balance (tier 1)";
     }
     return "?";
 }
 
 /// Attach the registered field model to `sys` the way the tier does.
-void attachField(SystemSolver &sys, std::shared_ptr<ThetaPinchEquilibrium> const &field, Tier tier,
-                 SystemSolver::FieldSolveMode mode)
+void attachField(SystemSolver &sys, std::shared_ptr<ThetaPinchEquilibrium> const &field, Grid const &grid,
+                 Tier tier, SystemSolver::FieldSolveMode mode)
 {
     using C = SystemSolver::EquilibriumCoupling;
     switch (tier)
@@ -273,6 +309,11 @@ void attachField(SystemSolver &sys, std::shared_ptr<ThetaPinchEquilibrium> const
         break;
     case Tier::ReducedDifferenced:
         sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(field, true), C::Reduced);
+        break;
+    case Tier::Native:
+        sys.setEquilibriumModel(std::make_shared<ThetaPinchPressureBalance>(
+                                    ThetaPinchPressureBalance::Parameters{}, grid),
+                                C::Reduced);
         break;
     }
     sys.setFieldSolveMode(mode);
@@ -299,7 +340,7 @@ Errors solveOnce(Run const &run)
 
     SystemSolver sys(grid, run.k, &problem);
     sys.setTau(1.0);
-    attachField(sys, field, run.tier, run.mode);
+    attachField(sys, field, grid, run.tier, run.mode);
     sys.resetCoeffs();
     sys.setInputFile("theta_pinch_mms");
     sys.setOutputCadence(tFinal);
@@ -330,9 +371,10 @@ Errors solveOnce(Run const &run)
     // The geometry and C through the solver's own provider, so every tier is
     // measured the same way: from psi in the state at tier 2, from the
     // equilibrium the final state maps to at tier 0.
-    const double C = run.tier == Tier::Coupled
-                         ? sys.getSolution().getField().tail(1)(0)
-                         : FieldModelEquilibrium::psi(sys.equilibriumAt(sys.yJac, tFinal)).tail(1)(0);
+    const double C =
+        run.tier == Tier::Coupled  ? sys.getSolution().getField().tail(1)(0)
+        : run.tier == Tier::Native ? ThetaPinchPressureBalance::totalPressure(sys.equilibriumAt(sys.yJac, tFinal))
+                                   : FieldModelEquilibrium::psi(sys.equilibriumAt(sys.yJac, tFinal)).tail(1)(0);
     const double Nerr = mms::l2ErrorAgainst([&](double x) { return sys.yJac.u(0)(x); },
                                             [&](double x, double t) { return exact.N(x, t); }, grid, tFinal);
     Vector g(4);
@@ -345,8 +387,19 @@ Errors solveOnce(Run const &run)
         },
         [&](double x, double t) { return exact.Vp(x, t); }, grid, tFinal);
     const auto stats = sys.getFieldSweepStats();
-    return {Nerr, Vperr, std::abs(C - exact.C(tFinal)), steps, stats.solves, stats.fallbacks,
-            sys.getEquilibriumSolves()};
+    Errors out{Nerr, Vperr, std::abs(C - exact.C(tFinal)), steps, stats.solves, stats.fallbacks,
+               sys.getEquilibriumSolves()};
+    const SampleRule rule(grid);
+    out.Nat.resize(static_cast<Eigen::Index>(rule.x.size()));
+    out.Vpat.resize(out.Nat.size());
+    for (size_t j = 0; j < rule.x.size(); ++j)
+    {
+        out.Nat(static_cast<Eigen::Index>(j)) = sys.yJac.u(0)(rule.x[j]);
+        g.setZero();
+        sys.geometryAt(g, sys.yJac, rule.x[j], tFinal);
+        out.Vpat(static_cast<Eigen::Index>(j)) = g(ThetaPinchEquilibrium::Vprime);
+    }
+    return out;
 }
 
 Errors solveOnce(Index k, Index nCells, Index intervalsPerCell = 1,
@@ -380,28 +433,40 @@ constexpr Tier builtTiers[] = {Tier::Coupled, Tier::Consistent, Tier::Reduced, T
 /// The grids each study refines over. The steady study starts at 16: at k = 3 the
 /// step from 8 is pre-asymptotic in N (3.89), and a steady solve is cheap enough
 /// to go one further instead.
-std::vector<Index> const &studyCells(bool steady)
+std::vector<Index> const &studyCells(bool steady, Tier tier = Tier::Coupled)
 {
     static const std::vector<Index> transient = {8, 16, 32}, steadyCells = {16, 32, 64};
+    // The native model one level finer: its gradient recovery reaches five cells
+    // at k = 3, so the coarsest step is still pre-asymptotic there (3.89 in N,
+    // 3.80 in V' from 16 to 32 cells, transient).
+    static const std::vector<Index> nativeTransient = {16, 32, 64}, nativeSteady = {32, 64, 128};
+    if (tier == Tier::Native)
+        return steady ? nativeSteady : nativeTransient;
     return steady ? steadyCells : transient;
 }
 
 /// One study -- a tier, transient or steady, at degree k, over studyCells -- run
 /// once and kept, so a lower tier is compared with the tier-2 sweep its own test
 /// already ran rather than paying for it again.
-std::vector<Errors> const &study(Tier tier, bool steady, Index k)
+std::vector<Errors> const &study(Tier tier, bool steady, Index k,
+                                 std::vector<Index> const &cells)
 {
-    static std::map<std::tuple<Tier, bool, Index>, std::vector<Errors>> cache;
-    const auto key = std::make_tuple(tier, steady, k);
+    static std::map<std::tuple<Tier, bool, Index, std::vector<Index>>, std::vector<Errors>> cache;
+    const auto key = std::make_tuple(tier, steady, k, cells);
     auto it = cache.find(key);
     if (it == cache.end())
     {
         std::vector<Errors> e;
-        for (Index n : studyCells(steady))
+        for (Index n : cells)
             e.push_back(solveOnce(Run{.k = k, .nCells = n, .tier = tier, .steady = steady}));
         it = cache.emplace(key, std::move(e)).first;
     }
     return it->second;
+}
+
+std::vector<Errors> const &study(Tier tier, bool steady, Index k)
+{
+    return study(tier, steady, k, studyCells(steady, tier));
 }
 
 /// Every local order of N and V': N at the transport's k + 1, V' at k + 1 or the
@@ -409,7 +474,7 @@ std::vector<Errors> const &study(Tier tier, bool steady, Index k)
 /// iterative solve is what was measured.
 void checkOrders(Tier tier, bool steady, Index k)
 {
-    const auto &cells = studyCells(steady);
+    const auto &cells = studyCells(steady, tier);
     const auto &e = study(tier, steady, k);
     BOOST_TEST_MESSAGE(tierName(tier) << (steady ? ", steady" : ", transient") << ", k = " << k
                                       << ", one interval per cell" << table(cells, e, "n"));
@@ -470,6 +535,44 @@ void checkAgainstCoupled(Tier tier, bool steady, Index k)
         BOOST_TEST(std::abs(e[i].Vp - c[i].Vp) <= bound * rtol * normVp,
                    tierName(tier) << ", k = " << k << ", n = " << cells[i] << ": V' error " << e[i].Vp
                                   << " against coupled " << c[i].Vp);
+    }
+}
+
+/// The native model against tier 2 on the native study's grids. It is a
+/// different discretisation of the same balance -- the pressure's own
+/// polynomial, not a spline projection -- so the two agree to their
+/// discretisation errors and no better, and what is asserted is that they do:
+/// the distance between their N converges at k + 1 like either error, and stays
+/// within a few times tier 2's own. Measured, the distance over tier 2's N
+/// error runs 0.37 (k = 1), 0.34 to 0.10 (k = 2), 1.9 to 2.1 (k = 3) transient
+/// and 0.87, 0.29 to 0.16, 4.1 to 4.2 steady; at k = 3 the native error is the
+/// larger, 2.5 to 5 times tier 2's, its recovery stencil being five cells wide.
+void checkNativeAgainstCoupled(bool steady, Index k)
+{
+    const auto &cells = studyCells(steady, Tier::Native);
+    const auto &e = study(Tier::Native, steady, k);
+    const auto &c = study(Tier::Coupled, steady, k, cells);
+    std::vector<double> gap;
+    for (size_t i = 0; i < cells.size(); ++i)
+    {
+        const SampleRule rule(Grid(0.0, 1.0, cells[i]));
+        gap.push_back(rule.distance(e[i].Nat, c[i].Nat));
+        BOOST_TEST_MESSAGE(std::format("native against coupled, {}, k = {}, n = {}: |N - N_2| {:.3e}, tier 2's N "
+                                       "error {:.3e} (ratio {:.2f}), the native one {:.3e}",
+                                       steady ? "steady" : "transient", k, cells[i], gap.back(), c[i].N,
+                                       gap.back() / c[i].N, e[i].N));
+        BOOST_TEST(gap.back() <= 5.0 * c[i].N, "k = " << k << ", n = " << cells[i] << ": the native N is "
+                                                       << gap.back() << " from tier 2's, whose own error is "
+                                                       << c[i].N);
+        if (i > 0)
+        {
+            // The slack checkNativeOrders allows: the coarser step is
+            // pre-asymptotic at k = 3, for the gap as for the error (3.89).
+            const double slack = i + 1 == cells.size() ? 0.1 : 0.25;
+            const double o = mms::localOrder(cells[i - 1], cells[i], gap[i - 1], gap[i]);
+            BOOST_TEST(o >= static_cast<double>(k + 1) - slack,
+                       "k = " << k << ", n = " << cells[i] << ": the gap to tier 2 converges at " << o);
+        }
     }
 }
 
@@ -649,6 +752,56 @@ BOOST_DATA_TEST_CASE(the_reduced_theta_pinch_with_a_differenced_response_converg
 {
     checkOrders(Tier::ReducedDifferenced, false, k);
     checkAgainstCoupled(Tier::ReducedDifferenced, false, k);
+}
+
+// The registered native model, ThetaPinchPressureBalance at tier 1: the balance
+// on the transport's own pressure polynomial, with its gradient recovered from
+// cell means (see its header), in place of the field model's spline. Measured,
+// transient on 16, 32, 64 cells and steady on 32, 64, 128:
+//
+//             N transient  V' transient  N steady     V' steady
+//     k = 1   2.00, 2.00   2.00, 2.00    1.99, 2.00   2.00, 2.00
+//     k = 2   3.08, 3.02   3.09, 3.02    3.05, 3.01   3.05, 3.01
+//     k = 3   3.89, 3.97   3.80, 3.94    3.97, 3.99   3.95, 3.99
+//
+// -- k + 1 everywhere, where the balance read off p_h directly went at k
+// (0.99 / 2.24 / 3.11 steady), dV'/dx carrying p_h's derivative. The finest
+// step is held to k + 1 - 0.1 and the coarser to k + 1 - 0.25: at k = 3 the
+// 16 -> 32 step is still pre-asymptotic. checkNativeAgainstCoupled holds it to
+// tier 2's answer.
+void checkNativeOrders(bool steady, Index k)
+{
+    const auto &cells = studyCells(steady, Tier::Native);
+    const auto &e = study(Tier::Native, steady, k);
+    BOOST_TEST_MESSAGE(tierName(Tier::Native) << (steady ? ", steady" : ", transient") << ", k = " << k
+                                              << table(cells, e, "n"));
+    for (size_t i = 0; i < cells.size(); ++i)
+    {
+        BOOST_TEST(e[i].fallbacks == 0);
+        if (i == 0)
+            continue;
+        const double slack = i + 1 == cells.size() ? 0.1 : 0.25;
+        const double oN = mms::localOrder(cells[i - 1], cells[i], e[i - 1].N, e[i].N);
+        const double oVp = mms::localOrder(cells[i - 1], cells[i], e[i - 1].Vp, e[i].Vp);
+        BOOST_TEST(oN >= static_cast<double>(k + 1) - slack, "k = " << k << ", n = " << cells[i] << ": N at " << oN);
+        BOOST_TEST(oVp >= std::min<double>(k + 1, 4) - slack,
+                   "k = " << k << ", n = " << cells[i] << ": V' at " << oVp);
+    }
+}
+
+BOOST_DATA_TEST_CASE(the_native_theta_pinch_converges_at_k_plus_one, boost::unit_test::data::make({1, 2, 3}), k)
+{
+    checkNativeOrders(false, k);
+    checkNativeAgainstCoupled(false, k);
+}
+
+BOOST_AUTO_TEST_CASE(the_native_steady_solve_converges_at_k_plus_one)
+{
+    for (Index k : {1, 2, 3})
+    {
+        checkNativeOrders(true, k);
+        checkNativeAgainstCoupled(true, k);
+    }
 }
 
 // The steady solve at every tier: the source frozen at tFinal, Newton from the

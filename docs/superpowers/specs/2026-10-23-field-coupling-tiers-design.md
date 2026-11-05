@@ -277,9 +277,8 @@ the transport rows blind; `PlainDiffusion(false)` is the refusal's fixture.
   time. The trace is not in it: a model is never handed lambda.
 * Selected by `FieldCoupling = "coupled" | "consistent"` (default `coupled`),
   which runManta applies by wrapping the `FieldModel` in
-  `FieldModelEquilibrium`. `auto` came with step 3, below. There is no registry of
-  native `EquilibriumModel`s yet: the adapter is the only route from a config,
-  and a native model is attached with `setEquilibriumModel`.
+  `FieldModelEquilibrium`. `auto` came with step 3, below. Native models have a
+  registry of their own: "The equilibrium registry", below.
 * The geometry provider a case's diagnostics read now takes the state rather
   than `psi`, so it serves both a field model and an equilibrium.
 
@@ -561,6 +560,105 @@ two (1e-16 in the state, which their central differences amplify to 1e-11):
 their translation unit, which inlines the case, changed in steps 4 and 5, and
 `MaNTA` running the same configurations is byte identical, so this is the test
 binary's code generation, not the solver's arithmetic.
+
+### The equilibrium registry
+
+* `EquilibriumModels` (`EquilibriumModel.hpp`/`.cpp`) is `FieldModels`
+  exactly: a process-global map filled by `REGISTER_EQUILIBRIUM_MODEL_HEADER` /
+  `_IMPL`, a duplicate or unknown name thrown as `std::invalid_argument`
+  listing what is registered, a `(toml::value, Grid)` constructor reading the
+  model's own table, and `PhysicsPlugins` reaching it unchanged.
+  `EquilibriumModel = "<name>"` selects one (`Category::ProblemSelection`, so
+  an error in a `Runner.configure` dict); `loadSolverConfig` refuses it beside a
+  `FieldModel`, and with `FieldCoupling = "coupled"`. runManta instantiates it
+  after the field model and attaches it through the existing
+  `setEquilibriumModel`; the adaptive drivers refuse it as they refuse a field
+  model.
+* `chooseEquilibriumCoupling` (`SolverConfig.cpp`) is its own function beside
+  `chooseFieldCoupling`, so neither rule reads the other's cases. `consistent`
+  refuses an adjoint; `reduced` takes one, through the model's transposed
+  response; `auto` with an adjoint is `reduced`, refused for a case declaring
+  no geometry derivatives.
+* `ThetaPinchPressureBalance` (`PhysicsCases/`) is the registered native model:
+  the theta pinch's balance in closed form, `V' = Phi_a / sqrt(C - p)` on the
+  transport's own pressure polynomial, `C` by a bracketed Newton on the wall.
+  Its response and transpose are exact (forward-mode duals; the transpose
+  assembles the pressure columns of G' by one dual sweep each, once per
+  equilibrium, with no `Solve`), with `DifferencedResponse` falling back to the
+  base class's.
+
+**`auto` sends a `Differenced` `Newton` solve to `consistent`, not `reduced`
+as this step was asked to.** The measurement, in step 3's setup on the native
+model (transport cost; equilibrium solves after the slash; T = 0.3 / 0.9):
+
+| | transient | PTC | Newton |
+|---|---|---|---|
+| `Analytic`, reduced, model G' | 6,900 / 6,700 (235 / 221) | 625 (9) | 325 (5) |
+| `Analytic`, reduced, differenced G' | 6,900 / 6,700 (1,006 / 1,215) | 625 (44 / 53) | 325 (19 / 28) |
+| `Differenced`, reduced | 9,275 / 9,450 | 1,625 | 825 |
+| consistent | 14,075 / 25,300 (528 / 947) | 700 (10) | 400 (6) |
+
+`Differenced` costs the reduced Newton solve 2.1x the black box's, as it does
+PTC (2.3x) -- step 4's table said the same -- so the native rule is the field
+model's with "reduced" for "coupled", Newton and PTC alike.
+
+**The model's response is an input to `auto`, and that is a second
+departure.** It moves no transport cost -- the two rows above are identical to
+the call -- only equilibrium solves. Its own response makes fewer than the
+black box everywhere. A differenced one makes 3.2-5.3x the black box's on a
+steady solve, where reduced saves at most 19% of the transport cost, so an
+`Analytic` case with a differenced response runs its steady solves
+`consistent`. On a transient it makes 1.3-1.9x the black box's to save 2.0-3.8x
+the transport calls, and stays `reduced`: which side wins depends on one
+equilibrium solve's price against one physics sweep, which `auto` cannot know.
+
+**The native model reads its pressure gradient from a recovery, not from
+`p_h`, and this is a measurement too.** On the manufactured theta pinch,
+`dV'/dx` read off `p_h` -- what "closed form, no spline" means taken literally
+-- converges at k, not k + 1: N at 0.99, 2.24, 3.11 for k = 1, 2, 3, steady, 16
+to 128 cells. It is the order the field model's header records for a V' that
+breaks where `p_h` does. A least-squares fit of degree k + 1 to `p_h`'s nodal
+values on the cell and its neighbours recovers k + 1 at k = 2, 3 and not at
+k = 1, where it decays to order 1 by 256 cells: `p_h`'s interpolation error
+repeats its shape in every cell, and the fit's slope picks the shape up. A fit
+to the patch's L2 projection of `p_h` behaves the same way. A fit of degree
+k + 1 to cell *means* over 2 ceil((k + 1)/2) + 1 cells does not, since a mean
+carries that error only as a smooth function: `dV'/dx` at 2.00, 2.99, 5.00 on an
+exact pressure, and the study at k + 1 everywhere --
+
+| | N transient (16, 32, 64) | N steady (32, 64, 128) |
+|---|---|---|
+| k = 1 | 2.00, 2.00 | 1.99, 2.00 |
+| k = 2 | 3.08, 3.02 | 3.05, 3.01 |
+| k = 3 | 3.89, 3.97 | 3.97, 3.99 |
+
+-- one level finer than the field model's study, since at k = 3 the five-cell
+patch is still pre-asymptotic from 8 to 16 cells.
+
+**It is the field model's physics, discretised differently, and lands within
+the field model's discretisation error of its answer.** In the manufactured
+study the distance between the two runs' N converges at k + 1 with them, at 0.37
+(k = 1), 0.34 to 0.10 (k = 2) and 1.9 to 2.1 (k = 3, transient) of the field
+model's own N error; at k = 3 the native error is the larger, 2.5-5x. V' is where
+they part, the spline superconverging at k <= 2. On
+`Tests/RegressionTests/ThetaPinchNative.conf`, `ThetaPinch.conf` with the
+native model, N is 5.0e-4 / 2.6e-4 from the field model's at 8 / 16 cells (RMS,
+relative), against the field model's own change on refinement to 32 cells of
+7.9e-3 / 2.6e-3. Both converge only at about 1.6 there, against k + 1 = 5: a
+property of that configuration, which the manufactured study does not share.
+
+Checks: `J_red` against a finite difference of the tier-0 residual (1.4e-9 in
+the solution with the model's response, 2e-7 with the differenced one; A_g
+zeroed misses by 1e9), G' against a difference of `Solve` (7e-8) and its transpose against the
+assembled default (1.4e-7), with `<dg, G'dp> = <G'^T dg, dp>` to 8e-16; the
+reduced adjoint inverting `J_red^T` to 7e-9 under every `FieldSolve`; the
+gradient against central differences of G to 1e-6 per entry (the differenced
+transpose to 1e-6 of the gradient's scale); an adjoint on demand making no
+physics call and one equilibrium solve, plus one per input component per point
+once per equilibrium under the differenced response (97 on six cells at k = 3);
+a reused solver bit for bit at tiers 0 and 1; and the registry's two throws.
+The tier-0/1/2 paths are byte identical to the base's, on the cmp set step 4
+used.
 
 ## Not in this work
 
