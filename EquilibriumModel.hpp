@@ -49,6 +49,15 @@ class Equilibrium
 {
 public:
     virtual ~Equilibrium() = default;
+
+private:
+    // The response EquilibriumModel::applyResponseTranspose's default assembles,
+    // kept with the equilibrium it is the derivative at: so it is built once per
+    // equilibrium whatever number of objectives or iterations transpose it, and
+    // cannot outlive it. Keyed on the points it was assembled for.
+    friend class EquilibriumModel;
+    mutable std::vector<Position> assembledInputPoints, assembledGeometryPoints;
+    mutable Matrix assembledResponse;
 };
 
 /// Where a model's response G'(p) dp comes from (EquilibriumModel::applyResponse).
@@ -145,6 +154,28 @@ public:
                                GlobalState const &dp, std::vector<Position> const &inputPoints,
                                Vector const &weights, Time t,
                                std::vector<Position> const &geometryPoints);
+
+    /// The transposed response, dp = G'(p)^T dg: the adjoint at tier 1.
+    ///
+    /// `dg` is (nGeometry, geometryPoints.size()), a sensitivity to the geometry
+    /// at the points the physics is evaluated at, and `dp` arrives zeroed and
+    /// shaped like `states`; its Variable, Derivative, Flux and Aux rows are
+    /// filled. The other arguments are applyResponse's.
+    ///
+    /// **The default assembles G' and transposes it**: one applyResponse per
+    /// component of the input -- every row of Variable, Derivative, Flux and Aux
+    /// at every input point, so (3 nVars + nAux) times the number of points --
+    /// which under the differenced applyResponse is that many equilibrium
+    /// solves. Assembled once per equilibrium and kept on it, so every further
+    /// call at that equilibrium is a matrix product. A forward difference has no
+    /// transpose action of its own; the assembled matrix is the only one there
+    /// is. A model that has one -- a code with an adjoint, or
+    /// FieldModelEquilibrium -- overrides this, and declares
+    /// EquilibriumResponse::Model as it does for applyResponse.
+    virtual void applyResponseTranspose(GlobalState &dp, Equilibrium const &e, GlobalState const &states,
+                                        Matrix const &dg, std::vector<Position> const &inputPoints,
+                                        Vector const &weights, Time t,
+                                        std::vector<Position> const &geometryPoints);
 
     /// The relative step the default applyResponse takes. sqrt(eps), which is
     /// right for an equilibrium converged to round-off. A model that converges

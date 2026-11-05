@@ -124,20 +124,13 @@ void FieldModelEquilibrium::Geometry(MatrixRef g, Equilibrium const &e, std::vec
     }
 }
 
-// See the class comment. Everything here is field-side work, so it is taken at
-// the converged psi exactly rather than at the last Newton iterate's, whose
-// factorisation Solve leaves behind.
-void FieldModelEquilibrium::applyResponse(MatrixRef dg, Equilibrium const &e, GlobalState const &states,
-                                          GlobalState const &dp, std::vector<Position> const &inputPoints,
-                                          Vector const &weights, Time t,
-                                          std::vector<Position> const &geometryPoints)
+// The linearisation both directions apply, at e's converged psi: taken once per
+// equilibrium, dGeometry/dpsi once per set of points, and the model's own
+// factorisation put back to e's dR/dpsi if another Solve has moved it.
+void FieldModelEquilibrium::linearise(Equilibrium const &e, GlobalState const &states,
+                                      std::vector<Position> const &inputPoints, Vector const &weights,
+                                      std::vector<Position> const &geometryPoints)
 {
-    if (spec.response == EquilibriumResponse::Differenced)
-    {
-        EquilibriumModel::applyResponse(dg, e, states, dp, inputPoints, weights, t, geometryPoints);
-        return;
-    }
-
     FieldModelState const &s = asState(e);
     const Index nField = model->nFieldDOF();
 
@@ -170,6 +163,25 @@ void FieldModelEquilibrium::applyResponse(MatrixRef dg, Equilibrium const &e, Gl
         model->updateFieldJacobian(dRdpsi, dRddpsidt, 0.0);
         factorisedFor = &e;
     }
+}
+
+// See the class comment. Everything here is field-side work, so it is taken at
+// the converged psi exactly rather than at the last Newton iterate's, whose
+// factorisation Solve leaves behind.
+void FieldModelEquilibrium::applyResponse(MatrixRef dg, Equilibrium const &e, GlobalState const &states,
+                                          GlobalState const &dp, std::vector<Position> const &inputPoints,
+                                          Vector const &weights, Time t,
+                                          std::vector<Position> const &geometryPoints)
+{
+    if (spec.response == EquilibriumResponse::Differenced)
+    {
+        EquilibriumModel::applyResponse(dg, e, states, dp, inputPoints, weights, t, geometryPoints);
+        return;
+    }
+
+    FieldModelState const &s = asState(e);
+    const Index nField = model->nFieldDOF();
+    linearise(e, states, inputPoints, weights, geometryPoints);
 
     Vector rhs(nField);
     for (Index f = 0; f < nField; ++f)
@@ -179,4 +191,36 @@ void FieldModelEquilibrium::applyResponse(MatrixRef dg, Equilibrium const &e, Gl
 
     for (size_t j = 0; j < geometryPoints.size(); ++j)
         dg.col(static_cast<Eigen::Index>(j)) = -(s.dGdpsi[j] * dpsi);
+}
+
+// See the declaration: each step of applyResponse, transposed and in reverse.
+void FieldModelEquilibrium::applyResponseTranspose(GlobalState &dp, Equilibrium const &e, GlobalState const &states,
+                                                   Matrix const &dg, std::vector<Position> const &inputPoints,
+                                                   Vector const &weights, Time t,
+                                                   std::vector<Position> const &geometryPoints)
+{
+    if (spec.response == EquilibriumResponse::Differenced)
+    {
+        EquilibriumModel::applyResponseTranspose(dp, e, states, dg, inputPoints, weights, t, geometryPoints);
+        return;
+    }
+
+    FieldModelState const &s = asState(e);
+    const Index nField = model->nFieldDOF();
+    linearise(e, states, inputPoints, weights, geometryPoints);
+
+    Vector v = Vector::Zero(nField);
+    for (size_t j = 0; j < geometryPoints.size(); ++j)
+        v += s.dGdpsi[j].transpose() * dg.col(static_cast<Eigen::Index>(j));
+    Vector w(nField);
+    model->solveBTranspose(w, v);
+
+    for (Index f = 0; f < nField; ++f)
+    {
+        GlobalState const &dRf = s.dR[f];
+        dp.Variable() -= w(f) * dRf.Variable();
+        dp.Derivative() -= w(f) * dRf.Derivative();
+        dp.Flux() -= w(f) * dRf.Flux();
+        dp.Aux() -= w(f) * dRf.Aux();
+    }
 }

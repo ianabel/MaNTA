@@ -2772,37 +2772,46 @@ void SystemSolver::updateMatricesForJacSolve()
     }
     if (reducedCoupling())
     {
-        // Tier 1: the equilibrium at yJac -- already solved, since filling the
-        // nodes' geometry above asked for it -- and A_g from the same response
-        // A1 is built from, with no chain through dGeometry/dpsi.
-        ReducedBlocks &b = reducedBlocks;
-        equilibriumAt(yJac, jt);
-        b.eq = equilibriumCache.eq;
-        b.states.emplace(yJac.evalOnNodes());
-        b.inputPoints = yJac.getPoints();
-        b.weights = integrator.integrationWeights(yJac.getBasis(), grid);
-        b.physicsPoints = nodes.points;
-        b.t = jt;
-        const GeometryResponse response = geometryResponse(nodes, jt);
-        const Index nPhys = static_cast<Index>(nodes.points.size()) / nCells;
-        b.Ag.assign(nCells, Matrix(localDOF, nGeom * nPhys));
-        for (Index i = 0; i < nCells; ++i)
-            dPhysics_dGeometry_Mat(b.Ag[i], yJac, response, i);
-
-        const Eigen::Index nPoints = static_cast<Eigen::Index>(nodes.points.size());
-        Matrix g = Matrix::Zero(nGeom, nPoints);
-        equilibriumModel->Geometry(g, *b.eq, nodes.points);
-        b.geometryWeights.resize(nGeom * nPoints);
-        for (Index slot = 0; slot < nGeom; ++slot)
-        {
-            const double largest = g.row(slot).cwiseAbs().maxCoeff();
-            const double floor = largest > 0.0 ? largest : 1.0;
-            for (Eigen::Index j = 0; j < nPoints; ++j)
-                b.geometryWeights(j * nGeom + slot) = 1.0 / (rtol * (std::abs(g(slot, j)) + floor));
-        }
-        b.valid = true;
+        // Tier 1: the forward solve's blocks, and the record's copy of them for
+        // an adjoint to transpose without asking the case again.
+        reducedBlocks = buildReducedBlocks(yJac, nodes, jt);
+        rec.reduced = reducedBlocks;
     }
     rec.valid = true;
+}
+
+// See the declaration. The equilibrium at Y is already solved -- filling the
+// nodes' geometry asked for it -- and A_g comes from the same response A1 is
+// built from, with no chain through dGeometry/dpsi.
+SystemSolver::ReducedBlocks SystemSolver::buildReducedBlocks(DGSoln const &Y, PhysicsNodes const &nodes, Time tEval)
+{
+    ReducedBlocks b;
+    equilibriumAt(Y, tEval);
+    b.eq = equilibriumCache.eq;
+    b.states = std::make_shared<GlobalState const>(Y.evalOnNodes());
+    b.inputPoints = Y.getPoints();
+    b.weights = integrator.integrationWeights(Y.getBasis(), grid);
+    b.physicsPoints = nodes.points;
+    b.t = tEval;
+    const GeometryResponse response = geometryResponse(nodes, tEval);
+    const Index nPhys = static_cast<Index>(nodes.points.size()) / nCells;
+    b.Ag.assign(nCells, Matrix(localDOF, nGeom * nPhys));
+    for (Index i = 0; i < nCells; ++i)
+        dPhysics_dGeometry_Mat(b.Ag[i], Y, response, i);
+
+    const Eigen::Index nPoints = static_cast<Eigen::Index>(nodes.points.size());
+    Matrix g = Matrix::Zero(nGeom, nPoints);
+    equilibriumModel->Geometry(g, *b.eq, nodes.points);
+    b.geometryWeights.resize(nGeom * nPoints);
+    for (Index slot = 0; slot < nGeom; ++slot)
+    {
+        const double largest = g.row(slot).cwiseAbs().maxCoeff();
+        const double floor = largest > 0.0 ? largest : 1.0;
+        for (Eigen::Index j = 0; j < nPoints; ++j)
+            b.geometryWeights(j * nGeom + slot) = 1.0 / (rtol * (std::abs(g(slot, j)) + floor));
+    }
+    b.valid = true;
+    return b;
 }
 
 void SystemSolver::mapDGtoSundials(std::vector<VectorWrapper> &SQU_cell, VectorWrapper &lam, sunrealtype *const &Y) const
@@ -4007,6 +4016,8 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
         rec.stateDot.assign(Ydot.data(), Ydot.data() + Ydot.getDoF());
         rec.scalar = evaluateScalarCoupling(Y, Ydot, nodes, tEval);
     }
+    if (reducedCoupling())
+        rec.reduced = buildReducedBlocks(Y, nodes, tEval);
 
     rec.state.assign(Y.data(), Y.data() + Y.getDoF());
     rec.t = tEval;
@@ -4028,7 +4039,7 @@ Vector SystemSolver::objectiveWeights(DGSoln const &state) const
 
 double SystemSolver::objectiveValue(AdjointProblem &objective, Index gIndex, DGSoln &state, Time tEval)
 {
-    if (fieldModel)
+    if (fieldModel || reducedCoupling())
     {
         PhysicsNodes nodes = physicsNodesAt(state, tEval);
         return objective.GFnAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(state),
@@ -4044,7 +4055,8 @@ double SystemSolver::objectiveValue(AdjointProblem &objective, Index gIndex, DGS
 
 std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &objective,
                                                             Index gIndex, DGSoln const &state,
-                                                            Time tEval, Vector *dGdmu, Vector *dGdpsi)
+                                                            Time tEval, Vector *dGdmu, Vector *dGdpsi,
+                                                            Vector *dGdgeom)
 {
     // With the superconvergent scheme the objective is a functional of u*, so
     // dG/dy runs through the reconstruction just as the residual's Jacobian does.
@@ -4066,6 +4078,19 @@ std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &obje
     // geometry slots, so its explicit share of G = sum_j w_j g(geom(psi, x_j))
     // is sum_j w_j (dg/dgeom)_j . dgeom/dpsi(x_j) -- diag(w), the weights G
     // itself is summed with, at the nodes dg was evaluated on.
+    if (dGdgeom != nullptr)
+    {
+        if (reducedCoupling())
+        {
+            const Vector w = objectiveWeights(state);
+            Matrix const &dgdgeom = dGdvars.GeometryMatrix();
+            dGdgeom->resize(dgdgeom.size());
+            for (Eigen::Index j = 0; j < dgdgeom.cols(); ++j)
+                dGdgeom->segment(j * nGeom, nGeom) = w(j) * dgdgeom.col(j);
+        }
+        else
+            dGdgeom->resize(0);
+    }
     if (dGdpsi != nullptr)
     {
         if (fieldModel)
@@ -4175,10 +4200,14 @@ void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
     // Every adjoint path comes through here, the on-demand ones included, so
     // this is the one guard that cannot be routed around. initialize() refuses
     // the configured cases earlier and with more to say.
-    if (equilibriumModel)
-        throw std::logic_error("No adjoint can be solved with an equilibrium model attached (FieldCoupling = "
-                               "\"consistent\" or \"reduced\"): no transposed response through the "
-                               "field is built.");
+    if (equilibriumModel && !reducedCoupling())
+        throw std::logic_error("No adjoint can be solved with an equilibrium coupled as a black box "
+                               "(FieldCoupling = \"consistent\"): it supplies no derivatives through the "
+                               "field. Couple it (\"reduced\") or the field model (\"coupled\").");
+    if (reducedCoupling() && !src.reduced.valid)
+        throw std::logic_error("The derivatives the adjoint operator is assembled from carry no tier-1 "
+                               "blocks: whatever recorded them has to build them beside the transport "
+                               "derivatives (buildReducedBlocks).");
 
     // Rebuild rather than grow. Every container filled below is appended to, so
     // a second adjoint solve on one solver used to leave them holding 2 * nCells
@@ -4189,6 +4218,7 @@ void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
     adjoint_CGBlocks.clear();
     A1_transpose_cellwise.clear();
     A2_transpose_cellwise.clear();
+    Ag_transpose_cellwise.clear();
     adjointMXSolvers.resize(nCells);
 
     GlobalStateMatrix &dSigma_vals = src.dSigma;
@@ -4431,6 +4461,19 @@ void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
     else
         adjoint_field.resize(0);
 
+    // ---- tier 1's coupling, transposed: A_g^T materialised beside A1^T and
+    // A2^T, and the blocks G'^T is applied at copied out of the record. A_g
+    // does not depend on alpha, and the forward solve's blocks are not touched.
+    if (reducedCoupling())
+    {
+        adjointReducedBlocks = src.reduced;
+        Ag_transpose_cellwise.reserve(nCells);
+        for (Index i = 0; i < nCells; ++i)
+            Ag_transpose_cellwise.emplace_back(src.reduced.Ag[i].transpose());
+    }
+    else
+        adjointReducedBlocks = {};
+
     // ---- the scalar border, at alpha = 0 for the same reason, from the same
     // evaluation, into storage of the adjoint's own: unlike the field blocks the
     // forward solve's v, w and N_global are left alone, so nothing has to put
@@ -4466,7 +4509,7 @@ void SystemSolver::assembleAdjointOperator(PhysicsDerivatives &src)
 void SystemSolver::initializeMatricesForAdjointSolve(Index gIndex)
 {
     assembleAdjointOperator(adjointDerivativesAt(y, dydt, jt));
-    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field);
+    G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field, &G_geometry);
 
     initialised = true;
 }
@@ -4536,7 +4579,7 @@ void SystemSolver::solveAdjointAt(AdjointProblem &objective, std::vector<Index> 
     assembleAdjointOperator(src);
     for (Index g : objectives)
     {
-        G_y = assembleObjectiveGradient(objective, g, state, src.t, &G_mu, &G_field);
+        G_y = assembleObjectiveGradient(objective, g, state, src.t, &G_mu, &G_field, &G_geometry);
         solveAdjointState();
         storeAdjointSolution(g, state, operatorAtState);
     }
@@ -4714,6 +4757,12 @@ void SystemSolver::solveAdjointState()
         return;
     }
 
+    if (reducedCoupling())
+    {
+        solveReducedAdjoint();
+        return;
+    }
+
     if (!fieldModel)
     {
         solveTransportAdjoint(G_y, adjoint_squ, adjoint_lambdas);
@@ -4725,12 +4774,20 @@ void SystemSolver::solveAdjointState()
     case FieldSolveMode::Exact:
         solveCoupledAdjointExact();
         return;
-    // The transposed sweep under krylov too: there is no transposed GMRES yet,
-    // and the sweep escalates to the exact transposed solve at its cap, so the
-    // gradient is the same either way.
     case FieldSolveMode::Iterative:
-    case FieldSolveMode::Krylov:
         solveCoupledAdjointIterative();
+        return;
+    // Transposed GMRES, escalating to the exact transposed Schur solve as the
+    // sweep does.
+    case FieldSolveMode::Krylov:
+        if (adjointCouplingKrylov(fieldAdjointCouplingOperator()))
+            return;
+        fieldAdjointFellBack = true;
+        logmsg<LOG_LEVEL::WARNING>(
+            "The coupled adjoint GMRES did not converge to FieldSolveAdjointTolerance = {:g}; falling "
+            "back to the exact transposed Schur solve. The gradient is correct either way.",
+            fieldSolveAdjointTolerance);
+        solveCoupledAdjointExact();
         return;
     }
 }
@@ -4968,6 +5025,259 @@ void SystemSolver::solveCoupledAdjointIterative()
     solveCoupledAdjointExact();
 }
 
+// ---- the transposed coupled solves; see the declaration for the algebra.
+
+// Tier 2: zeta = B^T z_psi. L^T zeta = -A2^T B^-T zeta, C^T z = A1^T z.
+SystemSolver::AdjointCouplingOperator SystemSolver::fieldAdjointCouplingOperator()
+{
+    AdjointCouplingOperator op;
+    op.n = nField;
+    op.gc = G_field;
+    op.applyLT = [this](Vector const &zeta)
+    {
+        Vector zpsi(nField);
+        fieldModel->solveBTranspose(zpsi, zeta);
+        std::vector<Vector> out(nCells);
+        for (Index i = 0; i < nCells; ++i)
+            out[i] = -(A2_transpose_cellwise[i] * zpsi);
+        return out;
+    };
+    op.applyCT = [this](std::vector<Vector> const &z)
+    {
+        Vector out = Vector::Zero(nField);
+        for (Index i = 0; i < nCells; ++i)
+            out += A1_transpose_cellwise[i] * z[i];
+        return out;
+    };
+    op.finish = [this](Vector const &zeta)
+    {
+        adjoint_field.resize(nField);
+        fieldModel->solveBTranspose(adjoint_field, zeta);
+    };
+    return op;
+}
+
+// Tier 1: zeta lives on the geometry at the physics nodes. C^T z = A_g^T z,
+// cell by cell into that cell's nodes; L^T zeta = P^T G'^T zeta, P^T being the
+// nodal input put back into the cells' coefficients -- the nodal basis makes it
+// a reshaping, as P is in reducedResponse.
+SystemSolver::AdjointCouplingOperator SystemSolver::reducedAdjointCouplingOperator()
+{
+    ReducedBlocks const &b = adjointReducedBlocks;
+    if (!b.valid)
+        throw std::logic_error("A reduced adjoint solve was asked for before its operator was assembled.");
+    const Index m = b.nPerCell();
+    AdjointCouplingOperator op;
+    op.n = nCells * m;
+    op.gc = G_geometry.size() == op.n ? G_geometry : Vector::Zero(op.n);
+    op.applyCT = [this, m](std::vector<Vector> const &z)
+    {
+        Vector out(nCells * m);
+        for (Index i = 0; i < nCells; ++i)
+            out.segment(i * m, m) = Ag_transpose_cellwise[i] * z[i];
+        return out;
+    };
+    op.applyLT = [this](Vector const &zeta)
+    {
+        ReducedBlocks const &b = adjointReducedBlocks;
+        const Eigen::Index nPoints = static_cast<Eigen::Index>(b.physicsPoints.size());
+        const Matrix dg = Eigen::Map<const Matrix>(zeta.data(), nGeom, nPoints);
+        GlobalState dp = b.states->zeroedLike();
+        equilibriumModel->applyResponseTranspose(dp, *b.eq, *b.states, dg, b.inputPoints, b.weights, b.t,
+                                                 b.physicsPoints);
+        ++adjointResponses;
+
+        const Index kp = k + 1;
+        std::vector<Vector> out(nCells, Vector::Zero(localDOF));
+        for (Index i = 0; i < nCells; ++i)
+        {
+            for (Index v = 0; v < nVars; ++v)
+            {
+                out[i].segment(v * kp, kp) = dp.Flux().row(v).segment(i * kp, kp).transpose();
+                out[i].segment(nVars * kp + v * kp, kp) = dp.Derivative().row(v).segment(i * kp, kp).transpose();
+                out[i].segment(2 * nVars * kp + v * kp, kp) = dp.Variable().row(v).segment(i * kp, kp).transpose();
+            }
+            for (Index a = 0; a < nAux; ++a)
+                out[i].segment(3 * nVars * kp + a * kp, kp) = dp.Aux().row(a).segment(i * kp, kp).transpose();
+        }
+        return out;
+    };
+    op.finish = [](Vector const &) {};
+    return op;
+}
+
+namespace
+{
+double cellwiseNorm2(std::vector<Vector> const &v)
+{
+    double out = 0.0;
+    for (Vector const &c : v)
+        out += c.squaredNorm();
+    return out;
+}
+
+std::vector<Vector> cellwiseSum(std::vector<Vector> const &a, std::vector<Vector> const &b)
+{
+    std::vector<Vector> out(a.size());
+    for (size_t i = 0; i < a.size(); ++i)
+        out[i] = a[i] + b[i];
+    return out;
+}
+} // namespace
+
+// solveCoupledAdjointIterative's sweep on zeta, with the same backward-error
+// test, and for the same reason the accepted zeta is the unaccelerated one:
+// row two then holds exactly, and row one's residual is L^T (zeta_prev - zeta),
+// which is what is measured.
+bool SystemSolver::adjointCouplingSweep(AdjointCouplingOperator const &op)
+{
+    const double rhsNorm = std::sqrt(cellwiseNorm2(G_y) + op.gc.squaredNorm());
+    Vector zeta = Vector::Zero(op.n);
+    Vector delta = Vector::Zero(op.n), deltaPrev = Vector::Zero(op.n);
+    bool haveDeltaPrev = false;
+
+    for (int sweep = 0; sweep < fieldSolveMaxAdjointSweeps; ++sweep)
+    {
+        ++fieldAdjointSweeps;
+
+        solveTransportAdjoint(sweep == 0 ? G_y : cellwiseSum(G_y, op.applyLT(zeta)), adjoint_squ,
+                              adjoint_lambdas);
+        const Vector g = op.gc - op.applyCT(adjoint_squ);
+
+        deltaPrev = delta;
+        delta = g - zeta;
+        const double residualNorm = std::sqrt(cellwiseNorm2(op.applyLT(delta)));
+        if (residualNorm <= fieldSolveAdjointTolerance * rhsNorm)
+        {
+            op.finish(g);
+            return true;
+        }
+
+        zeta = haveDeltaPrev ? ironsTuck(g, delta, deltaPrev) : g;
+        haveDeltaPrev = true;
+    }
+    return false;
+}
+
+// GMRES (SPGMR) on zeta, unscaled: its residual is row two's residual of the
+// pair (z, zeta) with z = A^-T (g_x + L^T zeta), and row one's is exactly zero,
+// so stopping it at FieldSolveAdjointTolerance times the whole right-hand
+// side's norm is the sweep's backward-error test.
+bool SystemSolver::adjointCouplingKrylov(AdjointCouplingOperator const &op)
+{
+    const double rhsNorm = std::sqrt(cellwiseNorm2(G_y) + op.gc.squaredNorm());
+
+    std::vector<Vector> squ0;
+    Vector lam0;
+    solveTransportAdjoint(G_y, squ0, lam0);
+    const Vector rhs = op.gc - op.applyCT(squ0);
+
+    N_Vector b = N_VNew_Serial(op.n, ctx), x = N_VClone(b);
+    std::copy(rhs.data(), rhs.data() + op.n, N_VGetArrayPointer(b));
+
+    struct Data
+    {
+        SystemSolver *self;
+        AdjointCouplingOperator const *op;
+        std::exception_ptr error;
+    } data{this, &op, nullptr};
+
+    // out = v + C^T A^-T L^T v. As in couplingKrylov, nothing may unwind
+    // through SPGMR.
+    SUNATimesFn atimes = [](void *p, N_Vector v, N_Vector out) -> int
+    {
+        auto *d = static_cast<Data *>(p);
+        try
+        {
+            const Index n = static_cast<Index>(N_VGetLength(v));
+            const Vector vc = Eigen::Map<const Vector>(N_VGetArrayPointer(v), n);
+            std::vector<Vector> squ;
+            Vector lam;
+            d->self->solveTransportAdjoint(d->op->applyLT(vc), squ, lam);
+            Eigen::Map<Vector>(N_VGetArrayPointer(out), n) = vc + d->op->applyCT(squ);
+            return 0;
+        }
+        catch (...)
+        {
+            d->error = std::current_exception();
+            return -1;
+        }
+    };
+
+    SUNLinearSolver S = SUNLinSol_SPGMR(x, SUN_PREC_NONE, fieldSolveMaxAdjointSweeps, ctx);
+    SUNLinSol_SPGMRSetMaxRestarts(S, krylovRestarts);
+    SUNLinSolSetATimes(S, &data, atimes);
+    SUNLinSolInitialize(S);
+    SUNLinSolSetZeroGuess(S, SUNTRUE);
+    N_VConst(0.0, x);
+    const int flag =
+        op.n > 0 ? SUNLinSolSolve(S, nullptr, x, b, fieldSolveAdjointTolerance * rhsNorm) : SUN_SUCCESS;
+    adjointKrylovIterations += SUNLinSolNumIters(S);
+    SUNLinSolFree(S);
+
+    const Vector zeta = Eigen::Map<const Vector>(N_VGetArrayPointer(x), op.n);
+    N_VDestroy(b);
+    N_VDestroy(x);
+    if (data.error)
+        std::rethrow_exception(data.error);
+    if (flag != SUN_SUCCESS)
+        return false;
+
+    solveTransportAdjoint(op.n > 0 ? cellwiseSum(G_y, op.applyLT(zeta)) : G_y, adjoint_squ, adjoint_lambdas);
+    op.finish(zeta);
+    return true;
+}
+
+// See the declaration. Column j of (I + C^T A^-T L^T) is e_j + C^T A^-T L^T e_j.
+void SystemSolver::adjointCouplingExact(AdjointCouplingOperator const &op)
+{
+    std::vector<Vector> squ;
+    Vector lam;
+    Matrix S = Matrix::Identity(op.n, op.n);
+    for (Index j = 0; j < op.n; ++j)
+    {
+        solveTransportAdjoint(op.applyLT(Vector::Unit(op.n, j)), squ, lam);
+        S.col(j) += op.applyCT(squ);
+    }
+    solveTransportAdjoint(G_y, squ, lam);
+    const Vector rhs = op.gc - op.applyCT(squ);
+    // Assigned before use: never slice an Eigen solve() expression.
+    const Vector zeta = S.partialPivLu().solve(rhs);
+
+    solveTransportAdjoint(op.n > 0 ? cellwiseSum(G_y, op.applyLT(zeta)) : G_y, adjoint_squ, adjoint_lambdas);
+    op.finish(zeta);
+}
+
+// See the declaration. The escalations are the forward solve's, with one more
+// at the end: an adjoint runs once per objective, where a failed solve would be
+// a wrong gradient beside a good G, so the exact solve stands behind GMRES here
+// where the forward solve throws instead.
+void SystemSolver::solveReducedAdjoint()
+{
+    const AdjointCouplingOperator op = reducedAdjointCouplingOperator();
+    switch (fieldSolveMode)
+    {
+    case FieldSolveMode::Exact:
+        adjointCouplingExact(op);
+        return;
+    case FieldSolveMode::Iterative:
+        if (adjointCouplingSweep(op))
+            return;
+        [[fallthrough]];
+    case FieldSolveMode::Krylov:
+        if (adjointCouplingKrylov(op))
+            return;
+        fieldAdjointFellBack = true;
+        logmsg<LOG_LEVEL::WARNING>(
+            "The reduced adjoint did not converge to FieldSolveAdjointTolerance = {:g}; falling back to "
+            "the exact transposed solve, at {} transposed transport solves. The gradient is correct "
+            "either way.",
+            fieldSolveAdjointTolerance, op.n + 2);
+        adjointCouplingExact(op);
+        return;
+    }
+}
+
 SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
 {
     ObjectiveEstimate out;
@@ -5005,7 +5315,10 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     const Vector deltaMu = nScalars > 0 ? Vector(deltaMap.Scalars()) : Vector();
     // ...and the field's, which an objective reading geometry sees through G_field.
     const Vector deltaPsi = nField > 0 ? Vector(deltaMap.getField()) : Vector();
-    double deltaNorm = deltaMu.squaredNorm() + deltaPsi.squaredNorm();
+    // ...and at tier 1 the geometry's, G' P delta from the build just made,
+    // which such an objective sees through G_geometry. One applyResponse.
+    const Vector deltaGeom = reducedCoupling() ? reducedResponse(delta) : Vector();
+    double deltaNorm = deltaMu.squaredNorm() + deltaPsi.squaredNorm() + deltaGeom.squaredNorm();
     for (Index i = 0; i < static_cast<Index>(nCells); ++i)
         for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
         {
@@ -5023,8 +5336,9 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
 
         // dG/dy for this objective, from its dg alone: the Jacobian built above
         // is the only one this needs, and it is not transposed.
-        Vector Gmu, Gpsi;
-        const std::vector<Vector> Gy = assembleObjectiveGradient(*adjointProblem, g, y, jt, &Gmu, &Gpsi);
+        Vector Gmu, Gpsi, Ggeom;
+        const std::vector<Vector> Gy =
+            assembleObjectiveGradient(*adjointProblem, g, y, jt, &Gmu, &Gpsi, &Ggeom);
 
         double dot = nScalars > 0 ? Gmu.dot(deltaMu) : 0.0;
         double dGdyNorm = nScalars > 0 ? Gmu.squaredNorm() : 0.0;
@@ -5032,6 +5346,11 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
         {
             dot += Gpsi.dot(deltaPsi);
             dGdyNorm += Gpsi.squaredNorm();
+        }
+        if (reducedCoupling())
+        {
+            dot += Ggeom.dot(deltaGeom);
+            dGdyNorm += Ggeom.squaredNorm();
         }
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             for (Index j = 0; j < static_cast<Index>(localDOF); ++j)
@@ -5111,7 +5430,7 @@ void SystemSolver::computeAdjointGradients()
     initialised = true;
     for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
     {
-        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field);
+        G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field, &G_geometry);
         solveAdjointState();
         storeAdjointSolution(gIndex, y, true);
         accumulateAdjointGradients(gIndex);
@@ -5177,7 +5496,7 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
     // y-based forms evaluate the objective on states with no geometry rows, and
     // one that reads geometry would read past them.
     Matrix dGdp;
-    if (fieldModel)
+    if (fieldModel || reducedCoupling())
     {
         PhysicsNodes nodes = physicsNodesAt(y, jt);
         dGdp = adjointProblem->dGFndpAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(y), nPhys, y,

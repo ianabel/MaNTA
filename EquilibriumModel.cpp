@@ -64,3 +64,68 @@ void EquilibriumModel::applyResponse(MatrixRef dg, Equilibrium const &e, GlobalS
     Geometry(g1, *perturbed, geometryPoints);
     dg = (g1 - g0) / h;
 }
+
+// See the declaration. Column c of the assembled matrix is the response to a
+// unit change in one input component at one point, laid out the way the dense
+// G' acts: rows are the geometry at the geometry points, flattened point by
+// point (slot fastest), as dg's storage is; columns run Variable, Derivative,
+// Flux, Aux, and within each row by row, point by point.
+void EquilibriumModel::applyResponseTranspose(GlobalState &dp, Equilibrium const &e, GlobalState const &states,
+                                              Matrix const &dg, std::vector<Position> const &inputPoints,
+                                              Vector const &weights, Time t,
+                                              std::vector<Position> const &geometryPoints)
+{
+    const Eigen::Index nIn = static_cast<Eigen::Index>(inputPoints.size());
+    const Eigen::Index nGeomValues = nGeometry() * static_cast<Eigen::Index>(geometryPoints.size());
+    // The four blocks of the input, in the order the columns take them.
+    auto block = [](GlobalState &s, int b) -> Matrix &
+    {
+        switch (b)
+        {
+        case 0:
+            return s.Variable();
+        case 1:
+            return s.Derivative();
+        case 2:
+            return s.Flux();
+        default:
+            return s.Aux();
+        }
+    };
+
+    if (e.assembledInputPoints != inputPoints || e.assembledGeometryPoints != geometryPoints ||
+        e.assembledResponse.rows() != nGeomValues)
+    {
+        Eigen::Index nCols = 0;
+        GlobalState unit = states.zeroedLike();
+        for (int b = 0; b < 4; ++b)
+            nCols += block(unit, b).rows() * nIn;
+
+        Matrix G(nGeomValues, nCols);
+        Matrix column(nGeometry(), static_cast<Eigen::Index>(geometryPoints.size()));
+        Eigen::Index c = 0;
+        for (int b = 0; b < 4; ++b)
+            for (Eigen::Index row = 0; row < block(unit, b).rows(); ++row)
+                for (Eigen::Index j = 0; j < nIn; ++j, ++c)
+                {
+                    block(unit, b)(row, j) = 1.0;
+                    column.setZero();
+                    applyResponse(column, e, states, unit, inputPoints, weights, t, geometryPoints);
+                    G.col(c) = Eigen::Map<const Vector>(column.data(), column.size());
+                    block(unit, b)(row, j) = 0.0;
+                }
+        e.assembledResponse = std::move(G);
+        e.assembledInputPoints = inputPoints;
+        e.assembledGeometryPoints = geometryPoints;
+    }
+
+    const Vector product = e.assembledResponse.transpose() * Eigen::Map<const Vector>(dg.data(), dg.size());
+    Eigen::Index c = 0;
+    for (int b = 0; b < 4; ++b)
+    {
+        Matrix &out = block(dp, b);
+        for (Eigen::Index row = 0; row < out.rows(); ++row)
+            for (Eigen::Index j = 0; j < nIn; ++j, ++c)
+                out(row, j) = product(c);
+    }
+}

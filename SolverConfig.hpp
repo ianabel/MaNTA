@@ -305,9 +305,10 @@ enum class FieldCouplingMode
 // FieldCoupling resolved against what the case and the model can supply.
 // "consistent", "coupled" and "reduced" are taken as asked, except that "coupled"
 // and "reduced" are refused for a case declaring no geometry derivatives, and
-// "reduced" for a field with dynamics or a run solving an adjoint. "auto" never
-// picks "reduced": with the field model's own unknowns available, "coupled" is
-// the same Jacobian without the equilibrium solves. It picks:
+// "reduced" for a field with dynamics. "auto" never picks "reduced": with the
+// field model's own unknowns available, "coupled" is the same Jacobian without
+// the equilibrium solves, and its adjoint transposes the model's own blocks
+// rather than a response. So an adjoint still makes "auto" couple. It picks:
 //
 //   * consistent when the case declares no geometry derivatives -- and refuses,
 //     naming why, when the run needs the coupled field anyway: a field with

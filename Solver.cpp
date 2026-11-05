@@ -76,21 +76,17 @@ void SystemSolver::initialize()
 	// Tier 1's blocks hold an equilibrium of the last run's; nothing may read
 	// them before this run's first Jacobian build.
 	reducedBlocks = {};
+	adjointReducedBlocks = {};
 	if (equilibriumModel)
 	{
 		equilibriumModel->resetForRun();
 
 		// No adjoint through the field at tier 0. Run as a frozen-field gradient
 		// it would be wrong by the field's share -- a third of the closed-form
-		// gradient on the theta pinch -- so it is refused rather than run. Nor
-		// at tier 1 yet: its adjoint needs G'^T, which nothing builds.
-		if (adjointProblem != nullptr || steadyTest == SteadyTest::Objective)
+		// gradient on the theta pinch -- so it is refused rather than run. Tier
+		// 1 transposes its response (applyResponseTranspose), so it has one.
+		if (!reducedCoupling() && (adjointProblem != nullptr || steadyTest == SteadyTest::Objective))
 		{
-			if (reducedCoupling())
-				throw std::invalid_argument(
-					"An adjoint cannot be solved with FieldCoupling = \"reduced\": the transposed "
-					"response G'^T is not built, and a gradient without it would be wrong by the "
-					"field's share. Couple the field model to get gradients.");
 			throw std::invalid_argument(
 				"An adjoint cannot be solved with FieldCoupling = \"consistent\": the equilibrium "
 				"supplies no derivatives, and a gradient with the field frozen would be wrong by "
@@ -149,6 +145,8 @@ void SystemSolver::initialize()
 	fieldSweepFallbacks = 0;
 	fieldAdjointSweeps = 0;
 	fieldAdjointFellBack = false;
+	adjointKrylovIterations = 0;
+	adjointResponses = 0;
 	reducedResponses = 0;
 	krylovSolves = 0;
 	krylovIterations = 0;

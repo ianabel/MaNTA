@@ -705,10 +705,15 @@ class SystemSolver
         // geometry rows contracted with the weights G is summed with and the
         // model's dGeometry_dpsi at the same nodes. It is the field rows' share
         // of the adjoint right-hand side, G_field. Empty without a field model.
+        //
+        // At tier 1, the same weighted geometry rows uncontracted go into
+        // *dGdgeom: G_geometry, w_j dg/dgeom at each physics node, node by node.
+        // Empty otherwise.
         std::vector<Vector> assembleObjectiveGradient(AdjointProblem &objective, Index gIndex,
                                                       DGSoln const &state, Time tEval,
                                                       Vector *dGdmu = nullptr,
-                                                      Vector *dGdpsi = nullptr);
+                                                      Vector *dGdpsi = nullptr,
+                                                      Vector *dGdgeom = nullptr);
 
         // G for objective gIndex at `state`, as the run reports it. With a field
         // model attached, on the physics nodes physicsNodesAt fills with geometry,
@@ -1451,12 +1456,14 @@ class SystemSolver
             long solves, iterations, fallbacks, adjointSweeps;
             bool adjointFellBack;
             long responses, krylovSolves, krylovIterations;
+            long adjointKrylovIterations, adjointResponses;
         };
         FieldSweepStats getFieldSweepStats() const
         {
             return {fieldSweepSolves, fieldSweepIterations, fieldSweepFallbacks,
                     fieldAdjointSweeps, fieldAdjointFellBack,
-                    reducedResponses, krylovSolves, krylovIterations};
+                    reducedResponses, krylovSolves, krylovIterations,
+                    adjointKrylovIterations, adjointResponses};
         };
 
         // The solution as it stands. `y` is a non-owning view over memory
@@ -1543,6 +1550,48 @@ class SystemSolver
         // strictly stronger: the caller gets a correct gradient rather than an
         // exception. Warned once, and recorded in fieldAdjointFellBack.
         void solveCoupledAdjointIterative();
+
+        // ---- The transposed coupled solves, written once for both tiers.
+        //
+        // The forward solve's block system in (dx, c), transposed:
+        //
+        //     A^T z = g_x + L^T zeta,     zeta = g_c - C^T z,
+        //
+        // with z the transport adjoint, zeta the coupling variable's and g_c its
+        // share of the right-hand side. Tier 1: C^T = A_g^T, L^T = P^T G'^T,
+        // g_c = G_geometry. Tier 2: C^T = A1^T, L^T = -A2^T B^-T,
+        // g_c = G_field, and z_psi = B^-T zeta (`finish`). The residual of a
+        // pair (z, zeta) with z solved against zeta's predecessor is
+        // L^T (zeta_prev - zeta) in row one and exactly zero in row two, so
+        // every solve below stops on a relative backward error, as
+        // solveCoupledAdjointIterative does.
+        struct AdjointCouplingOperator
+        {
+            Index n = 0;
+            Vector gc;
+            std::function<std::vector<Vector>(Vector const &)> applyLT;
+            std::function<Vector(std::vector<Vector> const &)> applyCT;
+            std::function<void(Vector const &)> finish;
+        };
+        AdjointCouplingOperator fieldAdjointCouplingOperator();
+        AdjointCouplingOperator reducedAdjointCouplingOperator();
+
+        // Transposed block Gauss-Seidel with Irons-Tuck on zeta, to
+        // FieldSolveAdjointTolerance in FieldSolveMaxAdjointSweeps.
+        bool adjointCouplingSweep(AdjointCouplingOperator const &op);
+        // GMRES on (I + C^T A^-T L^T) zeta = g_c - C^T A^-T g_x, whose residual
+        // is the pair's backward error; Krylov dimension
+        // FieldSolveMaxAdjointSweeps, krylovRestarts restarts.
+        bool adjointCouplingKrylov(AdjointCouplingOperator const &op);
+        // The same system assembled densely, column by column: n transposed
+        // transport solves and n applications of L^T.
+        void adjointCouplingExact(AdjointCouplingOperator const &op);
+
+        // Tier 1's J_red^T z = G_y + P^T G'^T G_geometry. Under FieldSolve =
+        // iterative, the sweep, then GMRES, then the exact solve; under
+        // krylov, GMRES then exact; under exact, exact. A gradient is never
+        // returned from an unconverged solve.
+        void solveReducedAdjoint();
 
         void computeAdjointGradients();
 
@@ -1652,6 +1701,39 @@ class SystemSolver
         std::vector<Matrix> adjoint_SQU_0;
 
 
+        // Tier 1's Jacobian blocks at one state: the equilibrium there (held,
+        // so the cache moving on cannot free it), the input it was solved for,
+        // where it is read, and A_g per cell. Nothing here depends on alpha.
+        // The forward solve reads reducedBlocks, the last build's; a
+        // PhysicsDerivatives record carries its own, which is what the adjoint
+        // transposes (buildReducedBlocks).
+        struct ReducedBlocks
+        {
+            bool valid = false;
+            std::shared_ptr<Equilibrium const> eq;
+            // Built once and shared, never assigned: GlobalState's assignment
+            // copies Aux only into an object already sized for it, so assigning
+            // into a default-constructed one dropped the pressure and handed
+            // the model a state with no aux rows. A blocks object is copied into
+            // every record and every adjoint, and this keeps each of those a
+            // pointer copy.
+            std::shared_ptr<GlobalState const> states;
+            std::vector<Position> inputPoints;
+            Vector weights;
+            std::vector<Position> physicsPoints;
+            // Error weights for the geometry increment, node by node and slot
+            // by slot: the AlgebraicMax rule, 1 / (rtol (|g| + max |g_slot|)),
+            // at the build's geometry. A geometry slot has units of its own, so
+            // there is no atol to floor it with.
+            Vector geometryWeights;
+            Time t = 0.0;
+            std::vector<Matrix> Ag;
+            Index nPerCell() const
+            {
+                return Ag.empty() ? 0 : static_cast<Index>(Ag.front().cols());
+            }
+        };
+
         // The coupling blocks as the adjoint needs them: transposed, stored,
         // and used only from here.
         //
@@ -1668,6 +1750,22 @@ class SystemSolver
         // is what makes a missing block visible in review.
         std::vector<Matrix> A1_transpose_cellwise;
         std::vector<Matrix> A2_transpose_cellwise;
+
+        // Tier 1's, beside them for the same reason:
+        //
+        //   Ag_transpose_cellwise[i]  (nGeom * nPhys, localDOF)  -- A_g^T
+        //
+        // and the blocks the transposed response G'^T is applied at, copied
+        // from the record the operator was assembled from, so a later Jacobian
+        // build cannot move them under an adjoint in progress.
+        std::vector<Matrix> Ag_transpose_cellwise;
+        ReducedBlocks adjointReducedBlocks;
+
+        // The objective's explicit sensitivity to the geometry at tier 1,
+        // w_j dg/dgeom at the physics nodes, flattened node by node as the
+        // geometry increment is: the coupling variable's share of the adjoint
+        // right-hand side, as G_field is psi's at tier 2. Empty otherwise.
+        Vector G_geometry;
 
         // The field block of the adjoint state, z_psi, and of the adjoint
         // right-hand side, dG/dpsi.
@@ -2035,6 +2133,7 @@ class SystemSolver
             GlobalStateMatrix dSigma{0}, dSource{0}, dAux{0};
             FieldCouplingDerivatives field;
             ScalarCouplingDerivatives scalar;
+            ReducedBlocks reduced;
 
             bool isAt(DGSoln const &Y, Time tEval) const;
         };
@@ -2563,38 +2662,17 @@ class SystemSolver
         std::shared_ptr<EquilibriumModel> equilibriumModel = nullptr;
         EquilibriumCoupling equilibriumCoupling = EquilibriumCoupling::Consistent;
 
-        // Tier 1's Jacobian blocks, from the last build: the equilibrium at
-        // yJac (held, so the cache moving on cannot free it), the input it was
-        // solved for, where it is read, and A_g per cell. Nothing here depends
-        // on alpha.
-        struct ReducedBlocks
-        {
-            bool valid = false;
-            std::shared_ptr<Equilibrium const> eq;
-            // Optional so that it is copy-*constructed*: GlobalState's
-            // assignment copies Aux only into an object already sized for it,
-            // and a default-constructed one is not -- the pressure would be
-            // dropped and the model handed a state with no aux rows.
-            std::optional<GlobalState> states;
-            std::vector<Position> inputPoints;
-            Vector weights;
-            std::vector<Position> physicsPoints;
-            // Error weights for the geometry increment, node by node and slot
-            // by slot: the AlgebraicMax rule, 1 / (rtol (|g| + max |g_slot|)),
-            // at the build's geometry. A geometry slot has units of its own, so
-            // there is no atol to floor it with.
-            Vector geometryWeights;
-            Time t = 0.0;
-            std::vector<Matrix> Ag;
-            Index nPerCell() const
-            {
-                return Ag.empty() ? 0 : static_cast<Index>(Ag.front().cols());
-            }
-        } reducedBlocks;
+        ReducedBlocks reducedBlocks;
 
         // G' P dx: the response to an increment, (nGeom x physics nodes)
         // flattened node by node. One applyResponse.
         Vector reducedResponse(N_Vector dx);
+
+        // Tier 1's blocks at Y, whose physics nodes and geometry are `nodes`:
+        // the equilibrium (equilibriumAt), the geometry response and A_g, and
+        // the geometry's error weights. The case's coupling evaluation
+        // (geometryResponse), so a physics call at the FieldCoupling site.
+        ReducedBlocks buildReducedBlocks(DGSoln const &Y, PhysicsNodes const &nodes, Time tEval);
 
         // The equilibrium for the transport state last asked about. `input` is
         // that state's cell DOF -- sigma, q, u and aux, the prefix of the
@@ -2646,6 +2724,8 @@ class SystemSolver
         long reducedResponses = 0;
         long krylovSolves = 0;
         long krylovIterations = 0;
+        long adjointKrylovIterations = 0;
+        long adjointResponses = 0;
 
         // Irons-Tuck vector acceleration: Aitken's Delta^2 generalised to
         // vectors.

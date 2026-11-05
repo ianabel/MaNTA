@@ -347,9 +347,8 @@ BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
     BOOST_TEST(refusal("FieldCoupling = \"reduced\"\n", false).find("geometryDerivatives = None") !=
                std::string::npos);
 
-    // The reduced mode is a field that is a function of the transport state,
-    // with no adjoint yet: what it cannot carry is refused, by name, whatever
-    // the case's derivatives.
+    // The reduced mode is a field that is a function of the transport state:
+    // one with dynamics is refused, by name, whatever the case's derivatives.
     auto reducedRefusal = [&](std::string const &extra, bool dynamics)
     {
         try
@@ -364,9 +363,16 @@ BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
         return std::string();
     };
     BOOST_TEST(reducedRefusal("", true).find("dynamics") != std::string::npos);
-    BOOST_TEST(reducedRefusal("solveAdjoint = true\n", false).find("adjoint") != std::string::npos);
-    BOOST_TEST(reducedRefusal(steady + "SteadyStateTest = \"Objective\"\n", false).find("adjoint") !=
-               std::string::npos);
+    // It has an adjoint, through the transposed response, so asking for one
+    // is accepted -- but "auto" with an adjoint still couples the field model,
+    // whose adjoint needs no assembled response.
+    BOOST_TEST(reducedRefusal("solveAdjoint = true\n", false).empty());
+    BOOST_TEST(reducedRefusal(steady + "SteadyStateTest = \"Objective\"\n", false).empty());
+    {
+        CapturedOutput quiet;
+        BOOST_TEST((chooseFieldCoupling(load(minimal + "solveAdjoint = true\n"), spec(D::Analytic), false) ==
+                    M::Coupled));
+    }
     BOOST_CHECK_THROW(load(minimal + "FieldCoupling = \"couple\"\n"), std::invalid_argument);
 }
 

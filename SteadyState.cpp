@@ -464,6 +464,9 @@ void SystemSolver::estimateObjectiveError(N_Vector correction)
     DGSoln correctionMap(nVars, grid, k, N_VGetArrayPointer(correction), nScalars, nAux, nField);
 
     nlsObjectivePrevTest = nlsObjectiveTest;
+    // At tier 1 the geometry's part of the correction, G' P correction, from
+    // the build the correction was solved with: one applyResponse.
+    const Vector correctionGeom = reducedCoupling() ? reducedResponse(correction) : Vector();
     nlsObjectiveError.resize(ng);
     nlsObjectiveTolerance.resize(ng);
     double worst = 0.0;
@@ -472,9 +475,9 @@ void SystemSolver::estimateObjectiveError(N_Vector correction)
         // dG/dy has no trace block, so the cells contribute; with global scalars
         // the scalars' part of the correction through dG/dmu, and with a field
         // model the field's through dG/dpsi.
-        Vector Gmu, Gpsi;
+        Vector Gmu, Gpsi, Ggeom;
         const std::vector<Vector> Gy =
-            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu, &Gpsi);
+            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu, &Gpsi, &Ggeom);
         double change = 0.0;
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             change += Gy[i].dot(Eigen::Map<const Vector>(d + i * cellDOF, cellDOF));
@@ -482,6 +485,8 @@ void SystemSolver::estimateObjectiveError(N_Vector correction)
             change += Gmu.dot(correctionMap.Scalars());
         if (nField > 0)
             change += Gpsi.dot(Vector(correctionMap.getField()));
+        if (reducedCoupling())
+            change += Ggeom.dot(correctionGeom);
 
         const double G = objectiveValue(*adjointProblem, g, state, t0);
         nlsObjectiveError(g) = std::abs(change);

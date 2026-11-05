@@ -1698,9 +1698,22 @@ BOOST_AUTO_TEST_CASE(a_build_spends_what_its_geometry_derivatives_declare)
 
 /// A tier-1 solver at a state, its Jacobian blocks built. No psi to push off
 /// anything: the equilibrium is solved for the state.
+/// FieldModelEquilibrium with its transposed response switched off: what an
+/// adjoint that never applied G'^T would compute.
+class BlindTransposeEquilibrium : public FieldModelEquilibrium
+{
+public:
+    using FieldModelEquilibrium::FieldModelEquilibrium;
+    void applyResponseTranspose(GlobalState &, Equilibrium const &, GlobalState const &, Matrix const &,
+                                std::vector<Position> const &, Vector const &, Time,
+                                std::vector<Position> const &) override
+    {
+    }
+};
+
 CoupledSolver makeReducedSolverAtState(Index nCells, Index k, std::unique_ptr<TransportSystem> problem,
                                        std::shared_ptr<FieldModel> model, bool differencedResponse,
-                                       bool superconvergent = false, double cj = 1.7)
+                                       bool superconvergent = false, double cj = 1.7, bool blindTranspose = false)
 {
     CoupledSolver h;
     h.problem = std::move(problem);
@@ -1710,7 +1723,9 @@ CoupledSolver makeReducedSolverAtState(Index nCells, Index k, std::unique_ptr<Tr
     h.sys->setTau(0.75);
     h.sys->setInitialTime(0.0);
     h.sys->setSuperconvergent(superconvergent);
-    h.sys->setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(h.field, differencedResponse),
+    h.sys->setEquilibriumModel(blindTranspose
+                                   ? std::make_shared<BlindTransposeEquilibrium>(h.field, differencedResponse)
+                                   : std::make_shared<FieldModelEquilibrium>(h.field, differencedResponse),
                                SystemSolver::EquilibriumCoupling::Reduced);
     h.sys->resetCoeffs();
     h.sys->initialiseMatrices();
@@ -1733,7 +1748,7 @@ CoupledSolver makeReducedSolverAtState(Index nCells, Index k, std::unique_ptr<Tr
 }
 
 CoupledSolver reducedThetaPinch(Index nCells, Index k, bool differencedResponse, bool superconvergent = false,
-                                Index intervalsPerCell = 1)
+                                Index intervalsPerCell = 1, bool blindTranspose = false)
 {
     using namespace toml::literals::toml_literals;
     static const toml::value config = u8R"(
@@ -1747,7 +1762,7 @@ CoupledSolver reducedThetaPinch(Index nCells, Index k, bool differencedResponse,
         nCells, k, std::make_unique<ThetaPinchDiffusion>(config, grid),
         std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{.intervalsPerCell = intervalsPerCell},
                                                 grid),
-        differencedResponse, superconvergent);
+        differencedResponse, superconvergent, /*cj=*/1.7, blindTranspose);
 }
 
 /// checkExactSolve for tier 1: the reduced exact solve against a finite
@@ -1984,6 +1999,236 @@ BOOST_AUTO_TEST_CASE(a_reduced_equilibrium_needs_the_cases_geometry_derivatives)
         BOOST_TEST(std::string(e.what()).find("geometryDerivatives is None") != std::string::npos);
     }
     BOOST_CHECK_NO_THROW(sys.setEquilibriumModel(model, SystemSolver::EquilibriumCoupling::Consistent));
+}
+
+// ---------------------------------------------- tier 1: the reduced adjoint --
+//
+// The adjoint twin of the checks above: assembled from the build's record at
+// alpha = 0 and required to invert J_red^T, the transpose of a finite
+// difference of the tier-0 residual at cj = 0.
+
+/// The adjoint state as one vector in the solution vector's ordering, cells
+/// then lambda (then psi at tier 2).
+Vector adjointVector(SystemSolver const &sys)
+{
+    const Index nCells = static_cast<Index>(sys.nCells), cellDOF = static_cast<Index>(sys.localDOF);
+    const Index nLambda = sys.adjoint_lambdas.size(), nField = sys.getFieldDOF();
+    Vector z(nCells * cellDOF + nLambda + nField);
+    for (Index i = 0; i < nCells; ++i)
+        z.segment(i * cellDOF, cellDOF) = sys.adjoint_squ[i];
+    z.segment(nCells * cellDOF, nLambda) = sys.adjoint_lambdas;
+    if (nField > 0)
+        z.tail(nField) = sys.adjoint_field;
+    return z;
+}
+
+/// A cellwise right-hand side, deliberately not shaped like an objective's.
+std::vector<Vector> randomCellRHS(SystemSolver const &sys, int trial)
+{
+    const Index cellDOF = static_cast<Index>(sys.localDOF);
+    std::vector<Vector> out(sys.nCells, Vector(cellDOF));
+    for (Index i = 0; i < static_cast<Index>(sys.nCells); ++i)
+        for (Index j = 0; j < cellDOF; ++j)
+            out[i](j) = std::sin(0.4 + (trial + 1) * 0.9 * static_cast<double>(i * cellDOF + j));
+    return out;
+}
+
+/// ||J_red^T z - g|| / ||g|| over the rows the residual defines, solved by
+/// `mode`, with no geometry share in the right-hand side.
+double reducedAdjointResidual(CoupledSolver &h, SystemSolver::FieldSolveMode mode, int trial)
+{
+    SystemSolver &sys = *h.sys;
+    const Matrix J = fdjac::jacobian(sys, h.Y, h.dYdt, h.t, 0.0);
+    const std::vector<Index> dead = fdjac::undefinedRows(J);
+    sys.assembleAdjointOperator(sys.jacobianDerivatives);
+
+    sys.G_y = randomCellRHS(sys, trial);
+    sys.G_field.resize(0);
+    sys.G_geometry.resize(0);
+    Vector g = Vector::Zero(J.rows());
+    for (Index i = 0; i < static_cast<Index>(sys.nCells); ++i)
+        g.segment(i * sys.localDOF, sys.localDOF) = sys.G_y[i];
+
+    sys.setFieldSolveMode(mode);
+    sys.solveAdjointState();
+    return fdjac::relativeResidual(Matrix(J.transpose()), adjointVector(sys), g, dead);
+}
+
+BOOST_AUTO_TEST_CASE(the_reduced_adjoint_inverts_the_transpose_of_the_tier_zero_jacobian)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    for (bool differenced : {false, true})
+        for (bool superconvergent : {false, true})
+        {
+            // 1e-7, field_adjoint_tests' bound for tier 2's transpose check:
+            // measured 2e-8 to 3e-8 with the model's transpose, in every mode
+            // alike, which is the finite difference's own error. The assembled
+            // transpose is good to 1e-7 (the_assembled_transpose_is_the_
+            // transpose_of_the_response), and the check sees 5e-7.
+            const double bound = differenced ? 1e-6 : 1e-7;
+            BOOST_TEST_CONTEXT("differenced response = " << differenced << ", superconvergent = " << superconvergent)
+            {
+                auto pinch = reducedThetaPinch(5, 3, differenced, superconvergent);
+                for (Mode mode : {Mode::Exact, Mode::Iterative, Mode::Krylov})
+                {
+                    const double r = reducedAdjointResidual(pinch, mode, 0);
+                    const auto stats = pinch->getFieldSweepStats();
+                    BOOST_TEST_MESSAGE("mode " << static_cast<int>(mode) << ": ||J^T z - g||/||g|| = " << r
+                                               << "; adjoint sweeps " << stats.adjointSweeps << ", GMRES "
+                                               << stats.adjointKrylovIterations << ", fell back "
+                                               << stats.adjointFellBack);
+                    BOOST_TEST(r < bound);
+                    BOOST_TEST(!stats.adjointFellBack);
+                }
+            }
+        }
+}
+
+// The vacuity guards, at the operator. A_g^T zeroed, or a model whose
+// transposed response does nothing, is tier 0's adjoint, which misses the
+// transpose by orders more than the reduced solve does.
+BOOST_AUTO_TEST_CASE(the_reduced_adjoint_check_sees_a_missing_transpose)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    auto pinch = reducedThetaPinch(5, 3, false);
+    const double good = reducedAdjointResidual(pinch, Mode::Exact, 0);
+
+    SystemSolver &sys = *pinch.sys;
+    for (Matrix &block : sys.Ag_transpose_cellwise)
+    {
+        BOOST_REQUIRE_GT(block.cwiseAbs().maxCoeff(), 0.0);
+        block.setZero();
+    }
+    sys.solveAdjointState();
+    const Matrix J = fdjac::jacobian(sys, pinch.Y, pinch.dYdt, pinch.t, 0.0);
+    Vector g = Vector::Zero(J.rows());
+    for (Index i = 0; i < static_cast<Index>(sys.nCells); ++i)
+        g.segment(i * sys.localDOF, sys.localDOF) = sys.G_y[i];
+    const double noAg = fdjac::relativeResidual(Matrix(J.transpose()), adjointVector(sys), g, fdjac::undefinedRows(J));
+
+    auto blind = reducedThetaPinch(5, 3, false, false, 1, /*blindTranspose=*/true);
+    const double noResponse = reducedAdjointResidual(blind, Mode::Exact, 0);
+
+    BOOST_TEST_MESSAGE("||J^T z - g||/||g||: " << good << " coupled, " << noAg << " with A_g^T zeroed, "
+                                               << noResponse << " with no transposed response");
+    BOOST_TEST(noAg > 1e3 * good);
+    BOOST_TEST(noResponse > 1e3 * good);
+}
+
+// With the adapter's own response, tier 1's adjoint is tier 2's with psi
+// eliminated: the same transport block of z, for the same G_y and a geometry
+// share that tier 2 sees as G_psi = sum_j (dGeometry/dpsi_j)^T G_geometry_j.
+// And tier 2's own three adjoint solves agree, GMRES among them.
+BOOST_AUTO_TEST_CASE(the_reduced_adjoint_is_tier_twos_with_psi_eliminated)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto reduced = reducedThetaPinch(5, 3, false, superconvergent);
+            auto coupled = thetaPinchFixture(5, 3, 1, superconvergent);
+            SystemSolver &r = *reduced.sys, &c = *coupled.sys;
+
+            const Index nTransport = static_cast<Index>(r.getSolution().getDoF());
+            std::copy(N_VGetArrayPointer(reduced.Y), N_VGetArrayPointer(reduced.Y) + nTransport,
+                      N_VGetArrayPointer(coupled.Y));
+            DGSoln yMap(c.nVars, *coupled.grid, 3, N_VGetArrayPointer(coupled.Y), c.nScalars, c.nAux,
+                        c.getFieldDOF());
+            const Vector psi = FieldModelEquilibrium::psi(*r.reducedBlocks.eq);
+            yMap.getField() = psi;
+            c.setJacEvalY(coupled.Y, coupled.dYdt);
+            c.updateMatricesForJacSolve();
+
+            r.assembleAdjointOperator(r.jacobianDerivatives);
+            c.assembleAdjointOperator(c.jacobianDerivatives);
+
+            // The same right-hand side, both ways.
+            const std::vector<Vector> Gy = randomCellRHS(r, 1);
+            auto const &points = r.reducedBlocks.physicsPoints;
+            const Index nGeom = r.getGeometrySlots();
+            Vector Ggeom(nGeom * static_cast<Index>(points.size()));
+            for (Index j = 0; j < Ggeom.size(); ++j)
+                Ggeom(j) = std::cos(0.3 + 0.77 * static_cast<double>(j));
+            Vector Gpsi = Vector::Zero(c.getFieldDOF());
+            Matrix dgdpsi(nGeom, c.getFieldDOF());
+            for (size_t j = 0; j < points.size(); ++j)
+            {
+                dgdpsi.setZero();
+                c.getFieldModel()->dGeometry_dpsi(dgdpsi, psi, points[j], r.reducedBlocks.t);
+                Gpsi += dgdpsi.transpose() * Ggeom.segment(static_cast<Index>(j) * nGeom, nGeom);
+            }
+
+            c.G_y = Gy;
+            c.G_field = Gpsi;
+            c.setFieldSolveMode(Mode::Exact);
+            c.solveAdjointState();
+            const Vector want = adjointVector(c).head(nTransport);
+
+            for (Mode mode : {Mode::Krylov, Mode::Iterative})
+            {
+                c.G_y = Gy;
+                c.G_field = Gpsi;
+                c.setFieldSolveMode(mode);
+                c.solveAdjointState();
+                const double diff = (adjointVector(c).head(nTransport) - want).norm() / want.norm();
+                BOOST_TEST_MESSAGE("tier 2, mode " << static_cast<int>(mode) << " against exact: " << diff);
+                BOOST_TEST(diff < 1e-7);
+            }
+
+            for (Mode mode : {Mode::Exact, Mode::Krylov, Mode::Iterative})
+            {
+                r.G_y = Gy;
+                r.G_geometry = Ggeom;
+                r.setFieldSolveMode(mode);
+                r.solveAdjointState();
+                const double diff = (adjointVector(r) - want).norm() / want.norm();
+                BOOST_TEST_MESSAGE("tier 1, mode " << static_cast<int>(mode) << " against tier 2 exact: " << diff);
+                BOOST_TEST(diff < (mode == Mode::Exact ? 1e-12 : 1e-7));
+            }
+        }
+    }
+}
+
+// The default transposed response is the assembled G': its transpose against
+// the adapter's exact one, on one sensitivity, and built once per equilibrium.
+BOOST_AUTO_TEST_CASE(the_assembled_transpose_is_the_transpose_of_the_response)
+{
+    auto pinch = reducedThetaPinch(5, 3, false);
+    SystemSolver &sys = *pinch.sys;
+    auto &b = sys.reducedBlocks;
+    FieldModelEquilibrium exact(pinch.field, false), differenced(pinch.field, true);
+
+    const Eigen::Index nPoints = static_cast<Eigen::Index>(b.physicsPoints.size());
+    Matrix dg(sys.getGeometrySlots(), nPoints);
+    for (Eigen::Index j = 0; j < dg.size(); ++j)
+        dg.data()[j] = std::sin(0.2 + 1.3 * static_cast<double>(j));
+
+    GlobalState dpExact = b.states->zeroedLike(), dpDiff = b.states->zeroedLike();
+    exact.applyResponseTranspose(dpExact, *b.eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const long before = exact.newtonIterations() + differenced.newtonIterations();
+    differenced.applyResponseTranspose(dpDiff, *b.eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const long assembling = differenced.newtonIterations();
+    differenced.applyResponseTranspose(dpDiff, *b.eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    BOOST_TEST(differenced.newtonIterations() == assembling);
+    BOOST_TEST(before == 0);
+
+    auto all = [](GlobalState const &s)
+    {
+        Vector out(s.Variable().size() + s.Derivative().size() + s.Flux().size() + s.Aux().size());
+        out << Eigen::Map<const Vector>(s.Variable().data(), s.Variable().size()),
+            Eigen::Map<const Vector>(s.Derivative().data(), s.Derivative().size()),
+            Eigen::Map<const Vector>(s.Flux().data(), s.Flux().size()),
+            Eigen::Map<const Vector>(s.Aux().data(), s.Aux().size());
+        return out;
+    };
+    const Vector a = all(dpExact), d = all(dpDiff);
+    const double diff = (a - d).norm() / a.norm();
+    BOOST_TEST_MESSAGE("G'^T dg, exact against assembled: " << diff << " relative; |G'^T dg| " << a.norm()
+                                                           << "; assembling took " << assembling
+                                                           << " Newton iterations");
+    BOOST_TEST(a.norm() > 1e-3);
+    BOOST_TEST(diff < 1e-6);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

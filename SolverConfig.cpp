@@ -1244,11 +1244,6 @@ FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec con
                 "FieldCoupling = \"reduced\" runs the field as an equilibrium of the transport "
                 "state, and this field has dynamics (a differential field unknown). Use "
                 "\"coupled\".");
-        if (config.solveAdjoint || config.SteadyStateTest == "Objective")
-            throw std::invalid_argument(
-                "FieldCoupling = \"reduced\" cannot solve an adjoint (solveAdjoint, or "
-                "SteadyStateTest = \"Objective\"): the transposed response is not built. Use "
-                "\"coupled\".");
         return FieldCouplingMode::Reduced;
     }
 
