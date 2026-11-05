@@ -501,6 +501,26 @@ not cleanly enough to assert. At `k = 6` on 8 cells, where the spline is what
 limits the answer, halving the knot spacing goes at 4.03 in `N` and 4.00 in
 `V'`. Zero fallbacks throughout, asserted.
 
+**Every field-coupling tier runs the same study**, and is held to tier 2's
+answer as well as its orders, since a tier converging at the right rate to a
+different function is exactly what an order alone would pass. The tier is a
+value of `Tier` in the file; tier 1 joins through `attachField` and `builtTiers`.
+
+* *Tier 0* (`FieldModelEquilibrium`, `FieldCoupling = "consistent"`) through
+  the transient study above, one case per degree: tier 2's orders to the digit,
+  and its errors in `N` to 6e-11 - 3.4e-9 against an `rtol ||N||` of 4.4e-9 --
+  integration error, asserted below ten times that, because the two tiers take
+  different steps. The price is steps, not order: 2 to 18 times tier 2's
+  (2234 against 120 at `k = 3`, 16 cells), with no coupling in the Jacobian.
+* *Steady*, at every tier: the source frozen at `t = 0.25`, a Newton solve from
+  the transient's `t = 0`, on 16, 32 and 64 cells (8 -> 16 is pre-asymptotic at
+  `k = 3`, 3.89). `N` at 2.00, 3.00 and 3.98 - 4.00, `V'` at 2.45 - 3.99, the
+  tiers agreeing to 3e-13 - 2e-11. A second or two per tier.
+* *The manufactured field models* (`MMSFieldTests.cpp`,
+  `the_consistent_tier_converges_at_k_plus_one`): both at tier 0 reproduce
+  tier 2's `u` and `psi` orders to the digit, in a second or two, the coupling
+  there being too weak to slow IDA.
+
 **Two findings about the method came out of this study, and each has a test
 that only a run can provide.**
 
@@ -546,7 +566,7 @@ catches:
 | `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
 | `ThetaPinchEquilibriumTests.cpp` | the theta pinch's spline, its derivatives, its sparse block solve in both directions, and its equilibrium against the closed form `V' = Phi / sqrt(C - p)`, at local orders 3.8-3.9 in the field resolution |
 | `FieldJacobianTests.cpp` (theta pinch cases) | the coupled Jacobian of a model whose `A2` lives only in an aux column and whose `A1` runs through four slots; that its sweep contracts at every `cj`, so a sweep that diverges on it is the sweep's defect |
-| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA |
+| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA; a tier that converges to something other than tier 2's answer |
 | `ThetaPinchRunTests.cpp` | a degree-changing restart losing psi; diagnostics evaluated without geometry; a reused solver; the coupled gradient for a parameter that reaches the transport only through the field (`T`); `G_field` against differences of the reported `G`; the objective estimate's field share; the adjoint sweep falling back when it should converge |
 
 **The restart case's oracle is the raw netCDF array, not `getSolution()`, and

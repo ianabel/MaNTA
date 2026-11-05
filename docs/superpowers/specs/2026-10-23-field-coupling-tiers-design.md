@@ -320,9 +320,19 @@ experiment was removed. Tier 0's transient answers sit 1.4e-7 to 5.3e-6 (relativ
 in N at x = 0.1) from the exact coupled run's at this rtol; on the 6-cell k = 3 test fixture the
 gap is 8.8e-8, and 4e-10 at a steady state.
 
-Not yet run at tier 0: the coupled MMS order study. At its 1e-9 / 1e-11
-tolerances the experiment crawled for most of an hour on three of four cases,
-and tier 0 is the same method.
+**The coupled MMS order study runs at tier 0 and keeps the full order**
+(`ThetaPinchMMSTests.cpp`, `MMSFieldTests.cpp`). At the study's 1e-9 / 1e-11,
+on the theta pinch's 8, 16 and 32 cells, tier 0 has tier 2's local orders to
+the digit -- N at 1.99 / 3.00-3.01 / 3.95-3.99 for k = 1, 2, 3, V' at 2.49-3.98
+-- and its errors to 6e-11-3.4e-9 in N against an rtol ||N|| of 4.4e-9:
+integration error, since the two take different steps. A steady Newton study,
+the source frozen at t = 0.25, agrees to 2e-11 at every tier, at N 2.00, 3.00,
+4.00 on 16-64 cells. Both manufactured field models reproduce tier 2's u and psi
+orders. What tier 0 pays is steps, 2-18x tier 2's (2234 against 120 at k = 3 on
+16 cells), and it can pay them only under `ErrorWeights = "AlgebraicMax"`: the
+crawl of most of an hour that kept this study from running was the pointwise
+weights, under which the k = 1, 8-cell run now goes 455 s and fails in
+`IDASolve` while taking 3 s under the default.
 
 ### Step 3: `geometryDerivatives` and `FieldCoupling = "auto"`
 
