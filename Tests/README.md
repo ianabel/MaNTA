@@ -504,7 +504,8 @@ limits the answer, halving the knot spacing goes at 4.03 in `N` and 4.00 in
 **Every field-coupling tier runs the same study**, and is held to tier 2's
 answer as well as its orders, since a tier converging at the right rate to a
 different function is exactly what an order alone would pass. The tier is a
-value of `Tier` in the file; tier 1 joins through `attachField` and `builtTiers`.
+value of `Tier` in the file: `Coupled`, `Consistent`, and `Reduced` and
+`ReducedDifferenced` for tier 1 with the exact and the differenced G'.
 
 * *Tier 0* (`FieldModelEquilibrium`, `FieldCoupling = "consistent"`) through
   the transient study above, one case per degree: tier 2's orders to the digit,
@@ -512,14 +513,21 @@ value of `Tier` in the file; tier 1 joins through `attachField` and `builtTiers`
   integration error, asserted below ten times that, because the two tiers take
   different steps. The price is steps, not order: 2 to 18 times tier 2's
   (2234 against 120 at `k = 3`, 16 cells), with no coupling in the Jacobian.
+* *Tier 1* (`FieldCoupling = "reduced"`, `FieldSolve = "iterative"`), at both
+  responses, one case per degree: tier 2's orders to the digit, its errors in
+  `N` to 2e-12 - 1.9e-10, and tier 2's steps -- 97 - 249 against 96 - 326 --
+  with no fallback. `krylov` gives the same table in 45 s against the sweep's
+  16 s, and is not run.
 * *Steady*, at every tier: the source frozen at `t = 0.25`, a Newton solve from
   the transient's `t = 0`, on 16, 32 and 64 cells (8 -> 16 is pre-asymptotic at
-  `k = 3`, 3.89). `N` at 2.00, 3.00 and 3.98 - 4.00, `V'` at 2.45 - 3.99, the
-  tiers agreeing to 3e-13 - 2e-11. A second or two per tier.
+  `k = 3`, 3.89). `N` at 2.00, 3.00 and 3.98 - 4.00, `V'` at 2.45 - 3.99. Tier 1
+  agrees with tier 2 to 9e-15 in 4 Newton iterations against 5, tier 0 to
+  3e-13 - 2e-11 in 8 - 14. A second or two per tier.
 * *The manufactured field models* (`MMSFieldTests.cpp`,
-  `the_consistent_tier_converges_at_k_plus_one`): both at tier 0 reproduce
-  tier 2's `u` and `psi` orders to the digit, in a second or two, the coupling
-  there being too weak to slow IDA.
+  `the_lower_tiers_converge_at_k_plus_one`): both, at tiers 0 and 1, reproduce
+  tier 2's `u` and `psi` orders to the digit, with gaps of at most 1.3e-10 in the
+  `u` error; about a second per tier, the coupling there being too weak to slow
+  IDA. Both declare `Analytic` geometry derivatives, so tier 1 runs on both.
 
 **Two findings about the method came out of this study, and each has a test
 that only a run can provide.**
