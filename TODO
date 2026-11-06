@@ -373,20 +373,6 @@ reason it was not made:
     driving AdjointProblem.dAux looks like it exercises the solver's path and
     does not.
 
-  - No C++ test asserts that a scalar declared differential has a time
-    derivative in its G. Without one, IDACalcIC is handed a row whose every
-    quantity it holds fixed, and it fails with IDA_LINESEARCH_FAIL (-13) before
-    the first step -- a message about the linesearch, for a defect in the
-    declaration. That is what kept python-physics/mirror-plasma's voltage
-    controller from ever starting, and the C++ MirrorPlasma carried the same
-    misdeclaration before it was removed, so this is not specific to the Python
-    surface. The Python side now pins it in
-    test_a_differential_scalars_constraint_reaches_a_calcic_unknown; the C++
-    equivalent belongs next to checkScalarDerivative in ScalarJacobianTests.cpp
-    and is cheap -- call ScalarGPrime and assert dGdot is not identically zero
-    for each differential scalar. Two of the three fixtures there would have to
-    be checked against it first.
-
   - AutodiffTransportSystem::MMS_Source (PhysicsCases/AutodiffTransportSystem.cpp)
     still evaluates the plain, geometry-blind Flux/Source overloads directly,
     while every other hook -- SigmaFn, Sources, AuxG, and every

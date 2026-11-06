@@ -700,8 +700,12 @@ Two return codes worth being able to read without looking them up:
   `python-physics/mirror-plasma`'s voltage controller from ever starting — and the
   C++ `MirrorPlasma` had the same misdeclaration, so neither implementation ever
   ran with `useConstantVoltage`. **Before theorising about the guess, ask which
-  unknowns each failing row can actually reach**: print `ScalarGPrime`'s `dGdot`
-  and check it is nonzero for every differential scalar. The trap is that the
+  unknowns each failing row can actually reach** -- `checkScalarDerivative`
+  (`Tests/UnitTests/ScalarDerivativeCheck.hpp`) asks it of every scalar row it is
+  handed, through `scalarRowsCalcICCannotReach`. A row reaches CalcIC if it
+  touches a `d/dt` of `u` or of a differential scalar, or the value of `sigma`,
+  `q`, an aux variable or an algebraic scalar. `ScalarTestLD3`'s `G_0` does not,
+  and runs only because its initial E satisfies it; the test pins that. The trap is that the
   residual can be tiny — 4.3e-6 there, just the difference between two quadrature
   rules for the same integral — and still fatal, because irreducible beats small.
 

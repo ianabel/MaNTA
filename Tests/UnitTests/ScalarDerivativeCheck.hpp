@@ -23,9 +23,55 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace scalarcheck
 {
+
+// The scalar rows IDACalcIC cannot move.
+//
+// IDA_YA_YDP_INIT solves for the algebraic *values* and the differential
+// *derivatives*, and holds the differential values fixed. A row is reachable if
+// it touches one of those unknowns: a d/dt of u or of a differential scalar, or
+// the value of sigma, q, an aux variable or an algebraic scalar. A row reading
+// only u and differential scalars is a constant to CalcIC, and unless it already
+// holds at the initial state the run dies with IDA_LINESEARCH_FAIL (-13) before
+// the first step -- a message about the line search, for a defect in the
+// declaration. The usual way to write one is to declare a scalar differential
+// whose G has no d/dt in it; that is what kept python-physics/mirror-plasma's
+// voltage controller from ever starting.
+inline std::vector<Index> scalarRowsCalcICCannotReach(TransportSystem &problem, DGSoln &y, DGSoln &dydt,
+                                                      Grid const &grid, Index k, double t)
+{
+    const Index nVars = problem.getNumVars();
+    const Index nScalars = problem.getNumScalars();
+    const Index nAux = problem.getNumAux();
+    const Index nCells = static_cast<Index>(grid.getNCells());
+
+    Integrator::Cache integrator;
+    GlobalStateMatrix dG(nScalars), dGdot(nScalars);
+    for (Index s = 0; s < nScalars; ++s)
+    {
+        dG.add(nCells, k, nVars, nScalars, nAux);
+        dGdot.add(nCells, k, nVars, nScalars, nAux);
+    }
+    problem.ScalarGPrime(dG, dGdot, y.evalOnNodes(), dydt.evalOnNodes(), y.getPoints(),
+                         integrator.integrationWeights(y.getBasis(), grid),
+                         integrator.phiBoundary(y.getBasis(), grid), t);
+
+    std::vector<Index> unreachable;
+    for (Index s = 0; s < nScalars; ++s)
+    {
+        GlobalState const &value = dG[s], &rate = dGdot[s];
+        bool reaches = !rate.Variable().isZero(0.0) || !value.Derivative().isZero(0.0) ||
+                       !value.Flux().isZero(0.0) || !value.Aux().isZero(0.0);
+        for (Index m = 0; m < nScalars && !reaches; ++m)
+            reaches = problem.isScalarDifferential(m) ? rate.Scalars()(m) != 0.0 : value.Scalars()(m) != 0.0;
+        if (!reaches)
+            unreachable.push_back(s);
+    }
+    return unreachable;
+}
 
 // The hooks report every scalar's derivative in one call, indexed by node rather
 // than being asked once per (cell, basis function), so the reported value for
@@ -34,8 +80,12 @@ namespace scalarcheck
 // hide.
 //
 // Returns the largest disagreement found, and reports each one.
+//
+// It also requires every scalar row to be one IDACalcIC can move, apart from the
+// rows named in `knownUnreachable` -- see scalarRowsCalcICCannotReach.
 inline double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln &dydt,
-                                    Grid const &grid, Index k, double t, double tolerance)
+                                    Grid const &grid, Index k, double t, double tolerance,
+                                    std::vector<Index> const &knownUnreachable = {})
 {
     const Index nVars = problem.getNumVars();
     const Index nScalars = problem.getNumScalars();
@@ -87,6 +137,9 @@ inline double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln 
                          << ", var " << var << "): reported " << expected
                          << ", finite difference " << fd);
     };
+
+    BOOST_TEST(scalarRowsCalcICCannotReach(problem, y, dydt, grid, k, t) == knownUnreachable,
+               boost::test_tools::per_element());
 
     for (Index s = 0; s < nScalars; ++s)
     {

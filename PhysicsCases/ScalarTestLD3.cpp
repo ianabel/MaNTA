@@ -47,8 +47,10 @@ REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 // case keeps nothing from an evaluation plan, so a new plan changes nothing it
 // built.
 ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
-	// E and I are differential -- G_0 and G_2 depend explicitly on dE/dt and
-	// dI/dt -- while J is algebraic. This was isScalarDifferential(s).
+	// E and I are differential -- dE/dt appears in G_1 and dI/dt in G_2 -- while
+	// J is algebraic. G_0 = E - (M0 - M) reads only differential values, so it is
+	// a row IDACalcIC cannot move: the run starts only because the initial E
+	// satisfies it already (scalar_jacobian_tests pins this).
 	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
 					   .scalars = {{"E", "mass error, M0 - M", "", true},
 								   {"J", "source strength from the PID controller", "", false},
