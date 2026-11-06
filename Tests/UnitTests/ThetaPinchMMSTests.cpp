@@ -666,10 +666,18 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_does_not_stall_ida)
                                    iterative.steps, iterative.N, exact.steps, exact.N,
                                    std::abs(iterative.N - exact.N), mms::Tolerances{}.relative * normN));
     BOOST_TEST(iterative.fallbacks == 0);
-    // Step sequences at these tolerances move by tens of percent under any
-    // perturbation of the corrections -- 201 to 426 over the variants of the
-    // test that were measured -- while the stall was a factor of a hundred.
-    BOOST_TEST(iterative.steps < 2 * exact.steps);
+    // The bound is set by how far either mode's step count moves under
+    // round-off, which is a long way, while the stall was a factor of a hundred.
+    // IDA falls in and out of an order-2 trap on this case -- 120-200 steps held
+    // at order 2 over t in [1e-3, 1e-2], and sometimes again over [0.05, 0.15]
+    // -- in both modes, set by round-off. Measured over the tolerances scaled by
+    // 0.92-1.08: exact 149 to 278 steps, iterative 142 to 374 at any
+    // FieldSolveTolerance from 1e-4 to 1e-7; and on CI's AVX-512 runners
+    // iterative 564 against exact 175. The algebraic unknowns in IDA's error
+    // test are the cause: with SuppressAlgebraicError both modes take 99-101
+    // steps at every one of those tolerances. Five times is clear of that
+    // scatter and still forty times inside the stall.
+    BOOST_TEST(iterative.steps < 5 * exact.steps);
     // Both runs are IDA solutions at rtol 1e-9, so they agree to the run's
     // integration error and no better, and round-off moves that as much as the
     // field solve does. Measured, against an rtol ||N|| of 4.4e-9: 3e-11 to

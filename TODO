@@ -1,3 +1,28 @@
+IDA's order selection traps at order 2 on the coupled theta pinch, and the
+algebraic unknowns in its error test are why.
+Found 2026-11-06, when PR #71's g++-15 / Eigen 5.0.1 leg failed
+the_iterative_solve_does_not_stall_ida on AVX-512 runners (iterative 564 steps
+against exact 175).
+
+  On the manufactured theta pinch at k = 3, 8 cells, 1e-9 / 1e-11, a run either
+  holds order 2 for 120-200 steps over t in [1e-3, 1e-2] (and sometimes again
+  over [0.05, 0.15]) or climbs to order 5 there, and which it does is set by
+  round-off. Both field solves do it: with the tolerances scaled by 0.92-1.08,
+  exact takes 149 to 278 steps and iterative 142 to 374, at any
+  FieldSolveTolerance from 1e-4 to 1e-7. With SuppressAlgebraicError both take
+  99 to 101 steps at every one of those tolerances, identically, so the trap is
+  sigma, q, lambda and the aux pressure in IDA's local error test. (An earlier
+  jitter study under the pointwise weights showed the same: 63-64 steps with
+  suppression against 176-2521 without.)
+
+  To decide: whether SuppressAlgebraicError should be the default for coupled
+  runs, or everywhere. It would roughly halve the steps here and make step
+  counts reproducible, at the price of nothing checking the algebraic
+  components' local error; how much accuracy that costs in sigma and q needs
+  measuring before it is a default. The stall guard's bound was widened from
+  2x to 5x the exact run's steps on the strength of this scatter.
+
+
 Move the built documentation out of this repository.
 Raised 2026-09-30, when the build stopped writing into the source tree.
 

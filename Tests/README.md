@@ -552,7 +552,11 @@ that only a run can provide.**
   20000 steps against the exact solve's 213, and the answer was right. The
   sweep left an error in `sigma` and `q` near the axis that is O(1) in IDA's
   error weights. `the_iterative_solve_does_not_stall_ida` runs that case in both
-  modes and requires comparable step counts (221 against 213 now); no unit test
+  modes and requires the iterative run's steps within five times the exact
+  run's. That bound is set by round-off, not by the sweep: IDA falls in and out
+  of an order-2 trap on this case in both modes, so exact takes 149 to 278 steps
+  and iterative 142 to 564 over small changes of tolerance or CPU, and with
+  `SuppressAlgebraicError` both take 99-101. No unit test
   with random right-hand sides at a fixture state sees it, because the residue
   only concentrates there on Newton's own corrections.
 
