@@ -148,6 +148,17 @@ point a config file at it:
 The grid comes from the restart file, so ``GridSize``, ``GridPoints``,
 ``LowerBoundary`` and ``UpperBoundary`` are ignored on this path.
 
+**The boundary data is the case's own wherever the case has some.** A case that
+overrides ``LowerBoundary`` / ``UpperBoundary``, or fills ``uL`` / ``uR`` as an
+``AutodiffTransportSystem`` does from its ``[AutodiffTransportSystem]`` keys,
+resumes with exactly that. Only a case with none is given data recovered from
+the file: a Dirichlet end's datum from the trace, which the run wrote as
+:math:`g_D(t)` exactly; a Neumann end's from :math:`q_h` at the face; a mixed
+end's by evaluating its row on the stored profile. The last two are only as
+good as the discretisation at that face, since HDG imposes those conditions
+weakly -- on ``ADTest``'s zero-flux axis :math:`q_h(0)` is 2.7e-4 -- so a case
+whose boundary values matter at that accuracy should state them.
+
 ``PolynomialDegree`` is **not** ignored. It defaults to the degree the file was
 written at, and setting it to something else resumes the run at that degree
 instead, projecting the stored state onto the new space:

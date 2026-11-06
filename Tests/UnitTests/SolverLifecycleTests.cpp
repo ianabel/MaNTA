@@ -28,6 +28,7 @@
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
 #include "../../FieldModel.hpp"
+#include "../../PhysicsCases/ADTestProblem.hpp"
 
 #include <ida/ida.h>
 #include <netcdf>
@@ -1922,6 +1923,103 @@ RestartFileData readRestart(std::string const &path)
     f.close();
     return out;
 }
+
+// A restart must resume the problem the run was solving, boundary data
+// included. setRestartValues recovers uL/uR from the restarted profile for a
+// case with no boundary data of its own, and it used to do so for every case --
+// so an AutodiffTransportSystem, whose uL/uR are its configured data, resumed
+// with them replaced by values sampled off the solution. ADTest's zero-flux
+// axis became q_h(0), which HDG's weak imposition leaves nonzero, and its
+// Dirichlet 0.3 became u_h(1). The resumed run was then a different problem:
+// at these tolerances it failed its first step with ten error-test failures,
+// a dsm of 1.17 that no step size moved, and at rtol 1e-4 it completed 8.3e-4
+// away from the uninterrupted run in q. Through the file, as production does.
+BOOST_AUTO_TEST_CASE(a_restart_keeps_the_boundary_data_the_case_owns)
+{
+    const toml::value config = u8R"(
+        [AutodiffTransportSystem]
+        uL = [0.0]
+        isLowerDirichlet = false
+        uR = [0.3]
+        isUpperDirichlet = true
+        InitialHeights = [0.3]
+        InitialProfile = ["Uniform"]
+        [ADTestProblem]
+        kappa = 1.0
+    )"_toml;
+    constexpr Index order = 5;
+    constexpr double tSplit = 0.5, tEnd = 1.0;
+    auto setUp = [](SystemSolver &sys, std::string const &stem, double t0)
+    {
+        sys.setTau(1.0);
+        sys.resetCoeffs();
+        sys.setInputFile(stem);
+        sys.setOutputCadence(0.25);
+        sys.setNOutput(11);
+        sys.setInitialTime(t0);
+        sys.setMinStepSize(1e-14);
+        sys.setTolerances({1e-5}, 1e-6);
+        sys.setWriteDatFile(false);
+    };
+    auto qAndU = [](SystemSolver &sys)
+    {
+        Vector out(10);
+        for (Index j = 0; j < 5; ++j)
+        {
+            out(j) = sys.getSolution().u(0)(0.1 + 0.2 * j);
+            out(5 + j) = sys.getSolution().q(0)(0.2 * j);
+        }
+        return out;
+    };
+
+    Vector uninterrupted;
+    {
+        Grid grid(0.0, 1.0, 5);
+        ADTestProblem problem(config, grid);
+        SystemSolver sys(grid, order, &problem);
+        setUp(sys, "lifecycle_owned_bcs_full", 0.0);
+        sys.setWriteOutput(false);
+        CapturedOutput quiet;
+        sys.runSolver(tEnd);
+        uninterrupted = qAndU(sys);
+    }
+    {
+        Grid grid(0.0, 1.0, 5);
+        ADTestProblem problem(config, grid);
+        SystemSolver sys(grid, order, &problem);
+        setUp(sys, "lifecycle_owned_bcs", 0.0);
+        CapturedOutput quiet;
+        sys.runSolver(tSplit);
+    }
+
+    const RestartFileData rf = readRestart("lifecycle_owned_bcs.restart.nc");
+    Grid grid(rf.cellBoundaries);
+    ADTestProblem problem(config, grid);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+
+    // The case's own data, exactly; what the profile would have given is not
+    // close enough to pass for it.
+    DGSoln file(1, grid, rf.order, const_cast<double *>(rf.Y.data()));
+    BOOST_TEST(problem.LowerBoundary(0, tSplit) == 0.0);
+    BOOST_TEST(problem.UpperBoundary(0, tSplit) == 0.3);
+    BOOST_TEST(std::abs(file.q(0)(0.0)) > 1e-6);
+    BOOST_TEST(std::abs(file.u(0)(1.0) - 0.3) > 1e-8);
+
+    SystemSolver sys(grid, rf.order, &problem);
+    setUp(sys, "lifecycle_owned_bcs_rest", tSplit);
+    sys.setWriteOutput(false);
+    {
+        CapturedOutput quiet;
+        BOOST_REQUIRE_NO_THROW(sys.runSolver(tEnd));
+    }
+    // Measured 2.1e-13: resuming from a converged state, with the same data,
+    // the two runs take the same steps.
+    const double gap = (qAndU(sys) - uninterrupted).cwiseAbs().maxCoeff();
+    BOOST_TEST_MESSAGE("restarted against uninterrupted: " << gap);
+    BOOST_TEST(gap < 1e-5);
+    removeOutput("lifecycle_owned_bcs");
+}
+
 
 BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
 {
