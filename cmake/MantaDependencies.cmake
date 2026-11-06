@@ -198,6 +198,8 @@ set(LAPACK_LIBRARIES "${LAPACK_LIBRARIES}" CACHE FILEPATH "LAPACK libraries" FOR
 # build_sundials, which switches the rest off -- KINSOL in particular is what
 # SteadyState drives for the PseudoTransient and Newton paths, and a SUNDIALS
 # built without it fails three files into the build rather than at the link.
+# sunlinsolspgmr is GMRES, which FieldSolve = "krylov" drives directly
+# (SystemSolver::couplingKrylov); build_sundials leaves the linear solvers on.
 # ./sundials/install is where the bundled build_sundials script puts one, so a
 # checkout that ran it configures with no arguments at all. SUNDIALS_ROOT is a
 # *preferred* prefix rather than an exclusive one, so setting it when the
@@ -210,10 +212,10 @@ if(NOT DEFINED SUNDIALS_ROOT AND NOT DEFINED ENV{SUNDIALS_ROOT}
 endif()
 
 find_package(SUNDIALS 7.1.0 REQUIRED
-             COMPONENTS core ida kinsol nvecserial sunnonlinsolnewton)
+             COMPONENTS core ida kinsol nvecserial sunnonlinsolnewton sunlinsolspgmr)
 target_link_libraries(manta_deps INTERFACE
   SUNDIALS::core SUNDIALS::ida SUNDIALS::kinsol SUNDIALS::nvecserial
-  SUNDIALS::sunnonlinsolnewton)
+  SUNDIALS::sunnonlinsolnewton SUNDIALS::sunlinsolspgmr)
 
 # --------------------------------------------------------------------- Eigen --
 #

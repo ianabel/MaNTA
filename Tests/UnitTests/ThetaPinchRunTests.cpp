@@ -8,6 +8,7 @@
 #include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
 #include "../../FieldModelEquilibrium.hpp"
 #include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
+#include "../../PhysicsCases/ThetaPinchPressureBalance.hpp"
 #include "../../SystemSolver.hpp"
 #include "../../Types.hpp"
 
@@ -58,6 +59,80 @@ struct Options
     double t0 = 0.0;
     // ThetaPinchDiffusion's GeometryDerivatives: Analytic, Differenced or None.
     std::string derivatives = "Analytic";
+    // Tier 1: the model through FieldModelEquilibrium, FieldCoupling =
+    // "reduced", with its own response or the differenced default.
+    bool reduced = false;
+    bool differencedResponse = false;
+    // FieldSolve = krylov, at tier 1 or 2; overrides `iterative`.
+    bool krylov = false;
+    // Count what the run asks of the case (CountingThetaPinch).
+    bool count = false;
+    // Tier 1 with a transposed response that does nothing.
+    bool blindTranspose = false;
+    // The native model, ThetaPinchPressureBalance, in place of the field model:
+    // at tier 1 unless `consistent`, with its own response unless
+    // `differencedResponse`.
+    bool native = false;
+};
+
+/// The tier-1 adapter, counting its equilibrium solves -- including the ones
+/// the differenced response makes -- and optionally blind in the transposed
+/// direction, which is what an adjoint that never applied G'^T would compute.
+class CountingEquilibrium : public FieldModelEquilibrium
+{
+public:
+    using FieldModelEquilibrium::FieldModelEquilibrium;
+
+    std::unique_ptr<Equilibrium> Solve(GlobalState const &states, std::vector<Position> const &points,
+                                       Vector const &weights, Time t, Equilibrium const *warm) override
+    {
+        ++solves;
+        return FieldModelEquilibrium::Solve(states, points, weights, t, warm);
+    }
+    void applyResponseTranspose(GlobalState &dp, Equilibrium const &e, GlobalState const &states, Matrix const &dg,
+                                std::vector<Position> const &inputPoints, Vector const &weights, Time t,
+                                std::vector<Position> const &geometryPoints) override
+    {
+        if (!blind)
+            FieldModelEquilibrium::applyResponseTranspose(dp, e, states, dg, inputPoints, weights, t,
+                                                          geometryPoints);
+    }
+
+    long solves = 0;
+    bool blind = false;
+};
+
+/// ThetaPinchDiffusion counting the physics a run asks for, in the cost
+/// metric: points of batched value evaluations, points of batched derivative
+/// evaluations, and nodes at which the analytic geometry hooks were called (one
+/// dSigmaFn_dGeometry per node per Jacobian build).
+class CountingThetaPinch : public ThetaPinchDiffusion
+{
+public:
+    using ThetaPinchDiffusion::ThetaPinchDiffusion;
+
+    PhysicsOutput ComputePhysics(GlobalState const &s, std::vector<Position> const &x, Time t) override
+    {
+        values += static_cast<long>(x.size());
+        return ThetaPinchDiffusion::ComputePhysics(s, x, t);
+    }
+    void ComputePhysicsDerivatives(std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS> &&out,
+                                   GlobalState const &s, std::vector<Position> const &x, Time t) override
+    {
+        derivatives += static_cast<long>(x.size());
+        ThetaPinchDiffusion::ComputePhysicsDerivatives(std::move(out), s, x, t);
+    }
+    void dSigmaFn_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        if (i == 0)
+            ++geometryHookNodes;
+        ThetaPinchDiffusion::dSigmaFn_dGeometry(i, v, s, x, t);
+    }
+
+    /// Values at 1 and derivatives at 2 per point; the hooks priced separately.
+    long cost() const { return values + 2 * derivatives; }
+
+    long values = 0, derivatives = 0, geometryHookNodes = 0;
 };
 
 struct Run
@@ -65,6 +140,8 @@ struct Run
     std::unique_ptr<Grid> grid;
     std::unique_ptr<ThetaPinchDiffusion> problem;
     std::shared_ptr<ThetaPinchEquilibrium> field;
+    std::shared_ptr<CountingEquilibrium> equilibrium;
+    std::shared_ptr<ThetaPinchPressureBalance> native;
     std::unique_ptr<SystemSolver> sys;
 };
 
@@ -75,7 +152,10 @@ Run makeRun(Options const &o, std::string const &stem,
     r.grid = std::make_unique<Grid>(0.0, 1.0, o.nCells);
     toml::value config = thetaPinchConfig;
     config.as_table().at("ThetaPinchDiffusion").as_table()["GeometryDerivatives"] = o.derivatives;
-    r.problem = std::make_unique<ThetaPinchDiffusion>(config, *r.grid);
+    if (o.count)
+        r.problem = std::make_unique<CountingThetaPinch>(config, *r.grid);
+    else
+        r.problem = std::make_unique<ThetaPinchDiffusion>(config, *r.grid);
     if (prepare)
         prepare(*r.problem, *r.grid);
     r.field = std::make_shared<ThetaPinchEquilibrium>(
@@ -93,14 +173,27 @@ Run makeRun(Options const &o, std::string const &stem,
     sys.setTolerances({1e-8}, 1e-6);
     sys.setWriteOutput(o.writeOutput);
     sys.setWriteDatFile(false);
-    if (o.consistent)
-        sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(r.field));
-    else
+    if (o.native)
     {
-        sys.setFieldModel(r.field);
-        sys.setFieldSolveMode(o.iterative ? SystemSolver::FieldSolveMode::Iterative
-                                          : SystemSolver::FieldSolveMode::Exact);
+        r.native = std::make_shared<ThetaPinchPressureBalance>(
+            ThetaPinchPressureBalance::Parameters{.differencedResponse = o.differencedResponse}, *r.grid);
+        sys.setEquilibriumModel(r.native, o.consistent ? SystemSolver::EquilibriumCoupling::Consistent
+                                                       : SystemSolver::EquilibriumCoupling::Reduced);
     }
+    else if (o.consistent)
+        sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(r.field));
+    else if (o.reduced)
+    {
+        r.equilibrium = std::make_shared<CountingEquilibrium>(r.field, o.differencedResponse);
+        r.equilibrium->blind = o.blindTranspose;
+        sys.setEquilibriumModel(r.equilibrium, SystemSolver::EquilibriumCoupling::Reduced);
+    }
+    else
+        sys.setFieldModel(r.field);
+    if (!o.consistent)
+        sys.setFieldSolveMode(o.krylov      ? SystemSolver::FieldSolveMode::Krylov
+                              : o.iterative ? SystemSolver::FieldSolveMode::Iterative
+                                            : SystemSolver::FieldSolveMode::Exact);
     return r;
 }
 
@@ -342,6 +435,175 @@ BOOST_AUTO_TEST_CASE(differenced_geometry_derivatives_give_the_analytic_run)
                                    { return s.kind == EvaluationKind::FieldCoupling; });
     BOOST_REQUIRE(site != plan.sites.end());
     BOOST_TEST(site->calls == differenced.sys->getGeometrySlots() + 1);
+}
+
+/// "Total Number of Timesteps" from a run's report, as a number.
+long stepsIn(std::string const &log)
+{
+    const auto at = log.find("Total Number of Timesteps");
+    if (at == std::string::npos)
+        return -1;
+    return std::stol(log.substr(log.find(':', at) + 1));
+}
+
+// Tier 1 carries the coupling in its Jacobian, so IDA's Newton converges as it
+// does at tier 2 and the run takes about tier 2's steps, not tier 0's crawl --
+// with the model's own response or the differenced default, under either
+// solve. Measured: 163 steps under iterative and 157 to 197 under krylov,
+// against tier 2's 144 and tier 0's 321 (on the regression config, 174 at both
+// tiers); N within 2.5e-7 and 3.7e-8 of tier 2's.
+//
+// The step counts are a sample, not a property: they move by tens of percent
+// with the last bits of the arithmetic. Over rtol x {0.9, 0.95, 1, 1.05, 1.1}
+// tier 2 took 210, 174, 144, 175 and 146 steps and the tier-1 modes 150 to 172,
+// and the differenced response under krylov went from 157 to 197 at rtol 1e-6
+// on a rebuild that changed only this file's code generation. Hence 1.5 times
+// tier 2's count, where 144 is tier 2's own best case, and half again under
+// tier 0's, which is what tier 1 exists to avoid.
+BOOST_AUTO_TEST_CASE(a_reduced_theta_pinch_reaches_the_coupled_answer)
+{
+    auto run = [](Options const &o, std::string const &stem, long &steps)
+    {
+        auto r = makeRun(o, stem);
+        CapturedOutput capture;
+        r.sys->runSolver(0.5);
+        steps = stepsIn(capture.text());
+        return r;
+    };
+    long coupledSteps = 0, tier0Steps = 0;
+    auto coupled = run({}, "theta_pinch_tier2_t1", coupledSteps);
+    auto tier0 = run({.consistent = true}, "theta_pinch_tier0_t1", tier0Steps);
+    const Vector want = sampleWithGeometry(*coupled.sys);
+
+    for (bool differenced : {false, true})
+        for (bool krylov : {false, true})
+        {
+            long steps = 0;
+            auto reduced = run({.reduced = true, .differencedResponse = differenced, .krylov = krylov},
+                               "theta_pinch_tier1", steps);
+            const Vector got = sampleWithGeometry(*reduced.sys);
+            const double dN =
+                (want.head(5) - got.head(5)).cwiseAbs().maxCoeff() / want.head(5).cwiseAbs().maxCoeff();
+            const double dB = (want.tail(5) - got.tail(5)).cwiseAbs().maxCoeff();
+            const auto stats = reduced.sys->getFieldSweepStats();
+            BOOST_TEST_MESSAGE("tier 1, differenced response = "
+                               << differenced << ", krylov = " << krylov << ": " << steps << " steps (tier 2 "
+                               << coupledSteps << ", tier 0 " << tier0Steps << "); N " << dN << " relative, B "
+                               << dB << "; " << stats.iterations << " sweeps / " << stats.solves << " solves, "
+                               << stats.krylovIterations << " GMRES iterations / " << stats.krylovSolves
+                               << ", " << stats.responses << " responses, " << stats.fallbacks
+                               << " fallbacks");
+            BOOST_TEST(dN < 1e-5);
+            BOOST_TEST(dB < 1e-6);
+            BOOST_TEST(reduced.sys->getFieldDOF() == 0);
+            BOOST_TEST(steps <= coupledSteps + coupledSteps / 2);
+            BOOST_TEST(2 * steps < 3 * tier0Steps / 2);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(a_reduced_steady_solve_reaches_the_coupled_answer)
+{
+    for (auto mode : {SystemSolver::SteadyMode::Newton, SystemSolver::SteadyMode::PseudoTransient})
+        for (bool differenced : {false, true})
+        {
+            auto coupled = makeRun({}, "theta_pinch_tier2_ss1");
+            auto reduced = makeRun({.reduced = true, .differencedResponse = differenced}, "theta_pinch_tier1_ss");
+            for (Run *r : {&coupled, &reduced})
+            {
+                r->sys->setSteadyStateTolerance(1e-8);
+                r->sys->setSteadyMode(mode);
+                CapturedOutput quiet;
+                r->sys->runSolver(0.5);
+            }
+            const Vector a = sampleWithGeometry(*coupled.sys), b = sampleWithGeometry(*reduced.sys);
+            const double dN = (a.head(5) - b.head(5)).cwiseAbs().maxCoeff() / a.head(5).cwiseAbs().maxCoeff();
+            BOOST_TEST_MESSAGE("steady tier 1 (differenced response = "
+                               << differenced << ") against coupled: N " << dN << " relative; Newton iterations "
+                               << reduced.sys->lastSteadyStats().newtonIters << " against "
+                               << coupled.sys->lastSteadyStats().newtonIters);
+            BOOST_TEST(dN < 1e-8);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(a_reused_reduced_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)
+{
+    for (bool differenced : {false, true})
+    {
+        auto fresh = makeRun({.reduced = true, .differencedResponse = differenced}, "theta_pinch_tier1_fresh");
+        auto reused = makeRun({.reduced = true, .differencedResponse = differenced}, "theta_pinch_tier1_reused");
+        {
+            CapturedOutput quiet;
+            fresh.sys->runSolver(0.5);
+            reused.sys->runSolver(0.5);
+            reused.sys->runSolver(0.5);
+        }
+        const Vector want = sampleWithGeometry(*fresh.sys), got = sampleWithGeometry(*reused.sys);
+        BOOST_TEST((want - got).cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
+    }
+}
+
+// What a mode spends on the case, pinned exactly. Every mode pays one value
+// sweep per residual, one derivative sweep per Jacobian build and its coupling
+// site per build, plus the same fixed sweeps to start: so the cost less those
+// per-evaluation terms is the same constant in every mode, and the equilibrium
+// work tier 1 adds -- solves, responses, the differenced response's extra
+// solves -- costs the case nothing.
+BOOST_AUTO_TEST_CASE(each_mode_spends_one_sweep_per_residual_and_per_build_and_no_more)
+{
+    for (std::string derivatives : {"Analytic", "Differenced"})
+    {
+        std::vector<long> fixedValues, fixedDerivatives;
+        for (int mode = 0; mode < 4; ++mode)
+        {
+            Options o{.derivatives = derivatives, .count = true};
+            o.reduced = mode >= 1;
+            o.differencedResponse = mode == 2;
+            o.krylov = mode == 3;
+            auto r = makeRun(o, "theta_pinch_counted");
+            {
+                CapturedOutput quiet;
+                r.sys->runSolver(0.5);
+            }
+            auto const &c = static_cast<CountingThetaPinch const &>(*r.problem);
+            const long points = static_cast<long>(r.sys->evaluationPlan().grid.getNCells()) * (o.k + 1);
+            const long coupling = derivatives == "Differenced" ? r.sys->getGeometrySlots() + 1 : 0;
+            const long perValues = r.sys->nResidualEvals + coupling * r.sys->nJacBuilds;
+            fixedValues.push_back(c.values - points * perValues);
+            fixedDerivatives.push_back(c.derivatives - points * r.sys->nJacBuilds);
+            BOOST_TEST_MESSAGE(derivatives << ", mode " << mode << ": " << r.sys->nResidualEvals << " residuals, "
+                                           << r.sys->nJacBuilds << " builds; values " << c.values
+                                           << ", derivatives " << c.derivatives << ", hook nodes "
+                                           << c.geometryHookNodes << "; fixed " << fixedValues.back() << " / "
+                                           << fixedDerivatives.back());
+            if (derivatives == "Analytic")
+                BOOST_TEST(c.geometryHookNodes == points * r.sys->nJacBuilds);
+            else
+                BOOST_TEST(c.geometryHookNodes == 0);
+        }
+        for (size_t m = 1; m < fixedValues.size(); ++m)
+        {
+            BOOST_TEST(fixedValues[m] == fixedValues[0]);
+            BOOST_TEST(fixedDerivatives[m] == fixedDerivatives[0]);
+        }
+    }
+}
+
+// The plan says what a build costs at tier 1 as at tier 2: the case's coupling
+// site, and nothing for the equilibrium.
+BOOST_AUTO_TEST_CASE(a_reduced_plan_lists_the_coupling_site)
+{
+    auto analytic = makeRun({.reduced = true}, "theta_pinch_tier1_plan");
+    auto differenced = makeRun({.derivatives = "Differenced", .reduced = true}, "theta_pinch_tier1_plan");
+    auto tier0 = makeRun({.consistent = true}, "theta_pinch_tier0_plan");
+    auto site = [](SystemSolver &sys)
+    {
+        const EvaluationPlan plan = sys.evaluationPlan();
+        return std::find_if(plan.sites.begin(), plan.sites.end(), [](EvaluationSite const &s)
+                            { return s.kind == EvaluationKind::FieldCoupling; }) != plan.sites.end();
+    };
+    BOOST_TEST(site(*analytic.sys));
+    BOOST_TEST(site(*differenced.sys));
+    BOOST_TEST(!site(*tier0.sys));
 }
 
 BOOST_AUTO_TEST_CASE(a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)
@@ -765,5 +1027,352 @@ BOOST_AUTO_TEST_CASE(the_objective_estimate_carries_the_field_share)
     sys.destroySundials();
 }
 
+
+// ------------------------------------------------- tier 1: the adjoint --
+
+/// A steady theta pinch with an adjoint: the three objectives -- u^2, then the
+/// two of addGeometricObjectives -- at the converged state, and with `gradient`
+/// the adjoint's G_p, all three rows. G is the run's own objectiveValue, which
+/// at tiers 1 and 2 reads the geometry.
+Vector steadyObjectives(Options const &o, Index which, double delta, Matrix *gradient, std::string const &stem)
+{
+    auto run = makeRun(o, stem);
+    run.problem->setPval(which, Real(run.problem->getPval(which).val + delta));
+    AutodiffAdjointProblem objective(run.problem.get());
+    objective.addG([](Position, RealVector &u, RealVector &, RealVector &, RealVector &) -> Real
+                   { return u(0) * u(0); });
+    addGeometricObjectives(objective);
+    SystemSolver &sys = *run.sys;
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-11);
+    sys.setTolerances({1e-11}, 1e-9);
+    sys.setAdjointProblem(&objective);
+    sys.setSolveAdjoint(gradient != nullptr);
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.integrate(0.0);
+    }
+    if (gradient)
+        *gradient = sys.G_p;
+    Vector G(3);
+    for (Index g = 0; g < 3; ++g)
+        G(g) = sys.objectiveValue(objective, g, sys.yJac, sys.jt);
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    return G;
+}
+
+// The tier-1 gradient against central differences of G, with the adapter's
+// exact transpose and with the assembled default, under each solve; and the
+// same G_p as tier 2's, which with the exact response is the same adjoint
+// with psi eliminated. Three objectives: u^2 reaches the adjoint through G_y
+// alone, B (1 + x^2) through G_geometry alone, and u V' through both.
+BOOST_AUTO_TEST_CASE(the_reduced_gradient_matches_finite_differences_and_tier_two)
+{
+    Matrix coupled;
+    steadyObjectives({}, 0, 0.0, &coupled, "theta_pinch_t1_gradient");
+
+    struct Case
+    {
+        const char *name;
+        Options o;
+    };
+    const std::vector<Case> cases = {
+        {"exact G', iterative", {.reduced = true}},
+        {"exact G', exact", {.iterative = false, .reduced = true}},
+        {"exact G', krylov", {.reduced = true, .krylov = true}},
+        {"assembled G', iterative", {.reduced = true, .differencedResponse = true}},
+    };
+    for (Case const &c : cases)
+    {
+        BOOST_TEST_CONTEXT(c.name)
+        {
+            Matrix gradient;
+            steadyObjectives(c.o, 0, 0.0, &gradient, "theta_pinch_t1_gradient");
+            BOOST_REQUIRE_EQUAL(gradient.rows(), 3);
+            const double againstTier2 = (gradient - coupled).cwiseAbs().maxCoeff() / coupled.cwiseAbs().maxCoeff();
+            BOOST_TEST_MESSAGE(c.name << ": |G_p - G_p(tier 2)| / |G_p| = " << againstTier2);
+            BOOST_TEST(againstTier2 < (c.o.differencedResponse ? 1e-6 : 1e-8));
+
+            for (Index which : {ThetaPinchDiffusion::pD0, ThetaPinchDiffusion::pTemperature})
+            {
+                const double h = 1e-5;
+                const Vector fd = (steadyObjectives(c.o, which, +h, nullptr, "theta_pinch_t1_gradient") -
+                                   steadyObjectives(c.o, which, -h, nullptr, "theta_pinch_t1_gradient")) /
+                                  (2.0 * h);
+                // The assembled transpose is a forward difference, good to about
+                // 1e-7 of G'. That is an error on the scale of the whole
+                // gradient: measured 1.1e-7 of max |G_p| against tier 2, which
+                // is 6e-6 of objective 1's own entries, 300 times smaller. So
+                // it is bounded on that scale; the model's transpose agrees with
+                // the differences entry by entry, to 1e-9.
+                const double scale = gradient.cwiseAbs().maxCoeff();
+                for (Index g = 0; g < 3; ++g)
+                {
+                    BOOST_TEST_MESSAGE("  objective " << g << ", parameter " << which << ": adjoint "
+                                                      << gradient(g, which) << " against " << fd(g));
+                    BOOST_TEST(std::abs(fd(g)) > 1e-4);
+                    if (c.o.differencedResponse)
+                        BOOST_TEST(std::abs(gradient(g, which) - fd(g)) < 1e-6 * scale);
+                    else
+                        BOOST_TEST(gradient(g, which) == fd(g), boost::test_tools::tolerance(1e-6));
+                }
+            }
+        }
+    }
+    removeOutput("theta_pinch_t1_gradient");
+}
+
+// The vacuity guards, on the gradient. A_g^T zeroed, or a transposed response
+// that does nothing, is the frozen-field gradient, and it is wrong.
+BOOST_AUTO_TEST_CASE(dropping_the_transposed_response_makes_the_reduced_gradient_wrong)
+{
+    auto relative = [](Vector const &a, Vector const &b) { return (a - b).norm() / b.norm(); };
+    Matrix good;
+    steadyObjectives({.reduced = true}, 0, 0.0, &good, "theta_pinch_t1_guard");
+
+    Matrix blind;
+    steadyObjectives({.reduced = true, .blindTranspose = true}, 0, 0.0, &blind, "theta_pinch_t1_guard");
+
+    // A_g^T: zeroed after the run, then solved and accumulated again for the
+    // last objective, whose G_y the run left behind.
+    auto run = makeRun({.reduced = true}, "theta_pinch_t1_guard");
+    AutodiffAdjointProblem objective(run.problem.get());
+    objective.addG([](Position, RealVector &u, RealVector &, RealVector &, RealVector &) -> Real
+                   { return u(0) * u(0); });
+    addGeometricObjectives(objective);
+    SystemSolver &sys = *run.sys;
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setSteadyStateTolerance(1e-11);
+    sys.setTolerances({1e-11}, 1e-9);
+    sys.setAdjointProblem(&objective);
+    sys.setSolveAdjoint(true);
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        sys.integrate(0.0);
+    }
+    BOOST_TEST(relative(sys.G_p.row(2).transpose(), good.row(2).transpose()) < 1e-12);
+    for (Matrix &block : sys.Ag_transpose_cellwise)
+    {
+        BOOST_REQUIRE_GT(block.cwiseAbs().maxCoeff(), 0.0);
+        block.setZero();
+    }
+    sys.solveAdjointState();
+    sys.accumulateAdjointGradients(2);
+    const Vector noAg = sys.G_p.row(2).transpose();
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+
+    for (Index g = 0; g < 3; ++g)
+        BOOST_TEST_MESSAGE("objective " << g << ": with no transposed response, relative error "
+                                        << relative(blind.row(g).transpose(), good.row(g).transpose()));
+    BOOST_TEST_MESSAGE("objective 2 with A_g^T zeroed: relative error " << relative(noAg, good.row(2).transpose()));
+    for (Index g = 0; g < 3; ++g)
+        BOOST_TEST(relative(blind.row(g).transpose(), good.row(g).transpose()) > 1e-2);
+    BOOST_TEST(relative(noAg, good.row(2).transpose()) > 1e-2);
+    removeOutput("theta_pinch_t1_guard");
+}
+
+// An adjoint on demand at tier 1 makes no physics call, as at tier 2, and the
+// equilibrium solves it makes are pinned: one for the objective's geometry,
+// and with the assembled default one per input component per point besides,
+// once per equilibrium -- a second solve at the same operator makes none.
+BOOST_AUTO_TEST_CASE(a_reduced_adjoint_on_demand_makes_no_physics_call)
+{
+    for (bool differenced : {false, true})
+    {
+        BOOST_TEST_CONTEXT("differenced response = " << differenced)
+        {
+            Options o{.reduced = true, .differencedResponse = differenced, .count = true};
+            auto run = makeRun(o, "theta_pinch_t1_on_demand");
+            AutodiffAdjointProblem objective(run.problem.get());
+            addGeometricObjectives(objective);
+            SystemSolver &sys = *run.sys;
+            {
+                CapturedOutput quiet;
+                sys.runSolver(0.5);
+            }
+            auto const &c = static_cast<CountingThetaPinch const &>(*run.problem);
+            const long values = c.values, derivatives = c.derivatives, hooks = c.geometryHookNodes;
+            const long solves = run.equilibrium->solves;
+
+            DGSoln state = sys.getSolution();
+            std::vector<double> copy(state.data(), state.data() + state.getDoF());
+            DGSoln at(sys.nVars, *run.grid, sys.k, copy.data(), 0, sys.nAux, 0);
+            sys.solveAdjointAt(objective, {0, 1}, at);
+            const long first = run.equilibrium->solves - solves;
+            sys.solveAdjointAt(objective, {0, 1}, at);
+            const long second = run.equilibrium->solves - solves - first;
+
+            const long components = 3 * sys.nVars + sys.nAux;
+            const long inputs = components * static_cast<long>(run.grid->getNCells()) * (o.k + 1);
+            BOOST_TEST_MESSAGE("physics calls " << c.values - values << " / " << c.derivatives - derivatives << " / "
+                                                << c.geometryHookNodes - hooks << "; equilibrium solves "
+                                                << first << " then " << second << " (" << inputs
+                                                << " input components)");
+            BOOST_TEST(c.values == values);
+            BOOST_TEST(c.derivatives == derivatives);
+            BOOST_TEST(c.geometryHookNodes == hooks);
+            // One solve for the objective's own geometry: dg reads it at the
+            // state asked about, and the cache holds the last residual's state,
+            // which after a time march is an iterate of IDA's rather than the
+            // output it interpolated. Then the assembly, once.
+            BOOST_TEST(first == 1 + (differenced ? inputs : 0));
+            BOOST_TEST(second == 0);
+            BOOST_TEST(sys.adjointSolution(0, at) != nullptr);
+        }
+    }
+    removeOutput("theta_pinch_t1_on_demand");
+}
+
+BOOST_AUTO_TEST_CASE(a_reused_reduced_adjoint_matches_a_fresh_one_bit_for_bit)
+{
+    for (bool differenced : {false, true})
+    {
+        auto gradientOf = [&](int runs)
+        {
+            auto run = makeRun({.reduced = true, .differencedResponse = differenced}, "theta_pinch_t1_reuse");
+            AutodiffAdjointProblem objective(run.problem.get());
+            addGeometricObjectives(objective);
+            SystemSolver &sys = *run.sys;
+            sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+            sys.setSteadyStateTolerance(1e-10);
+            sys.setAdjointProblem(&objective);
+            sys.setSolveAdjoint(true);
+            for (int r = 0; r < runs; ++r)
+            {
+                CapturedOutput quiet;
+                sys.runSolver(0.0);
+            }
+            return Matrix(sys.G_p);
+        };
+        const Matrix fresh = gradientOf(1), reused = gradientOf(2);
+        BOOST_TEST((fresh - reused).cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
+    }
+    removeOutput("theta_pinch_t1_reuse");
+}
+
+// ------------------------------- a native equilibrium: the pressure balance --
+//
+// ThetaPinchPressureBalance, the registered native EquilibriumModel, through the
+// run tests tiers 0 and 1 of the field model take: reuse, the gradient and the
+// adjoint on demand.
+
+BOOST_AUTO_TEST_CASE(a_reused_native_theta_pinch_solver_matches_a_fresh_one_bit_for_bit)
+{
+    struct Case
+    {
+        const char *name;
+        Options o;
+    };
+    for (Case const &c : {Case{"tier 1, model G'", {.reduced = true, .native = true}},
+                          Case{"tier 1, differenced G'", {.reduced = true, .differencedResponse = true, .native = true}},
+                          Case{"tier 0", {.consistent = true, .native = true}}})
+        BOOST_TEST_CONTEXT(c.name)
+        {
+            auto fresh = makeRun(c.o, "theta_pinch_native_fresh");
+            auto reused = makeRun(c.o, "theta_pinch_native_reused");
+            {
+                CapturedOutput quiet;
+                fresh.sys->runSolver(0.5);
+                reused.sys->runSolver(0.5);
+                reused.sys->runSolver(0.5);
+            }
+            const Vector want = sampleWithGeometry(*fresh.sys), got = sampleWithGeometry(*reused.sys);
+            BOOST_TEST((want - got).cwiseAbs().maxCoeff() == 0.0, boost::test_tools::tolerance(0.0));
+            // Not vacuous: the field has left the vacuum, B = 1.
+            BOOST_TEST((want.tail(5).array() - 1.0).abs().maxCoeff() > 1e-2);
+        }
+}
+
+// The native tier-1 gradient against central differences of G, with the model's
+// exact transpose and with the base class's assembly of its differenced
+// response, on the three objectives of the_reduced_gradient_matches_finite_
+// differences_and_tier_two.
+BOOST_AUTO_TEST_CASE(the_native_gradient_matches_finite_differences)
+{
+    for (bool differenced : {false, true})
+        BOOST_TEST_CONTEXT("differenced response = " << differenced)
+        {
+            const Options o{.reduced = true, .differencedResponse = differenced, .native = true};
+            Matrix gradient;
+            steadyObjectives(o, 0, 0.0, &gradient, "theta_pinch_native_gradient");
+            BOOST_REQUIRE_EQUAL(gradient.rows(), 3);
+            const double scale = gradient.cwiseAbs().maxCoeff();
+            for (Index which : {ThetaPinchDiffusion::pD0, ThetaPinchDiffusion::pTemperature})
+            {
+                const double h = 1e-5;
+                const Vector fd = (steadyObjectives(o, which, +h, nullptr, "theta_pinch_native_gradient") -
+                                   steadyObjectives(o, which, -h, nullptr, "theta_pinch_native_gradient")) /
+                                  (2.0 * h);
+                for (Index g = 0; g < 3; ++g)
+                {
+                    BOOST_TEST_MESSAGE("objective " << g << ", parameter " << which << ": adjoint "
+                                                    << gradient(g, which) << " against " << fd(g));
+                    BOOST_TEST(std::abs(fd(g)) > 1e-4);
+                    // As for the field model's: the assembled transpose of a
+                    // forward difference is good to about 1e-7 of G', so on the
+                    // scale of the whole gradient; the exact one entry by entry.
+                    if (differenced)
+                        BOOST_TEST(std::abs(gradient(g, which) - fd(g)) < 1e-6 * scale);
+                    else
+                        BOOST_TEST(gradient(g, which) == fd(g), boost::test_tools::tolerance(1e-6));
+                }
+            }
+        }
+    removeOutput("theta_pinch_native_gradient");
+}
+
+// The native adjoint on demand makes no physics call, and its equilibrium
+// solves are pinned: one for the objective's geometry and, with the exact
+// transpose, no more -- it assembles G' from duals, not from Solve. With the
+// differenced response the base class's assembly makes one per input component
+// per point, once per equilibrium.
+BOOST_AUTO_TEST_CASE(a_native_adjoint_on_demand_makes_no_physics_call)
+{
+    for (bool differenced : {false, true})
+        BOOST_TEST_CONTEXT("differenced response = " << differenced)
+        {
+            Options o{.reduced = true, .differencedResponse = differenced, .count = true, .native = true};
+            auto run = makeRun(o, "theta_pinch_native_on_demand");
+            AutodiffAdjointProblem objective(run.problem.get());
+            addGeometricObjectives(objective);
+            SystemSolver &sys = *run.sys;
+            {
+                CapturedOutput quiet;
+                sys.runSolver(0.5);
+            }
+            auto const &c = static_cast<CountingThetaPinch const &>(*run.problem);
+            const long values = c.values, derivatives = c.derivatives, hooks = c.geometryHookNodes;
+            const long solves = run.native->solves();
+
+            DGSoln state = sys.getSolution();
+            std::vector<double> copy(state.data(), state.data() + state.getDoF());
+            DGSoln at(sys.nVars, *run.grid, sys.k, copy.data(), 0, sys.nAux, 0);
+            sys.solveAdjointAt(objective, {0, 1}, at);
+            const long first = run.native->solves() - solves;
+            sys.solveAdjointAt(objective, {0, 1}, at);
+            const long second = run.native->solves() - solves - first;
+
+            const long components = 3 * sys.nVars + sys.nAux;
+            const long inputs = components * static_cast<long>(run.grid->getNCells()) * (o.k + 1);
+            BOOST_TEST_MESSAGE("physics calls " << c.values - values << " / " << c.derivatives - derivatives
+                                                << " / " << c.geometryHookNodes - hooks << "; equilibrium solves "
+                                                << first << " then " << second);
+            BOOST_TEST(c.values == values);
+            BOOST_TEST(c.derivatives == derivatives);
+            BOOST_TEST(c.geometryHookNodes == hooks);
+            BOOST_TEST(first == 1 + (differenced ? inputs : 0));
+            BOOST_TEST(second == 0);
+            BOOST_TEST(sys.adjointSolution(0, at) != nullptr);
+        }
+    removeOutput("theta_pinch_native_on_demand");
+}
 
 BOOST_AUTO_TEST_SUITE_END()

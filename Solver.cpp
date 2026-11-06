@@ -73,18 +73,25 @@ void SystemSolver::initialize()
 	// cold equilibrium a fresh one would.
 	equilibriumCache = {};
 	equilibriumSolves = 0;
+	// Tier 1's blocks hold an equilibrium of the last run's; nothing may read
+	// them before this run's first Jacobian build.
+	reducedBlocks = {};
+	adjointReducedBlocks = {};
 	if (equilibriumModel)
 	{
 		equilibriumModel->resetForRun();
 
 		// No adjoint through the field at tier 0. Run as a frozen-field gradient
 		// it would be wrong by the field's share -- a third of the closed-form
-		// gradient on the theta pinch -- so it is refused rather than run.
-		if (adjointProblem != nullptr || steadyTest == SteadyTest::Objective)
+		// gradient on the theta pinch -- so it is refused rather than run. Tier
+		// 1 transposes its response (applyResponseTranspose), so it has one.
+		if (!reducedCoupling() && (adjointProblem != nullptr || steadyTest == SteadyTest::Objective))
+		{
 			throw std::invalid_argument(
 				"An adjoint cannot be solved with FieldCoupling = \"consistent\": the equilibrium "
 				"supplies no derivatives, and a gradient with the field frozen would be wrong by "
 				"its share. Couple the field model to get gradients.");
+		}
 
 		// Well below the run's own tolerances: an equilibrium's error goes into
 		// every residual, where IDA reads it as local error.
@@ -138,6 +145,11 @@ void SystemSolver::initialize()
 	fieldSweepFallbacks = 0;
 	fieldAdjointSweeps = 0;
 	fieldAdjointFellBack = false;
+	adjointKrylovIterations = 0;
+	adjointResponses = 0;
+	reducedResponses = 0;
+	krylovSolves = 0;
+	krylovIterations = 0;
 
 	// Where and how this run will evaluate the case, said before the first
 	// evaluation -- and initialiseMatrices below is that, on a solver's first
@@ -282,7 +294,14 @@ void SystemSolver::initialize()
 		// homes for it are docs/running.rst and docs/field_coupling.rst, and
 		// what a release build reports about the sweep is the "Coupled field
 		// sweeps" line, which is measurement rather than description.
-		if (fieldSolveMode == FieldSolveMode::Exact)
+		if (fieldSolveMode == FieldSolveMode::Krylov)
+			logmsg<LOG_LEVEL::INFO>(
+				"FieldSolve = krylov: GMRES on the coupled Jacobian with the field eliminated, one "
+				"transport solve per iteration, stopping where FieldSolve = iterative would "
+				"(FieldSolveTolerance = {}); FieldSolveMaxSweeps = {} is its Krylov dimension. One "
+				"that does not converge falls back to the exact solve.",
+				fieldSolveTolerance, fieldSolveMaxSweeps);
+		else if (fieldSolveMode == FieldSolveMode::Exact)
 			logmsg<LOG_LEVEL::WARNING>(
 				"FieldSolve = exact forms the Schur complement onto the field block, which "
 				"costs one full transport solve per field degree of freedom: {} transport "
@@ -637,7 +656,10 @@ void SystemSolver::initialize()
 		// cells: the line search fails, and full steps converge in IDACalcIC's
 		// default 10 iterations. At T = 0.3, where it succeeds, the full step
 		// was accepted every time and the run is bit for bit the same either way.
-		if (equilibriumModel)
+		// Tier 1's Jacobian does carry the coupling, so it keeps the line
+		// search: on the theta pinch at T = 0.3 and 0.9, 5 and 32 cells, the
+		// runs take the same steps and residuals with it on or off.
+		if (equilibriumModel && !reducedCoupling())
 			IDASetLineSearchOffIC(IDA_mem, SUNTRUE);
 		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
 		if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
@@ -1068,6 +1090,28 @@ void SystemSolver::integrate(double tFinal)
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
 
+	if (reducedCoupling())
+	{
+		auto fs = getFieldSweepStats();
+		std::println("Reduced coupled solves                :{} sweeps over {} solves, {} GMRES "
+					 "iterations over {} solves, {} responses",
+					 fs.iterations, fs.solves, fs.krylovIterations, fs.krylovSolves, fs.responses);
+		if (fs.fallbacks > 0)
+			logmsg<LOG_LEVEL::INFO>(
+				"{} of {} reduced sweeps exhausted FieldSolveMaxSweeps = {} and went on to GMRES.",
+				fs.fallbacks, fs.solves, fieldSolveMaxSweeps);
+	}
+	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Krylov)
+	{
+		auto fs = getFieldSweepStats();
+		std::println("Coupled field GMRES                   :{} iterations over {} solves ({} exact fallbacks)",
+					 fs.krylovIterations, fs.krylovSolves, fs.fallbacks);
+		if (fs.fallbacks > 0)
+			logmsg<LOG_LEVEL::WARNING>(
+				"{} of {} coupled GMRES solves did not converge and fell back to the exact Schur "
+				"solve. The answers are correct; the run is paying for both.",
+				fs.fallbacks, fs.krylovSolves);
+	}
 	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative)
 	{
 		auto fs = getFieldSweepStats();

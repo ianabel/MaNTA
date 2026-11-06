@@ -328,7 +328,7 @@ be checked against closed forms, not to be run.
 How the coupled Jacobian is solved
 ----------------------------------
 
-``FieldSolve`` picks between two routes to the same answer.
+``FieldSolve`` picks between three routes to the same answer.
 
 ``exact``
    Form the Schur complement onto :math:`\psi` by applying the transport inverse
@@ -345,6 +345,31 @@ How the coupled Jacobian is solved
    ``FieldSolveTolerance`` (default :math:`10^{-4}`) in the run's error-weighted
    RMS norm, the one IDA's tests are in, where its Newton iteration stops at
    0.33; or by less than a millionth of the increment, when that is larger.
+
+``krylov``
+   GMRES -- SUNDIALS' SPGMR -- on the field increment, the system the sweep is
+   a fixed-point iteration on:
+
+   .. math::
+
+      \left(I - B^{-1} A_2 A^{-1} A_1\right) \delta\psi
+      = B^{-1}\left(r_2 - A_2 A^{-1} r_1\right),
+      \qquad \delta x = A^{-1}(r_1 - A_1\,\delta\psi).
+
+   One transport solve per iteration, and no product with :math:`A`, which is
+   never assembled. Its residual is exactly the change one more sweep would
+   make to :math:`\delta\psi`, and SPGMR is scaled by :math:`\psi`'s error
+   weights, so it stops on the part of the sweep's test that binds -- the field's
+   weights are what keep the sweep converging far below its tolerance. The pair
+   is handed back as the sweep's is, :math:`\delta\psi` recomputed from
+   :math:`\delta x` so the field row holds exactly. The Krylov dimension is
+   ``FieldSolveMaxSweeps``, restarted up to four times; one that does not
+   converge escalates to the exact solve. Irons–Tuck is a rank-one secant and
+   removes one eigendirection of the sweep; GMRES removes them all, so this is
+   the mode for a coupling whose sweep has several eigenvalues outside the unit
+   circle. The adjoint of a ``krylov`` run is GMRES too, on the transposed
+   system (:ref:`field-tier-1-adjoint`), escalating to the exact transposed
+   solve.
 
 **What that test is measured in, and against what, were both settled by what
 each costs IDA**, on the manufactured theta pinch at :math:`10^{-9}/10^{-11}`
@@ -572,6 +597,226 @@ on six cells at :math:`k = 3`, to :math:`8.8\times10^{-8}` in :math:`N` after a
 transient at ``rtol`` :math:`10^{-6}`, and to :math:`4\times10^{-10}` at a steady
 state.
 
+.. _field-tier-1:
+
+A black box coupled through its response
+----------------------------------------
+
+``FieldCoupling = "reduced"`` runs a model as an equilibrium, exactly as
+``"consistent"`` does, and puts its *response* into the Jacobian. What tier 0's
+Newton lacks is how the geometry moves when the transport state does,
+:math:`G'(p)`. With it the coupled Jacobian is the transport one plus a
+correction, with the transport unknowns alone:
+
+.. math::
+
+   J_\text{red} = A + A_g\, G'\, P,
+
+where :math:`A` is the transport operator, :math:`P\,\delta x` the increment at
+the basis nodes -- every component, the input ``Solve`` reads -- and
+:math:`A_g` the case's derivatives in the geometry projected into the cell rows:
+:math:`A_1` without its chain through :math:`\partial g/\partial\psi`, built
+from the same evaluation (``geometryDerivatives``, ``Analytic`` or
+``Differenced``, and refused for ``None``). An ``EquilibriumModel`` supplies
+the response through
+
+.. code-block:: cpp
+
+   void applyResponse(MatrixRef dg, Equilibrium const &e, GlobalState const &states,
+                      GlobalState const &dp, std::vector<Position> const &inputPoints,
+                      Vector const &weights, Time t,
+                      std::vector<Position> const &geometryPoints);
+
+:math:`\delta g = G'(p)\,\delta p` at the equilibrium ``e``, at the physics
+nodes. **The default is a forward difference of** ``Solve``, warm-started from
+``e``: one equilibrium solve per call, at a step of ``responseStep()`` --
+:math:`\sqrt{\epsilon}`, for an equilibrium converged to round-off -- relative to
+the input. A model that converges only to a tolerance should return about its
+square root, or override ``applyResponse`` with its own linearisation and
+declare ``EquilibriumResponse::Model`` in its spec. Either way the equilibrium
+work is free on the cost that matters; the case is asked for nothing it is not
+asked for at tier 2.
+
+``FieldModelEquilibrium`` supplies the exact response: the field rows hold
+:math:`R(\psi(p); p) = 0`, so
+:math:`\delta\psi = -(\partial R/\partial\psi)^{-1}(\partial R/\partial p)\,\delta p`
+and :math:`\delta g = (\partial g/\partial\psi)\,\delta\psi` -- tier 2's blocks
+with :math:`\psi` eliminated. So the theta pinch runs at tier 1 too, which is
+what lets the reduced solve be checked against the coupled one.
+
+``FieldSolve`` chooses how :math:`J_\text{red}` is solved, with the geometry
+increment :math:`\delta g` in the role :math:`\delta\psi` plays at tier 2:
+
+``iterative``
+   The block Gauss–Seidel sweep, :math:`\delta x \leftarrow A^{-1}(r - A_g\,\delta g)`
+   then :math:`\delta g \leftarrow G' P\,\delta x`, with Irons–Tuck on
+   :math:`\delta g` and tier 2's stopping test. One transport solve and one
+   response per sweep, and **one more transport solve at the end**:
+   :math:`\delta x` is re-solved against the accepted :math:`\delta g`. At tier
+   2 IDA is handed the accepted :math:`\delta\psi` itself; at tier 1 the
+   transport increment is the whole Newton update, the field following it
+   through the next residual's equilibrium solve, so it has to be solved
+   against the best :math:`\delta g` the sweep has. Handing back the one
+   before cost the theta pinch 199 steps against the exact solve's 163; with
+   the re-solve it takes 163, in a third fewer sweeps. At its cap the sweep
+   goes on to ``krylov``, since the exact solve here is a verification tool.
+
+``krylov``
+   GMRES on :math:`(I + G' P A^{-1} A_g)\,\delta g = G' P A^{-1} r`, as at
+   tier 2. :math:`\delta g` is not in the solution vector and has no error
+   weights from IDA, so it is given the run's rule for an algebraic variable,
+   applied to the geometry slot by slot:
+   :math:`1/(\mathrm{rtol}\,(|g| + \max|g_s|))`. A solve that does not
+   converge is a failed linear solve -- IDA cuts its step -- never an iterate
+   known to be unconverged.
+
+``exact``
+   :math:`(I + G' P A^{-1} A_g)\,\delta g = G' P A^{-1} r` assembled column by
+   column, one transport solve and one response per geometry value at every
+   physics node, and solved densely. It is what tier 1 is checked with.
+
+A field with dynamics is refused: like the black box, tier 1 is a field that
+is a function of the transport state.
+
+.. _field-tier-1-adjoint:
+
+The adjoint at tier 1
+~~~~~~~~~~~~~~~~~~~~~
+
+The adjoint solves :math:`J_\text{red}^T z = \partial G/\partial y`, where an
+objective reading the geometry contributes through the response too:
+
+.. math::
+
+   \left(A^T + P^T G'^T A_g^T\right) z
+   = G_y + P^T G'^T G_g,
+
+:math:`G_g` being :math:`w_j\,\partial g/\partial(\text{geometry})` at the physics
+nodes, as tier 2's :math:`G_\psi` is before its chain through
+:math:`\partial g/\partial\psi`. It needs one thing a forward run does not, the
+transposed response, which a model supplies through
+
+.. code-block:: cpp
+
+   void applyResponseTranspose(GlobalState &dp, Equilibrium const &e,
+                               GlobalState const &states, Matrix const &dg,
+                               std::vector<Position> const &inputPoints,
+                               Vector const &weights, Time t,
+                               std::vector<Position> const &geometryPoints);
+
+:math:`\delta p = G'(p)^T \delta g`. **The default assembles** :math:`G'`: one
+``applyResponse`` per component of the input -- :math:`3 n_\text{vars} +
+n_\text{aux}` at each of the :math:`N(k+1)` input points -- and keeps the matrix
+on the equilibrium, so it is built once per equilibrium whatever number of
+objectives or iterations transpose it. Under the differenced response that is
+one equilibrium solve per column, free on the measure the costs here are
+counted in, and the only transpose a forward difference has.
+``FieldModelEquilibrium`` supplies the exact transpose,
+:math:`-(\partial R/\partial p)^T B^{-T} (\partial g/\partial\psi)^T \delta g`,
+which costs no equilibrium solve at all.
+
+The solve is tier 2's in the coupling variable :math:`\zeta`, the adjoint of the
+geometry increment:
+
+.. math::
+
+   A^T z = G_y + P^T G'^T \zeta, \qquad \zeta = G_g - A_g^T z,
+
+with :math:`A^T` the transposed transport operator ``assembleAdjointOperator``
+builds and :math:`A_g^T` materialised beside :math:`A_1^T` and :math:`A_2^T`, so
+that a test can zero it and see the gradient go wrong. ``iterative`` is the
+transposed sweep with Irons–Tuck on :math:`\zeta`, stopping on the same relative
+backward error ``FieldSolveAdjointTolerance`` bounds at tier 2; ``krylov`` is
+GMRES on :math:`(I + A_g^T A^{-T} P^T G'^T)\,\zeta = G_g - A_g^T A^{-T} G_y`,
+whose residual is that backward error; ``exact`` assembles the same system.
+The sweep escalates to GMRES and GMRES to the exact solve, so an adjoint at
+tier 1 is never taken from an unconverged solve. An adjoint on demand makes no
+physics call, as at tier 2: the record of the last Jacobian build carries tier
+1's blocks and its equilibrium.
+
+With ``FieldModelEquilibrium``'s exact transpose the tier-1 adjoint is tier 2's
+with :math:`\psi` eliminated, and the two agree: on the theta pinch the
+transport block of :math:`z` to :math:`10^{-14}` under ``exact``, and steady
+gradients to :math:`10^{-11}` under every solve, each within :math:`10^{-9}` of a
+central difference of :math:`G`. The assembled transpose is a forward
+difference and good to about :math:`10^{-7}` of :math:`G'`, which reaches the
+gradient on the scale of its largest entry: :math:`1.1\times10^{-7}` of it
+against tier 2.
+``auto`` still couples a field model when the run solves an adjoint, since the
+tier-2 adjoint needs no transposed response at all.
+
+**Tier 1 costs the case what tier 2 does.** The response is field-side work
+-- free on the measure that matters -- and ``A_g`` is the evaluation tier 2
+already makes, so the steady solves spend exactly tier 2's calls and a
+transient differs only by the steps each takes. ``ThetaPinchDiffusion`` on five
+cells at :math:`k = 4`, ``rtol`` :math:`10^{-6}`, ``atol`` :math:`10^{-8}`, to
+:math:`t = 1`, with the steady solves to ``SteadyStateTolerance``
+:math:`10^{-8}` (the ``PseudoTransient`` counts are the same at
+:math:`10^{-4}` and :math:`10^{-6}`); calls per physics point, values 1 and
+derivatives 2, ``+g`` the analytic hooks priced as derivatives. The transient
+and ``Newton`` columns reproduce the table under :ref:`field-coupling-mode` to
+the call; its ``PseudoTransient`` column was taken in another setup and is not
+comparable with this one:
+
+.. list-table::
+   :header-rows: 1
+
+   * - 5 cells
+     - transient
+     - ``PseudoTransient``
+     - ``Newton``
+   * - T = 0.3, coupled, ``Analytic``
+     - 6,375 (+1,000)
+     - 625 (+400)
+     - 325 (+200)
+   * - T = 0.3, reduced, ``Analytic``
+     - 6,700 (+1,050)
+     - 625 (+400)
+     - 325 (+200)
+   * - T = 0.3, coupled, ``Differenced``
+     - 8,875
+     - 1,625
+     - 825
+   * - T = 0.3, reduced, ``Differenced``
+     - 9,325
+     - 1,625
+     - 825
+   * - T = 0.3, consistent
+     - 13,150
+     - 700
+     - 400
+   * - T = 0.9, coupled, ``Analytic``
+     - 10,250 (+1,150)
+     - 625 (+400)
+     - 325 (+200)
+   * - T = 0.9, reduced, ``Analytic``
+     - 7,350 (+1,050)
+     - 625 (+400)
+     - 325 (+200)
+   * - T = 0.9, coupled, ``Differenced``
+     - 13,125
+     - 1,625
+     - 1,025
+   * - T = 0.9, reduced, ``Differenced``
+     - 9,975
+     - 1,625
+     - 825
+   * - T = 0.9, consistent
+     - 34,275
+     - 700
+     - 475
+
+The model's own response and the differenced one give the same counts to the
+call: the difference between them is equilibrium solves, which the case never
+sees. The transients take 183 and 215 steps against tier 2's 175 and 269 and
+tier 0's 341 and 937, so tier 1 is 0.7–1.05 times tier 2 and 1.4–4.7 times
+cheaper than the black box. It agrees with tier 2 to the integration error:
+on six cells at :math:`k = 3` to :math:`t = 0.5`, within :math:`2.5\times10^{-7}`
+in :math:`N` and :math:`2.3\times10^{-8}` in :math:`B`, and steady states to
+:math:`4\times10^{-13}` in the same Newton iterations. ``IDACalcIC`` keeps its
+line search here, unlike tier 0: the Jacobian carries the coupling, and the
+runs are step for step the same with it on or off, at :math:`T = 0.9` too.
+
 .. _field-coupling-mode:
 
 Choosing the coupling
@@ -607,7 +852,12 @@ solves an adjoint (``solveAdjoint``, or ``SteadyStateTest = "Objective"``),
 whatever the derivatives cost — and refuses, naming why, when the case declares
 none. ``"coupled"`` and ``"consistent"`` take the mode as given; the first is
 refused for a case declaring no derivatives, the second for a field with
-dynamics or a run with an adjoint.
+dynamics or a run with an adjoint. ``"reduced"`` (:ref:`field-tier-1`) carries
+an adjoint and is refused only for a field with dynamics, but it is never
+``auto``'s choice for a field model: with the model's own unknowns to hand,
+``"coupled"`` is the same Jacobian without the equilibrium solves, at the same
+cost to the case, and its adjoint transposes the model's own blocks rather than
+a response.
 
 **The rest of the table is a measurement.** ``ThetaPinchDiffusion`` on five
 cells at :math:`k = 4`, ``rtol`` :math:`10^{-6}`, ``atol`` :math:`10^{-8}`, to
@@ -665,6 +915,231 @@ regardless, for Newton's quadratic convergence and a loss that is bounded; a
 case whose hooks are expensive can set ``FieldCoupling = "consistent"`` for its
 steady solves. The field-side work, the equilibrium solves included, is free by
 this measure.
+
+.. _native-equilibrium:
+
+A native equilibrium model
+--------------------------
+
+A field need not be a ``FieldModel`` to reach a config file. An
+``EquilibriumModel`` has a registry of its own, the field models' pattern
+exactly: ``REGISTER_EQUILIBRIUM_MODEL_HEADER(T)`` in the header,
+``REGISTER_EQUILIBRIUM_MODEL_IMPL(T)`` in the ``.cpp``, a ``(toml::value const
+&, Grid const &)`` constructor that reads the model's own table, a duplicate or
+unknown name thrown with what *is* registered, and ``PhysicsPlugins`` for a
+model built outside the tree. A run selects one in place of a field model:
+
+.. code-block:: toml
+
+   [configuration]
+   TransportSystem = "ThetaPinchDiffusion"
+   EquilibriumModel = "ThetaPinchPressureBalance"
+
+The two keys are exclusive, refused together at load: a run has one source of
+geometry. Both are ``ProblemSelection`` keys, so neither is accepted by
+``Runner.configure``.
+
+A native model has no unknowns, so ``FieldCoupling`` chooses between
+``consistent`` (:ref:`field-tier-0`) and ``reduced`` (:ref:`field-tier-1`), and
+``coupled`` is refused by name. ``reduced`` carries an adjoint, through the
+model's transposed response; ``consistent`` does not. A model that supplies only
+``Solve`` and ``Geometry`` runs at either tier: its response, and the transpose
+the adjoint needs, are then the base class's forward difference of ``Solve`` and
+the matrix assembled from it.
+
+The native theta pinch
+~~~~~~~~~~~~~~~~~~~~~~
+
+``ThetaPinchPressureBalance`` is the theta pinch's equilibrium as a native
+model, and the same physics as :ref:`ThetaPinchEquilibrium <field-coupling>`:
+:math:`p + B^2 = C` on every surface (:math:`2\mu_0 = 1`) and the wall's
+:math:`\int_0^1 V'\,dx = \pi a^2`. With :math:`B = \Phi_a / V'` the balance is
+:math:`V' = \Phi_a / \sqrt{C - p}` pointwise, so the equilibrium of a pressure
+profile is a root-find for the one constant :math:`C`, and the four geometry
+slots follow in closed form,
+
+.. math::
+
+   V' = \frac{\Phi_a}{\sqrt{C - p}}, \qquad
+   \frac{dV'}{dx} = \frac{\Phi_a}{2}\,\frac{p_x}{(C - p)^{3/2}}, \qquad
+   \langle|\nabla x|^2\rangle = \frac{4\pi A}{V'^2}, \qquad
+   B = \frac{\Phi_a}{V'},
+
+with :math:`A(x) = \int_0^x V'`. It reads its pressure from the case's auxiliary
+variable ``PressureAux``, as the field model does, and takes the same slots in
+the same order, so ``ThetaPinchDiffusion`` reads either. Its table is
+``[ThetaPinchPressureBalance]``: ``PressureAux``, ``WallRadius``,
+``VacuumField`` and ``DifferencedResponse``.
+
+**What differs is the discretisation.** The field model holds :math:`V'` as a
+C² cubic spline on the transport faces and imposes the balance by Galerkin
+projection, so its :math:`V'` is smooth across faces. The native model evaluates
+the balance on the transport's own pressure polynomial :math:`p_h`, each cell's
+interpolant of its nodal values, so :math:`V'` is discontinuous where
+:math:`p_h` is; the integrals (the wall constraint and :math:`A`) are a
+16-point Gauss rule per cell on a smooth integrand.
+
+**The pressure gradient is recovered, not read off** :math:`p_h`, and that is
+the one subtlety. :math:`dV'/dx` goes into the flux, and
+:math:`p_h`'s derivative is good only to :math:`O(h^k)`: read off it, the
+manufactured theta pinch (``ThetaPinchMMSTests.cpp``) converges at :math:`k` in
+:math:`N` — 0.99, 2.24, 3.11 for :math:`k = 1, 2, 3` — the cost the field model's
+header records for a :math:`V'` that breaks where :math:`p_h` does. A
+least-squares fit to :math:`p_h`'s nodal values over the cell and its
+neighbours is not enough either: the interpolation error repeats its shape in
+every cell, the fit differentiates that shape, and at :math:`k = 1` the order
+decays back to 1 by 256 cells. So :math:`p_x` comes from a degree-:math:`k+1`
+polynomial fitted to the *cell means* of :math:`p_h` over a centred patch of
+:math:`2\lceil (k+1)/2 \rceil + 1` cells, moved inward at the ends. A cell mean
+carries the interpolation error only as a smooth :math:`O(h^{k+1})` function, so
+:math:`dV'/dx` converges at :math:`k + 1` or better: on an exact pressure, 2.00,
+2.99 and 5.00. :math:`V'` itself stays the exact balance on :math:`p_h`.
+
+The manufactured study then gives :math:`k + 1` throughout, transient on 16,
+32 and 64 cells and steady on 32, 64 and 128:
+
+.. list-table::
+   :header-rows: 1
+
+   * -
+     - :math:`N`, transient
+     - :math:`V'`, transient
+     - :math:`N`, steady
+     - :math:`V'`, steady
+   * - :math:`k = 1`
+     - 2.00, 2.00
+     - 2.00, 2.00
+     - 1.99, 2.00
+     - 2.00, 2.00
+   * - :math:`k = 2`
+     - 3.08, 3.02
+     - 3.09, 3.02
+     - 3.05, 3.01
+     - 3.05, 3.01
+   * - :math:`k = 3`
+     - 3.89, 3.97
+     - 3.80, 3.94
+     - 3.97, 3.99
+     - 3.95, 3.99
+
+**It lands within the field model's discretisation error of the field model's
+answer.** The distance between the two runs' :math:`N` converges at
+:math:`k + 1` with them, at 0.37 of the field model's own error at :math:`k =
+1`, 0.10–0.34 at :math:`k = 2`, and 1.9–2.1 at :math:`k = 3` (transient), where
+the native error is the larger, its fit spanning five cells. :math:`V'` is
+where they part: the spline superconverges at :math:`k \le 2` (2.5 and 3.5) and
+the native :math:`V'` goes at :math:`k + 1`. On the regression case,
+``Tests/RegressionTests/ThetaPinchNative.conf``, the native :math:`N` is
+:math:`5\times10^{-4}` from ``ThetaPinch.conf``'s at 8 cells and
+:math:`2.6\times10^{-4}` at 16 (RMS, relative), against the field model's own
+change on refinement to 32 cells of :math:`8\times10^{-3}` and
+:math:`2.6\times10^{-3}`.
+
+Its response is exact (``EquilibriumResponse::Model``): the same evaluation run
+in forward-mode duals, with :math:`\delta C = \int (C-p)^{-3/2}\,\delta p /
+\int (C-p)^{-3/2}` from the wall. The transpose is exact too, the pressure
+columns of :math:`G'` by one dual sweep each, assembled once per equilibrium and
+transposed, with no ``Solve``: an adjoint on demand makes no physics call and
+one equilibrium solve, for the objective's geometry. ``DifferencedResponse =
+true`` falls back to the base class's difference and its assembly, as
+``FieldModelEquilibrium``'s flag does; that adjoint makes one solve per input
+component per point, once per equilibrium.
+
+.. _native-coupling-mode:
+
+Choosing its coupling
+~~~~~~~~~~~~~~~~~~~~~
+
+``FieldCoupling = "auto"`` takes the field model's rule with ``reduced`` for
+``coupled``, and one more input, the model's response:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 25 25 20
+
+   * - the case's ``geometryDerivatives``
+     - the model's response
+     - the run
+     - mode
+   * - ``None``
+     - either
+     - no adjoint
+     - ``consistent``
+   * - ``Analytic`` or ``Differenced``
+     - either
+     - a transient, or ``TimeMarch``
+     - ``reduced``
+   * - ``Analytic``
+     - ``Model``
+     - a ``PseudoTransient`` or ``Newton`` steady solve
+     - ``reduced``
+   * - ``Analytic``
+     - ``Differenced``
+     - a steady solve
+     - ``consistent``
+   * - ``Differenced``
+     - either
+     - a steady solve
+     - ``consistent``
+   * - ``Analytic`` or ``Differenced``
+     - either
+     - an adjoint
+     - ``reduced``
+
+An adjoint is ``reduced`` whatever it costs, since that is the only tier with
+one, and is refused for a case declaring no derivatives.
+
+**The table is a measurement**, in the setup of the field-model table above
+(five cells, :math:`k = 4`, to :math:`t = 1`, steady solves to
+:math:`10^{-8}`), on ``ThetaPinchPressureBalance``, with the equilibrium solves
+beside the transport cost (for ``reduced``, with the model's own response and
+with the differenced one):
+
+.. list-table::
+   :header-rows: 1
+
+   * -
+     - transient
+     - ``PseudoTransient``
+     - ``Newton``
+   * - ``Analytic``, reduced
+     - 6,700–6,900 (+475–550)
+     - 625 (+200)
+     - 325 (+100)
+   * - ``Differenced``, reduced
+     - 9,275–9,450
+     - 1,625
+     - 825
+   * - consistent
+     - 14,075–25,300
+     - 700
+     - 400
+   * - equilibrium solves, reduced, ``Model``
+     - 221–235
+     - 9
+     - 5
+   * - equilibrium solves, reduced, ``Differenced``
+     - 1,006–1,215
+     - 44–53
+     - 19–28
+   * - equilibrium solves, consistent
+     - 528–947
+     - 10
+     - 6
+
+The ranges are T = 0.3 to 0.9. The transport costs follow the field model's --
+its steady solves to the call, its transients within a quarter -- so the first
+rules are the field model's: ``reduced`` for transients, 1.5–3.8 times cheaper
+than the black box, and ``consistent`` for a steady solve of a ``Differenced``
+case, which costs ``reduced`` 2.1–2.3 times as much under either solver. **The response moves no
+transport cost — it moves only equilibrium solves.** The model's own costs
+fewer than the black box everywhere. A differenced one costs 3.2–5.3 times the
+black box's on a steady solve, where ``reduced`` saves at most a fifth of the
+transport cost, so ``auto`` runs those as a black box. On a transient it costs
+1.3–1.9 times the black box's solves to save 2.0–3.8 times the transport calls,
+and stays ``reduced``: which side of that trade wins depends on what one
+equilibrium solve costs against one sweep of the physics, which ``auto`` cannot
+know, and a case that knows can say ``FieldCoupling = "consistent"``.
 
 Current restrictions
 --------------------

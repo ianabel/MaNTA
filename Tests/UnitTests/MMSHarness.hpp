@@ -496,6 +496,17 @@ private:
     M const &model;
 };
 
+/// How a field-coupling tier attaches the model and reads psi back. Empty is
+/// tier 2: setFieldModel, and psi from the state vector. A tier that carries no
+/// psi in the state -- tier 0, FieldModelEquilibrium -- supplies both; the
+/// harness stays free of FieldModel's headers, so the tier is the caller's.
+template <class M>
+struct FieldTier
+{
+    std::function<void(SystemSolver &, std::shared_ptr<M> const &)> attach;
+    std::function<Vector(SystemSolver &, Time)> psi;
+};
+
 /// What one coupled run reports.
 struct CoupledErrors
 {
@@ -511,7 +522,8 @@ struct CoupledErrors
 /// netCDF write is pure cost here.
 template <ManufacturedFieldModel M>
 CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superconvergent,
-                               SystemSolver::FieldSolveMode mode, Tolerances tol = {})
+                               SystemSolver::FieldSolveMode mode, Tolerances tol = {},
+                               FieldTier<M> const &tier = {})
 {
     Grid grid(0.0, 1.0, nCells);
 
@@ -523,8 +535,13 @@ CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superc
     SystemSolver sys(grid, k, &problem);
     sys.setTau(1.0);
     sys.setSuperconvergent(superconvergent);
-    sys.setFieldModel(model);
-    sys.setFieldSolveMode(mode);
+    if (tier.attach)
+        tier.attach(sys, model);
+    else
+    {
+        sys.setFieldModel(model);
+        sys.setFieldSolveMode(mode);
+    }
     sys.resetCoeffs();
 
     sys.setInputFile("mms_coupled");
@@ -551,7 +568,7 @@ CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superc
     sys.postprocessor->computeUStar(sys.yJac);
 
     const Vector psiExact = model->fieldExact(tFinal);
-    const Vector psi = sys.getSolution().getField();
+    const Vector psi = tier.psi ? tier.psi(sys, tFinal) : Vector(sys.getSolution().getField());
     const SystemSolver::FieldSweepStats stats = sys.getFieldSweepStats();
 
     return {l2Error(sys, grid, tFinal),
@@ -574,7 +591,7 @@ template <ManufacturedFieldModel M>
 Rates solveCoupledAndMeasure(
     Index k, std::vector<Index> const &cells, bool superconvergent = false,
     SystemSolver::FieldSolveMode mode = SystemSolver::FieldSolveMode::Iterative,
-    double tFinal = 0.25, Tolerances tol = {})
+    double tFinal = 0.25, Tolerances tol = {}, FieldTier<M> const &tier = {})
 {
     Rates r{0.0, 0.0, 0.0, 0.0};
     r.cells = cells;
@@ -582,7 +599,7 @@ Rates solveCoupledAndMeasure(
     for (Index n : cells)
     {
         const CoupledErrors e =
-            solveCoupledOnce<M>(k, n, tFinal, superconvergent, mode, tol);
+            solveCoupledOnce<M>(k, n, tFinal, superconvergent, mode, tol, tier);
         r.coupledU.push_back(e.u);
         r.coupledStar.push_back(e.uStar);
         r.coupledExtra.push_back(e.field);

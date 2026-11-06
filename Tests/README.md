@@ -501,6 +501,43 @@ not cleanly enough to assert. At `k = 6` on 8 cells, where the spline is what
 limits the answer, halving the knot spacing goes at 4.03 in `N` and 4.00 in
 `V'`. Zero fallbacks throughout, asserted.
 
+**Every field-coupling tier runs the same study**, and is held to tier 2's
+answer as well as its orders, since a tier converging at the right rate to a
+different function is exactly what an order alone would pass. The tier is a
+value of `Tier` in the file: `Coupled`, `Consistent`, and `Reduced` and
+`ReducedDifferenced` for tier 1 with the exact and the differenced G'.
+
+* *Tier 0* (`FieldModelEquilibrium`, `FieldCoupling = "consistent"`) through
+  the transient study above, one case per degree: tier 2's orders to the digit,
+  and its errors in `N` to 6e-11 - 3.4e-9 against an `rtol ||N||` of 4.4e-9 --
+  integration error, asserted below ten times that, because the two tiers take
+  different steps. The price is steps, not order: 2 to 18 times tier 2's
+  (2234 against 120 at `k = 3`, 16 cells), with no coupling in the Jacobian.
+* *Tier 1* (`FieldCoupling = "reduced"`, `FieldSolve = "iterative"`), at both
+  responses, one case per degree: tier 2's orders to the digit, its errors in
+  `N` to 2e-12 - 1.9e-10, and tier 2's steps -- 97 - 249 against 96 - 326 --
+  with no fallback. `krylov` gives the same table in 45 s against the sweep's
+  16 s, and is not run.
+* *Steady*, at every tier: the source frozen at `t = 0.25`, a Newton solve from
+  the transient's `t = 0`, on 16, 32 and 64 cells (8 -> 16 is pre-asymptotic at
+  `k = 3`, 3.89). `N` at 2.00, 3.00 and 3.98 - 4.00, `V'` at 2.45 - 3.99. Tier 1
+  agrees with tier 2 to 9e-15 in 4 Newton iterations against 5, tier 0 to
+  3e-13 - 2e-11 in 8 - 14. A second or two per tier.
+* *The manufactured field models* (`MMSFieldTests.cpp`,
+  `the_lower_tiers_converge_at_k_plus_one`): both, at tiers 0 and 1, reproduce
+  tier 2's `u` and `psi` orders to the digit, with gaps of at most 1.3e-10 in the
+  `u` error; about a second per tier, the coupling there being too weak to slow
+  IDA. Both declare `Analytic` geometry derivatives, so tier 1 runs on both.
+* *The native model* (`ThetaPinchPressureBalance`, `EquilibriumModel`, tier 1)
+  is a different discretisation of the same balance, so it is held to tier 2's
+  answer at the discretisation error, not at `rtol`: the distance between the
+  two runs' `N` must converge at `k + 1` and stay within 5 times tier 2's own
+  error (measured 0.10 - 4.2). Its orders are `k + 1` transient on 16, 32, 64
+  cells and steady on 32, 64, 128, one level finer than the others because its
+  five-cell gradient fit is pre-asymptotic at `k = 3` on 8. Read off `p_h`
+  instead, the gradient costs an order; `EquilibriumRegistryTests.cpp` pins the
+  slots on an exact pressure.
+
 **Two findings about the method came out of this study, and each has a test
 that only a run can provide.**
 
@@ -515,7 +552,11 @@ that only a run can provide.**
   20000 steps against the exact solve's 213, and the answer was right. The
   sweep left an error in `sigma` and `q` near the axis that is O(1) in IDA's
   error weights. `the_iterative_solve_does_not_stall_ida` runs that case in both
-  modes and requires comparable step counts (221 against 213 now); no unit test
+  modes and requires the iterative run's steps within five times the exact
+  run's. That bound is set by round-off, not by the sweep: IDA falls in and out
+  of an order-2 trap on this case in both modes, so exact takes 149 to 278 steps
+  and iterative 142 to 564 over small changes of tolerance or CPU, and with
+  `SuppressAlgebraicError` both take 99-101. No unit test
   with random right-hand sides at a fixture state sees it, because the residue
   only concentrates there on Newton's own corrections.
 
@@ -546,7 +587,8 @@ catches:
 | `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
 | `ThetaPinchEquilibriumTests.cpp` | the theta pinch's spline, its derivatives, its sparse block solve in both directions, and its equilibrium against the closed form `V' = Phi / sqrt(C - p)`, at local orders 3.8-3.9 in the field resolution |
 | `FieldJacobianTests.cpp` (theta pinch cases) | the coupled Jacobian of a model whose `A2` lives only in an aux column and whose `A1` runs through four slots; that its sweep contracts at every `cj`, so a sweep that diverges on it is the sweep's defect |
-| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA |
+| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA; a tier that converges to something other than tier 2's answer; a native equilibrium that loses an order |
+| `EquilibriumRegistryTests.cpp` | the equilibrium registry's throws; the native theta pinch's table, and a slot of its balance -- `dV'/dx` above all -- converging below `k + 1` on an exact pressure |
 | `ThetaPinchRunTests.cpp` | a degree-changing restart losing psi; diagnostics evaluated without geometry; a reused solver; the coupled gradient for a parameter that reaches the transport only through the field (`T`); `G_field` against differences of the reported `G`; the objective estimate's field share; the adjoint sweep falling back when it should converge |
 
 **The restart case's oracle is the raw netCDF array, not `getSolution()`, and
@@ -577,6 +619,31 @@ the regression suite's own 5e-3 is far too loose to see a change of this kind.
 Measured at the point the serialisation landed: **all 14 `.nc` files byte
 identical**, and all 14 `.restart.nc` files identical apart from the one
 deliberately added `int nField = 0`.
+
+### The tier-1 adjoint
+
+`FieldCoupling = "reduced"` solves its adjoint through the transposed response
+(`EquilibriumModel::applyResponseTranspose`), and is checked at two levels, as
+tier 2's is:
+
+| test | what only it sees |
+|---|---|
+| `FieldJacobianTests.cpp::the_reduced_adjoint_inverts_the_transpose_of_the_tier_zero_jacobian` | a wrong `A_g^T` or `G'^T`: `J_red^T z = g` against a finite difference of the tier-0 residual at `cj = 0`, under every `FieldSolve`, plain and superconvergent, with the model's transpose and the assembled one |
+| `FieldJacobianTests.cpp::the_reduced_adjoint_check_sees_a_missing_transpose` | the guard: `A_g^T` zeroed, or a transposed response that does nothing, misses by 6.3 against 2e-8 |
+| `FieldJacobianTests.cpp::the_reduced_adjoint_is_tier_twos_with_psi_eliminated` | tier 1's `z` against tier 2's with psi on its equilibrium, 1e-14 under `exact`; the geometry share of the right-hand side; tier 2's `krylov` adjoint |
+| `FieldJacobianTests.cpp::the_assembled_transpose_is_the_transpose_of_the_response` | the default `applyResponseTranspose` against the adapter's exact one, and its assembly made once per equilibrium |
+| `ThetaPinchRunTests.cpp::the_reduced_gradient_matches_finite_differences_and_tier_two` | the gradient end to end, for objectives reaching it through `G_y`, through `G_geometry` and through both, against central differences of `G` and against tier 2's `G_p` |
+| `ThetaPinchRunTests.cpp::dropping_the_transposed_response_makes_the_reduced_gradient_wrong` | the same guard on the gradient: 6.5-100% wrong |
+| `ThetaPinchRunTests.cpp::a_reduced_adjoint_on_demand_makes_no_physics_call` | an on-demand adjoint asking the case for anything, and the equilibrium solves it makes, pinned |
+| `ThetaPinchRunTests.cpp::a_reused_reduced_adjoint_matches_a_fresh_one_bit_for_bit` | a tier-1 cache surviving `initialize()`, in `G_p` |
+
+**The finite-difference floor is the check's, not the solve's.** The transpose
+check measures 2e-8 to 3e-8 in every mode alike, `exact` included, and its
+bound is the 1e-7 tier 2's transpose checks use; the assembled transpose, a
+forward difference good to about 1e-7 of `G'`, reaches 5e-7 and is bounded at
+1e-6. On the gradient the assembled transpose's error is on the scale of the
+largest entry of `G_p`, so the `B (1 + x^2)` objective, whose entries are 300
+times smaller, is bounded against that scale rather than its own.
 
 ## Superconvergence
 

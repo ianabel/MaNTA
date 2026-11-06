@@ -136,9 +136,12 @@ struct SolverConfig
     // other three are plain solver options and go through applySolverConfig
     // like everything else.
     std::string              FieldModel;
-    // "auto", "coupled" or "consistent": also applied by runManta, which
-    // resolves it with chooseFieldCoupling and wraps the model in a
-    // FieldModelEquilibrium for the consistent mode.
+    // A registered native EquilibriumModel, applied by runManta like
+    // FieldModel. The two are exclusive: one source of geometry.
+    std::string              EquilibriumModel;
+    // "auto", "coupled", "reduced" or "consistent": also applied by runManta,
+    // which resolves it with chooseFieldCoupling and wraps the model in a
+    // FieldModelEquilibrium for the reduced and consistent modes.
     std::string              FieldCoupling;
     std::string              FieldSolve;
     double                   FieldSolveTolerance;
@@ -292,15 +295,23 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system);
 // derivatives the Jacobian (setFieldModel). Consistent: solved to convergence at
 // each transport state as a black box, with no Jacobian coupling and no adjoint
 // (a FieldModelEquilibrium, setEquilibriumModel).
+// Reduced: the model run as an equilibrium (a FieldModelEquilibrium) whose
+// response G' enters the Jacobian, with no unknowns in the DAE
+// (setEquilibriumModel with EquilibriumCoupling::Reduced): tier 1.
 enum class FieldCouplingMode
 {
     Coupled,
     Consistent,
+    Reduced,
 };
 
 // FieldCoupling resolved against what the case and the model can supply.
-// "consistent" and "coupled" are taken as asked, except that "coupled" is refused
-// for a case declaring no geometry derivatives. "auto" picks:
+// "consistent", "coupled" and "reduced" are taken as asked, except that "coupled"
+// and "reduced" are refused for a case declaring no geometry derivatives, and
+// "reduced" for a field with dynamics. "auto" never picks "reduced": with the
+// field model's own unknowns available, "coupled" is the same Jacobian without
+// the equilibrium solves, and its adjoint transposes the model's own blocks
+// rather than a response. So an adjoint still makes "auto" couple. It picks:
 //
 //   * consistent when the case declares no geometry derivatives -- and refuses,
 //     naming why, when the run needs the coupled field anyway: a field with
@@ -315,5 +326,23 @@ enum class FieldCouplingMode
 // std::invalid_argument, like every configuration error.
 FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec const &spec,
                                       bool fieldHasDynamics);
+
+// FieldCoupling for a native EquilibriumModel (EquilibriumModel = "<name>"),
+// which has no unknowns, so only Consistent or Reduced. "consistent" and
+// "reduced" are taken as asked -- "reduced" refused for a case declaring no
+// geometry derivatives, "consistent" for a run solving an adjoint -- and
+// "coupled" is refused at load. "auto" picks:
+//
+//   * reduced for a run solving an adjoint, and refuses one whose case
+//     declares no geometry derivatives;
+//   * consistent when the case declares none;
+//   * reduced for a transient, TimeMarch included;
+//   * for a steady solve (PseudoTransient or Newton), consistent when the case's
+//     derivatives are Differenced, or the model's response is (`differenced-
+//     Response`: EquilibriumResponse::Differenced), and reduced otherwise.
+//
+// The measurements are in docs/field_coupling.rst. Throws std::invalid_argument.
+FieldCouplingMode chooseEquilibriumCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                            bool differencedResponse);
 
 #endif // SOLVERCONFIG_HPP

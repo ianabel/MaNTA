@@ -441,6 +441,47 @@ void SystemSolver::dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y,
 	}
 }
 
+// Tier 1's A_g: dPhysics_dField_Mat and dPhysics_dField_StarMat without the
+// chain through dGeometry/dpsi, so the columns are the geometry at the physics
+// nodes themselves -- column j * nGeom + s is slot s at node j. The projection
+// is the one the residual applies, InterpolateOntoBasis or A9, taken as a
+// (k+1) x nNodes matrix once per cell, and the signs are A1's: + on the sigma
+// and aux rows, - on the u rows (see dPhysics_dField_Mat).
+void SystemSolver::dPhysics_dGeometry_Mat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
+										  Index intervalIndex)
+{
+	const Index nNodes = superconvergent ? k + 2 : k + 1;
+	assert(mat.rows() == (3 * nVars + nAux) * (k + 1));
+	assert(mat.cols() == nGeom * nNodes);
+
+	Matrix projection(k + 1, nNodes);
+	if (superconvergent)
+		projection = postprocessor->A9(intervalIndex);
+	else
+	{
+		Interval const &I(grid[intervalIndex]);
+		for (Index j = 0; j < nNodes; ++j)
+			projection.col(j) = Y.getBasis().InterpolateOntoBasis(I, Vector(Vector::Unit(nNodes, j)));
+	}
+
+	mat.setZero();
+	auto place = [&](Index rowOffset, Matrix const &dXdG, double scale)
+	{
+		for (Index j = 0; j < nNodes; ++j)
+			for (Index slot = 0; slot < nGeom; ++slot)
+				mat.block(rowOffset, j * nGeom + slot, k + 1, 1) =
+					(scale * dXdG(slot, intervalIndex * nNodes + j)) * projection.col(j);
+	};
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		place(XVar * (k + 1), response.sigma[XVar], 1.0);
+		place(2 * nVars * (k + 1) + XVar * (k + 1), response.sources[XVar], -1.0);
+	}
+	for (Index aux = 0; aux < nAux; aux++)
+		place(3 * nVars * (k + 1) + aux * (k + 1), response.aux[aux], 1.0);
+}
+
 void SystemSolver::dPhi_Mat(Matrix &mat, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &Y, Index intervalIndex )
 {
   // ASSERT mat.shape == ( nVars * ( k + 1) , nVars * ( k + 1 ) )

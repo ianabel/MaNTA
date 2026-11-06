@@ -180,9 +180,9 @@ int runManta(std::string const &fname)
 			return 1;
 		}
 	}
-	else if (config.FieldCoupling != "auto")
+	else if (config.FieldCoupling != "auto" && config.EquilibriumModel.empty())
 		throw std::invalid_argument("FieldCoupling = \"" + config.FieldCoupling +
-									"\" was given without a FieldModel to couple.");
+									"\" was given without a FieldModel or EquilibriumModel to couple.");
 
 	// The consistent mode runs the same model as a black-box equilibrium: no
 	// unknowns in the state vector, so the restart check below sees none, and
@@ -190,13 +190,35 @@ int runManta(std::string const &fname)
 	// else is built. Which mode is chooseFieldCoupling's, from FieldCoupling and
 	// what the case and the model supply.
 	std::shared_ptr<EquilibriumModel> equilibrium;
+	auto equilibriumCoupling = SystemSolver::EquilibriumCoupling::Consistent;
 	if (fieldModel)
 	{
 		bool dynamics = false;
 		for (Index i = 0; i < fieldModel->nFieldDOF(); ++i)
 			dynamics = dynamics || fieldModel->isFieldDOFDifferential(i);
-		if (chooseFieldCoupling(config, pProblem->spec(), dynamics) == FieldCouplingMode::Consistent)
+		const FieldCouplingMode mode = chooseFieldCoupling(config, pProblem->spec(), dynamics);
+		if (mode != FieldCouplingMode::Coupled)
 			equilibrium = std::make_shared<FieldModelEquilibrium>(fieldModel);
+		if (mode == FieldCouplingMode::Reduced)
+			equilibriumCoupling = SystemSolver::EquilibriumCoupling::Reduced;
+	}
+	// A native equilibrium model, from its own registry, the same way; loadSolverConfig
+	// has already refused one beside a FieldModel. No unknowns, so nField stays 0.
+	if (!config.EquilibriumModel.empty())
+	{
+		try
+		{
+			equilibrium = EquilibriumModels::InstantiateEquilibriumModel(config.EquilibriumModel, configFile, *grid);
+		}
+		catch (std::invalid_argument const &e)
+		{
+			logmsg<LOG_LEVEL::ERROR>("Could not instantiate an equilibrium model for EquilibriumModel = {}\n  {}",
+									 config.EquilibriumModel, e.what());
+			return 1;
+		}
+		const bool differencedResponse = equilibrium->getSpec().response == EquilibriumResponse::Differenced;
+		if (chooseEquilibriumCoupling(config, pProblem->spec(), differencedResponse) == FieldCouplingMode::Reduced)
+			equilibriumCoupling = SystemSolver::EquilibriumCoupling::Reduced;
 	}
 	const Index nField = fieldModel && !equilibrium ? fieldModel->nFieldDOF() : 0;
 
@@ -245,10 +267,10 @@ int runManta(std::string const &fname)
 	// solve refuses it.
 	if ((config.DegreeAdaptation || config.MeshAdaptation || !config.DegreeLadder.empty() ||
 		 !config.GridLadder.empty()) &&
-		fieldModel)
+		(fieldModel || equilibrium))
 		throw std::invalid_argument(
-			"DegreeAdaptation and MeshAdaptation cannot be combined with a FieldModel: "
-			"the adaptive drivers build a solver per level and cannot carry the field model.");
+			"DegreeAdaptation and MeshAdaptation cannot be combined with a FieldModel or an "
+			"EquilibriumModel: the adaptive drivers build a solver per level and cannot carry the model.");
 
 	// The adaptation drivers solve on several discretisations. Under
 	// RebuildPhysicsOnRegrid a case that cannot follow a new one in place is
@@ -302,7 +324,7 @@ int runManta(std::string const &fname)
 		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
 		// reshapes the solution vector and refuses once the solver is initialised.
 		if (equilibrium)
-			system->setEquilibriumModel(equilibrium);
+			system->setEquilibriumModel(equilibrium, equilibriumCoupling);
 		else if (fieldModel)
 			system->setFieldModel(fieldModel);
 

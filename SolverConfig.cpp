@@ -358,6 +358,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
+    READ(EquilibriumModel, std::string);
     READ(FieldCoupling, std::string);
     READ(FieldSolve, std::string);
     READ(FieldSolveTolerance, double);
@@ -397,9 +398,24 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
 
-    if (c.FieldCoupling != "auto" && c.FieldCoupling != "coupled" && c.FieldCoupling != "consistent")
-        throw std::invalid_argument("FieldCoupling must be \"auto\", \"coupled\" or \"consistent\"; got \"" +
-                                    c.FieldCoupling + "\".");
+    if (c.FieldCoupling != "auto" && c.FieldCoupling != "coupled" && c.FieldCoupling != "reduced" &&
+        c.FieldCoupling != "consistent")
+        throw std::invalid_argument(
+            "FieldCoupling must be \"auto\", \"coupled\", \"reduced\" or \"consistent\"; got \"" +
+            c.FieldCoupling + "\".");
+
+    // One source of geometry, refused here rather than first at attach time
+    // (checkGeometrySource) so a config file says so before anything is built;
+    // and a native equilibrium has no unknowns to couple.
+    if (!c.EquilibriumModel.empty() && !c.FieldModel.empty())
+        throw std::invalid_argument("FieldModel = \"" + c.FieldModel + "\" and EquilibriumModel = \"" +
+                                    c.EquilibriumModel +
+                                    "\" are both given; a run has one source of geometry. Give one.");
+    if (!c.EquilibriumModel.empty() && c.FieldCoupling == "coupled")
+        throw std::invalid_argument("FieldCoupling = \"coupled\" puts a field model's unknowns into the DAE, "
+                                    "and EquilibriumModel = \"" +
+                                    c.EquilibriumModel +
+                                    "\" has none. Use \"reduced\", \"consistent\" or \"auto\".");
 
     // The alias machinery warns that the *name* changed. It cannot know that the
     // *mesh* changed too, and it did: High_Grid_Boundary spaced its boundary-layer
@@ -1142,9 +1158,11 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
     else if (config.FieldSolve == "exact")
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+    else if (config.FieldSolve == "krylov")
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Krylov);
     else
-        throw std::invalid_argument(
-            "FieldSolve must be \"iterative\" or \"exact\"; got \"" + config.FieldSolve + "\".");
+        throw std::invalid_argument("FieldSolve must be \"iterative\", \"krylov\" or \"exact\"; got \"" +
+                                    config.FieldSolve + "\".");
 
     system.setFieldSolveTolerance(config.FieldSolveTolerance);
     system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
@@ -1222,14 +1240,25 @@ FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec con
     if (config.FieldCoupling == "consistent")
         return FieldCouplingMode::Consistent;
 
-    if (config.FieldCoupling == "coupled")
+    if (config.FieldCoupling == "coupled" || config.FieldCoupling == "reduced")
     {
         if (!derivatives)
             throw std::invalid_argument(
-                "FieldCoupling = \"coupled\" needs the transport system's derivatives in the "
+                "FieldCoupling = \"" + config.FieldCoupling +
+                "\" needs the transport system's derivatives in the "
                 "geometry, and it declares none (geometryDerivatives = None). Use \"consistent\" "
                 "or \"auto\".");
-        return FieldCouplingMode::Coupled;
+        if (config.FieldCoupling == "coupled")
+            return FieldCouplingMode::Coupled;
+
+        // The reduced mode runs the field as an equilibrium, so what that
+        // cannot carry it cannot either -- and it has no adjoint yet.
+        if (fieldHasDynamics)
+            throw std::invalid_argument(
+                "FieldCoupling = \"reduced\" runs the field as an equilibrium of the transport "
+                "state, and this field has dynamics (a differential field unknown). Use "
+                "\"coupled\".");
+        return FieldCouplingMode::Reduced;
     }
 
     // "auto". What forces the coupled field: the black-box mode can neither
@@ -1272,4 +1301,63 @@ FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec con
         return FieldCouplingMode::Consistent;
     }
     return FieldCouplingMode::Coupled;
+}
+
+// See the declaration. The rule is the field model's with "reduced" in place of
+// "coupled", except that a model's differenced response sends steady solves to
+// "consistent": it changes no transport cost, but makes tier 1's steady solves
+// spend several times tier 0's equilibrium solves to save under a fifth of its
+// physics (docs/field_coupling.rst has the table).
+FieldCouplingMode chooseEquilibriumCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                            bool differencedResponse)
+{
+    const bool derivatives = spec.geometryDerivatives != GeometryDerivatives::None;
+    const bool adjoint = config.solveAdjoint || config.SteadyStateTest == "Objective";
+
+    if (config.FieldCoupling == "coupled")
+        throw std::invalid_argument("FieldCoupling = \"coupled\" is not available to a native equilibrium "
+                                    "model, which has no unknowns. Use \"reduced\" or \"consistent\".");
+    if (config.FieldCoupling == "consistent")
+    {
+        if (adjoint)
+            throw std::invalid_argument(
+                "FieldCoupling = \"consistent\" cannot solve an adjoint (solveAdjoint, or SteadyStateTest = "
+                "\"Objective\"): the black box has no response to transpose. Use \"reduced\".");
+        return FieldCouplingMode::Consistent;
+    }
+    if (config.FieldCoupling == "reduced")
+    {
+        if (!derivatives)
+            throw std::invalid_argument(
+                "FieldCoupling = \"reduced\" needs the transport system's derivatives in the geometry, and it "
+                "declares none (geometryDerivatives = None). Use \"consistent\" or \"auto\".");
+        return FieldCouplingMode::Reduced;
+    }
+
+    // "auto".
+    if (adjoint)
+    {
+        if (!derivatives)
+            throw std::invalid_argument(
+                "An adjoint is solved (solveAdjoint, or SteadyStateTest = \"Objective\"), which with a native "
+                "equilibrium model needs FieldCoupling = \"reduced\", but the transport system declares no "
+                "derivatives in the geometry (geometryDerivatives = None).");
+        return FieldCouplingMode::Reduced;
+    }
+    if (!derivatives)
+    {
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, since the transport system "
+                                "declares no derivatives in the geometry.");
+        return FieldCouplingMode::Consistent;
+    }
+    const bool steady = config.SteadyStateTolerance.has_value() || config.SteadyStateSolve;
+    if (steady && config.SteadyStateSolver != "TimeMarch" &&
+        (spec.geometryDerivatives == GeometryDerivatives::Differenced || differencedResponse))
+    {
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, for a steady solve with {}.",
+                                differencedResponse ? "a differenced equilibrium response"
+                                                    : "differenced geometry derivatives");
+        return FieldCouplingMode::Consistent;
+    }
+    return FieldCouplingMode::Reduced;
 }

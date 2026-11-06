@@ -1390,6 +1390,64 @@ re-run the theta-pinch `cmp` (the regression config, a `Superconvergent` and a
 `a_build_spends_what_its_geometry_derivatives_declare` pins that and the call
 counts.
 
+**Tier 1 is `FieldCoupling = "reduced"`: the equilibrium coupled through its
+response** (`EquilibriumModel::applyResponse`, `solveReducedJac`). The
+Jacobian is `A + A_g G' P` with no unknowns added; `A_g` is A1 without the
+chain through dGeometry/dpsi, built per Jacobian build into `reducedBlocks`
+beside the equilibrium at `yJac`, and the response defaults to a forward
+difference of `Solve` (`FieldModelEquilibrium` supplies the exact one, tier 2
+with psi eliminated). The coupled solves are written once for both tiers over
+a *coupling variable* (`CouplingOperator`: dpsi at tier 2, the geometry
+increment at the physics nodes at tier 1): `couplingSweep`, `couplingKrylov`
+(SUNDIALS SPGMR on c itself, `(I + L A^-1 C) c = c0 + L A^-1 r`, scaled by c's
+error weights, so its residual is the change one more sweep would make to c)
+and `couplingExact`. At tier 1 the sweep re-solves dx against the accepted c
+before returning -- the transport increment is the whole Newton update there,
+and handing back the one solved against the previous c cost IDA 199 steps
+against the exact solve's 163 -- and GMRES weights c by the AlgebraicMax rule
+applied to the geometry (`ReducedBlocks::geometryWeights`), since IDA has no
+weights for it.
+Three things are load-bearing. **The tier-2 sweep is byte identical across
+that split**: `fieldCouplingOperator`'s `affine` is the old arithmetic
+operation for operation; re-run the theta-pinch `cmp` after touching it.
+**`ReducedBlocks::states` is a `shared_ptr<GlobalState const>`**, never assigned,
+because `GlobalState`'s copy *assignment* copies `Aux` only into an object
+already sized for it -- a default-constructed one dropped the pressure, and the
+model then read a state with no aux rows -- and the blocks are copied into every
+`PhysicsDerivatives` record and every adjoint. And **`reducedBlocks` and
+`adjointReducedBlocks` are cleared in `initialize()`'s unconditional part**, the
+`RF_cellwise` trap again: they hold an equilibrium of the last run's.
+
+**The tier-1 adjoint** solves `(A^T + P^T G'^T A_g^T) z = G_y + P^T G'^T G_g`
+through the transposed coupling code (`AdjointCouplingOperator`:
+`adjointCouplingSweep`, `adjointCouplingKrylov`, `adjointCouplingExact`), in
+the coupling variable's adjoint `zeta = G_g - A_g^T z`; tier 2's `krylov`
+adjoint is the same GMRES with `zeta = B^T z_psi`. It needs
+`EquilibriumModel::applyResponseTranspose`, whose default assembles G' column
+by column through `applyResponse` -- (3 nVars + nAux) N(k+1) columns, each an
+equilibrium solve when differenced -- and caches it on the `Equilibrium`
+itself, so it cannot outlive the equilibrium it differentiates.
+`FieldModelEquilibrium` transposes exactly. The same discipline as A1^T and
+A2^T: **`Ag_transpose_cellwise` is materialised** in `assembleAdjointOperator`
+so a test can zero it, and **the record carries the blocks**
+(`PhysicsDerivatives::reduced`, from `buildReducedBlocks`), so an adjoint on
+demand makes no physics call. `auto` still couples a field model for an
+adjoint: the tier-2 adjoint needs no transposed response.
+
+**A native `EquilibriumModel` has a registry of its own** (`EquilibriumModels`,
+`EquilibriumModel = "<name>"`), the field models' exactly, and the two keys are
+refused together. It runs at `consistent` or `reduced` only;
+`chooseEquilibriumCoupling` is its own function beside `chooseFieldCoupling`,
+and takes the model's response as an input, since a differenced one multiplies
+equilibrium solves on a steady solve. `ThetaPinchPressureBalance` is the
+registered one: the theta pinch's balance in closed form on the transport's own
+`p_h`. **Its `dV'/dx` reads `p_x` from a fit to cell means, and that is
+load-bearing**: read off `p_h` the manufactured study goes at k, and fitted to
+`p_h`'s nodal values it decays to order 1 at k = 1, because the fit
+differentiates the shape the interpolation error repeats in every cell. The
+spec's "The equilibrium registry" has the measurements;
+`the_native_balance_converges_slot_by_slot` is the guard.
+
 **The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
 read by `PhysicsCases/ThetaPinchDiffusion`; `docs/field_coupling.rst` has the
 physics). Three things about it are load-bearing. Its pressure crosses as the

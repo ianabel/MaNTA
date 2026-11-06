@@ -277,9 +277,8 @@ the transport rows blind; `PlainDiffusion(false)` is the refusal's fixture.
   time. The trace is not in it: a model is never handed lambda.
 * Selected by `FieldCoupling = "coupled" | "consistent"` (default `coupled`),
   which runManta applies by wrapping the `FieldModel` in
-  `FieldModelEquilibrium`. `auto` came with step 3, below. There is no registry of
-  native `EquilibriumModel`s yet: the adapter is the only route from a config,
-  and a native model is attached with `setEquilibriumModel`.
+  `FieldModelEquilibrium`. `auto` came with step 3, below. Native models have a
+  registry of their own: "The equilibrium registry", below.
 * The geometry provider a case's diagnostics read now takes the state rather
   than `psi`, so it serves both a field model and an equilibrium.
 
@@ -320,9 +319,19 @@ experiment was removed. Tier 0's transient answers sit 1.4e-7 to 5.3e-6 (relativ
 in N at x = 0.1) from the exact coupled run's at this rtol; on the 6-cell k = 3 test fixture the
 gap is 8.8e-8, and 4e-10 at a steady state.
 
-Not yet run at tier 0: the coupled MMS order study. At its 1e-9 / 1e-11
-tolerances the experiment crawled for most of an hour on three of four cases,
-and tier 0 is the same method.
+**The coupled MMS order study runs at tier 0 and keeps the full order**
+(`ThetaPinchMMSTests.cpp`, `MMSFieldTests.cpp`). At the study's 1e-9 / 1e-11,
+on the theta pinch's 8, 16 and 32 cells, tier 0 has tier 2's local orders to
+the digit -- N at 1.99 / 3.00-3.01 / 3.95-3.99 for k = 1, 2, 3, V' at 2.49-3.98
+-- and its errors to 6e-11-3.4e-9 in N against an rtol ||N|| of 4.4e-9:
+integration error, since the two take different steps. A steady Newton study,
+the source frozen at t = 0.25, agrees to 2e-11 at every tier, at N 2.00, 3.00,
+4.00 on 16-64 cells. Both manufactured field models reproduce tier 2's u and psi
+orders. What tier 0 pays is steps, 2-18x tier 2's (2234 against 120 at k = 3 on
+16 cells), and it can pay them only under `ErrorWeights = "AlgebraicMax"`: the
+crawl of most of an hour that kept this study from running was the pointwise
+weights, under which the k = 1, 8-cell run now goes 455 s and fails in
+`IDASolve` while taking 3 s under the default.
 
 ### Step 3: `geometryDerivatives` and `FieldCoupling = "auto"`
 
@@ -375,6 +384,281 @@ counts as a transient. An `Analytic` case is
 coupled under every solver, although with the hooks priced like a derivative
 it loses the steady solves by up to 1.6x: `auto` cannot know the hooks' price,
 and the loss is bounded.
+
+### Step 4: tier 1, `FieldCoupling = "reduced"`
+
+* `EquilibriumModel::applyResponse(dg, e, states, dp, inputPoints, weights, t,
+  geometryPoints)`, defaulting to a forward difference of `Solve` warm-started
+  from `e` at a step of `responseStep()` (sqrt(eps)) times the input's RMS over
+  the direction's. `EquilibriumSpec::response` (`Differenced` / `Model`)
+  declares which. `FieldModelEquilibrium` supplies the exact response,
+  -dg/dpsi B^-1 dR/dp, linearised once per equilibrium and cached on it, and
+  takes a constructor flag to fall back to the difference.
+* Selected by `FieldCoupling = "reduced"` (`setEquilibriumModel(model,
+  EquilibriumCoupling::Reduced)`), refused for `geometryDerivatives = None`, a
+  field with dynamics and an adjoint. `auto` never picks it: with psi to hand,
+  tier 2 is the same Jacobian without the equilibrium solves.
+* The coupled solves are written once over a coupling variable c
+  (`CouplingOperator`): dpsi at tier 2, the geometry increment at every physics
+  node at tier 1. `couplingSweep` is the old `solveCoupledJacIterative` loop with
+  the field operations behind the operator, and tier 2 is byte identical
+  across the split (the theta-pinch regression config, its `Superconvergent`
+  and `Newton` variants, the tier-0 transient and Newton variants and every
+  other regression config, against step 3's binary). `couplingKrylov` is SPGMR
+  on c itself, (I + L A^-1 C) c = c0 + L A^-1 r, with no product with A and
+  scaled by c's error weights, so its residual is the change one more sweep
+  would make to c; `couplingExact` is tier 1's oracle. `FieldSolve = "krylov"` is offered at both tiers; at tier 1
+  the sweep escalates to it, at tier 2 it escalates to the exact solve, and a
+  tier-2 adjoint under it takes the transposed sweep.
+* A_g is built per Jacobian build at yJac with the equilibrium there, at no
+  physics cost beyond the existing `FieldCoupling` plan site, which tier 1
+  lists exactly as tier 2 does.
+
+**Three departures from the design, each a measurement** (theta pinch, six
+cells, k = 3, to t = 0.5, rtol 1e-6, atol 1e-8; tier 2 takes 144 steps):
+
+* *GMRES runs on c, not on dx.* Left-preconditioned GMRES over the transport
+  increment, scaled by the run's error weights, stopped where the sweep's test
+  on dx alone would and cost 170 steps against the exact solve's 163. On c,
+  `(I + L A^-1 C) c = c0 + L A^-1 r` in c's own weights, its residual is the
+  change one more sweep makes to c, and it takes 157. c has no IDA weights at
+  tier 1, so it is given the AlgebraicMax rule applied to the geometry,
+  `1/(rtol (|g| + max|g_slot|))`; at tier 2 it takes psi's own.
+* *The tier-1 sweep re-solves dx against the accepted c.* Handing IDA the dx
+  solved against the previous c, as tier 2 does with its pair, cost 199 steps
+  against 163: at tier 2 IDA is given the accepted dpsi itself, but at tier 1
+  the transport increment is the whole Newton update. Measuring c in the stop
+  test instead changed nothing (199); a 10x tighter tolerance did (163), as
+  does the re-solve, in a third fewer sweeps (671 against 1025). One transport
+  solve per Jacobian solve.
+* *`IDACalcIC` keeps its line search at tier 1.* Tier 0 turns it off because its
+  Jacobian lacks the coupling; tier 1's has it, and on the theta pinch at
+  T = 0.3 and 0.9, 5 and 32 cells, the runs are step for step identical either
+  way.
+
+Costs, in the step-3 setup (5 cells, k = 4, to t = 1; steady solves to
+SteadyStateTolerance 1e-8 -- the transient and Newton rows reproduce step 3's
+table to the call, the PseudoTransient ones are 625 / 1,625 / 700 here at
+1e-4, 1e-6 and 1e-8 alike, so step 3 measured them in some other setup):
+
+| | transient | PTC | Newton |
+|---|---|---|---|
+| T = 0.3, tier 2, Analytic | 6,375 (+1,000) | 625 (+400) | 325 (+200) |
+| T = 0.3, tier 1, Analytic | 6,700 (+1,050) | 625 (+400) | 325 (+200) |
+| T = 0.3, tier 2, Differenced | 8,875 | 1,625 | 825 |
+| T = 0.3, tier 1, Differenced | 9,325 | 1,625 | 825 |
+| T = 0.3, tier 0 | 13,150 | 700 | 400 |
+| T = 0.9, tier 2, Analytic | 10,250 (+1,150) | 625 (+400) | 325 (+200) |
+| T = 0.9, tier 1, Analytic | 7,350 (+1,050) | 625 (+400) | 325 (+200) |
+| T = 0.9, tier 2, Differenced | 13,125 | 1,625 | 1,025 |
+| T = 0.9, tier 1, Differenced | 9,975 | 1,625 | 825 |
+| T = 0.9, tier 0 | 34,275 | 700 | 475 |
+
+The model's response and the differenced default give identical counts (the
+difference is equilibrium solves). Transient steps: tier 2 175 / 269, tier 1
+183 / 215, tier 0 341 / 937. So tier 1 is 0.72-1.05x tier 2 and 1.4-4.7x
+cheaper than tier 0 on transients, and tier 2's steady trade-off carries over
+unchanged -- which is what `auto` will want for a native equilibrium model:
+the same rule as for a field model, with "coupled" meaning "reduced".
+
+Agreement: J_red against a finite difference of the tier-0 residual to 1e-8
+(model response) and 2e-6 (differenced; the response itself is good to 3e-7);
+tier-1 exact against tier-2 exact with psi on its equilibrium to 2e-15;
+iterative and krylov within the sweep's tolerance of exact; runs against tier
+2 within 2.5e-7 (iterative) and 3.7e-8 (krylov) in N, steady states to 4e-13.
+
+**The MMS order study keeps the full order at tier 1** (`ThetaPinchMMSTests.cpp`,
+`MMSFieldTests.cpp`, `FieldSolve = "iterative"`, with the exact and the
+differenced G'). On the theta pinch at 1e-9 / 1e-11, 8, 16 and 32 cells, tier 1
+has tier 2's local orders to the digit: N 1.99 / 3.00-3.01 / 3.95-3.99 for
+k = 1, 2, 3. Its N errors match tier 2's to 2e-12-1.9e-10, against an
+rtol ||N|| of 4.4e-9, and it takes tier 2's steps: 97-249 against 96-326, where
+tier 0 takes 284-2234. The steady Newton study gives N 2.00, 3.00, 4.00 on
+16-64 cells in 4 iterations, against tier 2's 5, and lands on tier 2's answer to
+9e-15. Both manufactured field models reproduce tier 2's u and psi orders, with
+gaps of at most 1.3e-10. Both declare `Analytic`, so none is skipped. The sweep
+never fell back. Krylov gives the same errors, but takes 45 s where the sweep
+takes 16 s, so it is not part of the suite.
+
+### Step 5: the tier-1 adjoint
+
+* `EquilibriumModel::applyResponseTranspose(dp, e, states, dg, inputPoints,
+  weights, t, geometryPoints)`, dp = G'^T dg. The default assembles G' column by
+  column through `applyResponse` -- one column per input component, (3 nVars +
+  nAux) N(k+1), not the N(k+1) the tier-1 section above counted, since a black
+  box cannot say which components it reads -- and keeps it on the `Equilibrium`
+  (a private cache the base class owns), so it is built once per equilibrium
+  and cannot outlive it. `FieldModelEquilibrium` transposes exactly,
+  -(dR/dp)^T B^-T (dGeometry/dpsi)^T dg, through the linearisation the forward
+  response already caches.
+* The adjoint solves `(A^T + P^T G'^T A_g^T) z = G_y + P^T G'^T G_g`, G_g being
+  the objective's weighted dg/dgeometry at the physics nodes
+  (`assembleObjectiveGradient`'s new `dGdgeom` output, `G_geometry`). Written
+  once for both tiers as the transposed block system in the coupling
+  variable's adjoint, `A^T z = g_x + L^T zeta, zeta = g_c - C^T z`
+  (`AdjointCouplingOperator`): a sweep, GMRES and the dense solve, all stopping
+  on the relative backward error tier 2's sweep uses (row two holds exactly,
+  row one's residual is L^T of the last change). Tier 1 runs all three
+  (`solveReducedAdjoint`: sweep, then GMRES, then exact); tier 2's `krylov`
+  adjoint is now the same GMRES with zeta = B^T z_psi, where step 4 left it on
+  the transposed sweep. Tier 2's `iterative` and `exact` adjoints are the
+  existing functions, untouched.
+* `A_g^T` is materialised (`Ag_transpose_cellwise`) beside A1^T and A2^T, and
+  the record of a Jacobian build carries tier 1's blocks
+  (`PhysicsDerivatives::reduced`, built by `buildReducedBlocks` in both the
+  build and `adjointDerivativesAt`), so an adjoint on demand makes no physics
+  call. `ReducedBlocks::states` became a `shared_ptr<GlobalState const>`: the
+  blocks are now copied into records, and a `std::optional` would have copied
+  through `GlobalState`'s shape-checked assignment again.
+* The tier-1 refusal is lifted in `initialize()`, `assembleAdjointOperator`
+  (which still refuses tier 0) and `chooseFieldCoupling` (`"reduced"` with
+  `solveAdjoint` or the `Objective` steady test is accepted). `auto` with an
+  adjoint still picks `coupled`: the tier-2 adjoint transposes the model's own
+  blocks and needs no response. The objective's value and parameter derivative
+  are taken on geometry-filled states at tier 1 as at tier 2, and both
+  objective estimates (`estimateObjective`, the `Objective` steady test's
+  `estimateObjectiveError`) gain G_g . G'P delta, one forward response each.
+
+Measured on the theta pinch (5 cells, k = 3 for the operator checks; 6 cells,
+k = 3, a PseudoTransient steady state at 1e-11 for the gradients):
+
+| check | result |
+|---|---|
+| J_red^T z = g against a finite difference of the tier-0 residual at cj = 0, every solve, plain and superconvergent | 1.9e-8 to 2.7e-8 with the model's transpose (the difference's own error: the exact solve sits there too); 5.2e-7 to 5.5e-7 assembled |
+| ...with A_g^T zeroed, or a transposed response that does nothing | 6.29 against 2.1e-8 |
+| tier-1 z against tier-2 exact z, psi on its equilibrium, G_psi = sum_j (dg/dpsi_j)^T G_g | exact 8.6e-15 / 9.3e-15 (plain / superconvergent); krylov 3.7e-11 / 9.0e-11; iterative 1.5e-9 / 2.0e-10 |
+| tier-2 krylov (new) and iterative against tier-2 exact | 3.4e-9 / 2.6e-9 and 5.8e-10 / 4.5e-10 |
+| assembled G'^T dg against the exact one | 1.1e-7 relative; 101 Newton iterations to assemble 96 columns, none on a second call |
+| steady G_p, three objectives (u^2; B(1+x^2), geometry only; u V', both), against tier 2 | 8.3e-12 iterative, 8.3e-12 exact, 3.5e-12 krylov; 1.1e-7 of max |G_p| assembled |
+| ...against central differences of G | ~1e-9 relative with the model's transpose; within 1e-6 of max |G_p| assembled (the B objective's entries are 300x smaller, so 6e-6 of themselves) |
+| gradient with no transposed response / A_g^T zeroed | wrong by 6.7%, 100%, 8.2% / 6.5% |
+| adjoint on demand after a transient, two objectives | 0 physics calls; 1 equilibrium solve with the model's transpose (the objective's geometry at the state asked about, which the cache does not hold after a time march), 97 assembled (96 columns + that one); a second call 0 |
+| adjoint iterations, transpose check | 7-8 sweeps; 6 GMRES iterations |
+| a reused tier-1 adjoint run against a fresh one, both responses | G_p bit for bit |
+
+**Step 4's step counts are samples, and this step measured their spread.**
+The forward tier-1 run with the differenced response under `krylov` went from
+157 steps to 197 at the same settings, on a rebuild whose only effect on it is
+the test binary's code generation. Over rtol x {0.9, 0.95, 1, 1.05, 1.1} on the
+same theta pinch, tier 2 itself takes 210, 174, 144, 175 and 146 steps, and the
+tier-1 modes 150 to 172 (the exact response under `iterative` and `krylov`,
+tier 2 under `krylov` matching the latter step for step). So "tier 1 takes
+about tier 2's steps" holds as a range, not as a number, and
+`a_reduced_theta_pinch_reaches_the_coupled_answer` now bounds steps at 1.5
+times tier 2's nominal count -- its own best case -- and below three quarters of
+tier 0's.
+
+The tier-0 and tier-2 paths are unchanged: every regression config and the five
+theta-pinch variants `cmp` equal against step 3's binary (40 files, the
+`AdjointTestProblem` adjoint run among them), and so do three more matching the
+theta pinch's tier-2 adjoint tests -- a PseudoTransient steady state at 1e-11
+under `iterative` and `exact`, and a superconvergent transient. No config can
+run a field adjoint, so those are checked through the unit tests' printed
+gradients: `field_adjoint_tests`' are identical to 17 digits between the two
+binaries. The theta pinch's tier-2 adjoint tests differ in the last digit or
+two (1e-16 in the state, which their central differences amplify to 1e-11):
+their translation unit, which inlines the case, changed in steps 4 and 5, and
+`MaNTA` running the same configurations is byte identical, so this is the test
+binary's code generation, not the solver's arithmetic.
+
+### The equilibrium registry
+
+* `EquilibriumModels` (`EquilibriumModel.hpp`/`.cpp`) is `FieldModels`
+  exactly: a process-global map filled by `REGISTER_EQUILIBRIUM_MODEL_HEADER` /
+  `_IMPL`, a duplicate or unknown name thrown as `std::invalid_argument`
+  listing what is registered, a `(toml::value, Grid)` constructor reading the
+  model's own table, and `PhysicsPlugins` reaching it unchanged.
+  `EquilibriumModel = "<name>"` selects one (`Category::ProblemSelection`, so
+  an error in a `Runner.configure` dict); `loadSolverConfig` refuses it beside a
+  `FieldModel`, and with `FieldCoupling = "coupled"`. runManta instantiates it
+  after the field model and attaches it through the existing
+  `setEquilibriumModel`; the adaptive drivers refuse it as they refuse a field
+  model.
+* `chooseEquilibriumCoupling` (`SolverConfig.cpp`) is its own function beside
+  `chooseFieldCoupling`, so neither rule reads the other's cases. `consistent`
+  refuses an adjoint; `reduced` takes one, through the model's transposed
+  response; `auto` with an adjoint is `reduced`, refused for a case declaring
+  no geometry derivatives.
+* `ThetaPinchPressureBalance` (`PhysicsCases/`) is the registered native model:
+  the theta pinch's balance in closed form, `V' = Phi_a / sqrt(C - p)` on the
+  transport's own pressure polynomial, `C` by a bracketed Newton on the wall.
+  Its response and transpose are exact (forward-mode duals; the transpose
+  assembles the pressure columns of G' by one dual sweep each, once per
+  equilibrium, with no `Solve`), with `DifferencedResponse` falling back to the
+  base class's.
+
+**`auto` sends a `Differenced` `Newton` solve to `consistent`, not `reduced`
+as this step was asked to.** The measurement, in step 3's setup on the native
+model (transport cost; equilibrium solves after the slash; T = 0.3 / 0.9):
+
+| | transient | PTC | Newton |
+|---|---|---|---|
+| `Analytic`, reduced, model G' | 6,900 / 6,700 (235 / 221) | 625 (9) | 325 (5) |
+| `Analytic`, reduced, differenced G' | 6,900 / 6,700 (1,006 / 1,215) | 625 (44 / 53) | 325 (19 / 28) |
+| `Differenced`, reduced | 9,275 / 9,450 | 1,625 | 825 |
+| consistent | 14,075 / 25,300 (528 / 947) | 700 (10) | 400 (6) |
+
+`Differenced` costs the reduced Newton solve 2.1x the black box's, as it does
+PTC (2.3x) -- step 4's table said the same -- so the native rule is the field
+model's with "reduced" for "coupled", Newton and PTC alike.
+
+**The model's response is an input to `auto`, and that is a second
+departure.** It moves no transport cost -- the two rows above are identical to
+the call -- only equilibrium solves. Its own response makes fewer than the
+black box everywhere. A differenced one makes 3.2-5.3x the black box's on a
+steady solve, where reduced saves at most 19% of the transport cost, so an
+`Analytic` case with a differenced response runs its steady solves
+`consistent`. On a transient it makes 1.3-1.9x the black box's to save 2.0-3.8x
+the transport calls, and stays `reduced`: which side wins depends on one
+equilibrium solve's price against one physics sweep, which `auto` cannot know.
+
+**The native model reads its pressure gradient from a recovery, not from
+`p_h`, and this is a measurement too.** On the manufactured theta pinch,
+`dV'/dx` read off `p_h` -- what "closed form, no spline" means taken literally
+-- converges at k, not k + 1: N at 0.99, 2.24, 3.11 for k = 1, 2, 3, steady, 16
+to 128 cells. It is the order the field model's header records for a V' that
+breaks where `p_h` does. A least-squares fit of degree k + 1 to `p_h`'s nodal
+values on the cell and its neighbours recovers k + 1 at k = 2, 3 and not at
+k = 1, where it decays to order 1 by 256 cells: `p_h`'s interpolation error
+repeats its shape in every cell, and the fit's slope picks the shape up. A fit
+to the patch's L2 projection of `p_h` behaves the same way. A fit of degree
+k + 1 to cell *means* over 2 ceil((k + 1)/2) + 1 cells does not, since a mean
+carries that error only as a smooth function: `dV'/dx` at 2.00, 2.99, 5.00 on an
+exact pressure, and the study at k + 1 everywhere --
+
+| | N transient (16, 32, 64) | N steady (32, 64, 128) |
+|---|---|---|
+| k = 1 | 2.00, 2.00 | 1.99, 2.00 |
+| k = 2 | 3.08, 3.02 | 3.05, 3.01 |
+| k = 3 | 3.89, 3.97 | 3.97, 3.99 |
+
+-- one level finer than the field model's study, since at k = 3 the five-cell
+patch is still pre-asymptotic from 8 to 16 cells.
+
+**It is the field model's physics, discretised differently, and lands within
+the field model's discretisation error of its answer.** In the manufactured
+study the distance between the two runs' N converges at k + 1 with them, at 0.37
+(k = 1), 0.34 to 0.10 (k = 2) and 1.9 to 2.1 (k = 3, transient) of the field
+model's own N error; at k = 3 the native error is the larger, 2.5-5x. V' is where
+they part, the spline superconverging at k <= 2. On
+`Tests/RegressionTests/ThetaPinchNative.conf`, `ThetaPinch.conf` with the
+native model, N is 5.0e-4 / 2.6e-4 from the field model's at 8 / 16 cells (RMS,
+relative), against the field model's own change on refinement to 32 cells of
+7.9e-3 / 2.6e-3. Both converge only at about 1.6 there, against k + 1 = 5: a
+property of that configuration, which the manufactured study does not share.
+
+Checks: `J_red` against a finite difference of the tier-0 residual (1.4e-9 in
+the solution with the model's response, 2e-7 with the differenced one; A_g
+zeroed misses by 1e9), G' against a difference of `Solve` (7e-8) and its transpose against the
+assembled default (1.4e-7), with `<dg, G'dp> = <G'^T dg, dp>` to 8e-16; the
+reduced adjoint inverting `J_red^T` to 7e-9 under every `FieldSolve`; the
+gradient against central differences of G to 1e-6 per entry (the differenced
+transpose to 1e-6 of the gradient's scale); an adjoint on demand making no
+physics call and one equilibrium solve, plus one per input component per point
+once per equilibrium under the differenced response (97 on six cells at k = 3);
+a reused solver bit for bit at tiers 0 and 1; and the registry's two throws.
+The tier-0/1/2 paths are byte identical to the base's, on the cmp set step 4
+used.
 
 ## Not in this work
 

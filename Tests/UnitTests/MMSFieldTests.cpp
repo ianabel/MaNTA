@@ -13,12 +13,15 @@
 // the measured tables, the fallback counts and the two mutations that show the
 // studies are not vacuous.
 #include <boost/test/unit_test.hpp>
+#include <boost/test/data/test_case.hpp>
 
 #include "MMSHarness.hpp"
 #include "ManufacturedFields.hpp"
+#include "../../FieldModelEquilibrium.hpp"
 
 #include <cmath>
 #include <map>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -142,6 +145,81 @@ Rates const &iterativeSweep(Index k)
     if (it == cache.end())
         it = cache.emplace(k, solveCoupledAndMeasure<ManufacturedField>(k, kCells)).first;
     return it->second;
+}
+
+/// A lower tier: the same model as a black box, through FieldModelEquilibrium,
+/// and psi read back from the equilibrium the final state maps to. Tier 0
+/// ("consistent") with no coupling in the Jacobian; tier 1 ("reduced") with the
+/// equilibrium's response G' in it, exact or as a forward difference of Solve.
+enum class LowerTier
+{
+    Consistent,
+    Reduced,
+    ReducedDifferenced,
+};
+
+const char *lowerTierName(LowerTier t)
+{
+    switch (t)
+    {
+    case LowerTier::Consistent:
+        return "tier 0";
+    case LowerTier::Reduced:
+        return "tier 1";
+    case LowerTier::ReducedDifferenced:
+        return "tier 1, differenced G'";
+    }
+    return "?";
+}
+
+std::ostream &operator<<(std::ostream &os, LowerTier t) { return os << lowerTierName(t); }
+
+template <ManufacturedFieldModel M>
+FieldTier<M> lowerTier(LowerTier t)
+{
+    return {[t](SystemSolver &sys, std::shared_ptr<M> const &model)
+            {
+                using C = SystemSolver::EquilibriumCoupling;
+                const bool differenced = t == LowerTier::ReducedDifferenced;
+                sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(model, differenced),
+                                        t == LowerTier::Consistent ? C::Consistent : C::Reduced);
+                sys.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
+            },
+            [](SystemSolver &sys, Time t) -> Vector
+            { return FieldModelEquilibrium::psi(sys.equilibriumAt(sys.yJac, t)); }};
+}
+
+/// The multi-DOF model's tier-2 sweep at k = 2, computed once.
+Rates const &vectorSweep()
+{
+    static const Rates r = solveCoupledAndMeasure<ManufacturedFieldVector>(2, kCells);
+    return r;
+}
+
+/// A lower tier against tier 2: u at k + 1, psi at 3 or better from k = 2, no
+/// fallbacks, and u's error equal to tier 2's to ten times the run's rtol --
+/// the tiers take different steps, so they agree to integration error and no
+/// better.
+void checkLowerTierAgainst(LowerTier t, Rates const &r, Rates const &coupled, Index k, const char *model)
+{
+    BOOST_TEST_MESSAGE(lowerTierName(t) << ", " << model << ", k = " << k << " local orders in u: "
+                                        << format(r.localU) << "  psi: " << format(r.localExtra) << r.detail);
+    for (double o : r.localU)
+        BOOST_CHECK_GT(o, k + 1 - 0.25);
+    if (k >= 2)
+        for (double o : r.localExtra)
+            BOOST_CHECK_GT(o, 2.75);
+    checkNoFallbacks(r);
+
+    const double rtol = Tolerances{}.relative;
+    double worstGap = 0.0;
+    for (size_t i = 0; i < kCells.size(); ++i)
+        worstGap = std::max(worstGap, std::abs(r.coupledU[i] - coupled.coupledU[i]));
+    BOOST_TEST_MESSAGE(std::format("    worst gap to tier 2 in the u error: {:.2e} (rtol {:.0e})", worstGap, rtol));
+    for (size_t i = 0; i < kCells.size(); ++i)
+        BOOST_TEST(std::abs(r.coupledU[i] - coupled.coupledU[i]) <= 10 * rtol,
+                   lowerTierName(t) << ", " << model << ", k = " << k << ", n = " << kCells[i] << ": u error "
+                                    << r.coupledU[i] << " against " << coupled.coupledU[i] << " at tier 2");
 }
 
 } // namespace
@@ -379,6 +457,45 @@ BOOST_AUTO_TEST_CASE(superconvergent_coupling_reaches_k_plus_two)
                                << " (flag off " << off.localStar[i] << ", flag on "
                                << on.localStar[i] << ")");
     }
+}
+
+// The lower tiers: both manufactured models as black boxes through
+// FieldModelEquilibrium, at tier 0 ("consistent") and tier 1 ("reduced", exact
+// and differenced G'), through the same harness and tolerances as the tier-2
+// studies above. Taking psi out of the state must cost no order, and must not
+// move the answer. Both models declare GeometryDerivatives::Analytic (through
+// ManufacturedGeometricDiffusion), so every tier runs on both.
+//
+// Measured, local orders in u and psi on 4, 8, 16, 32 cells, the same at all
+// three to the printed digit but one (vector psi's last, 4.006 at tier 0 and
+// 4.005 at tier 1):
+//
+//     scalar, k = 1   u 1.90, 1.96, 1.98   psi 2.09, 2.07, 2.04
+//     scalar, k = 2   u 2.95, 2.98, 2.99   psi 4.82, 3.93, 3.87
+//     scalar, k = 3   u 3.96, 3.99, 4.00   psi 5.12, 4.37, 4.10
+//     vector, k = 2   u 2.93, 2.98, 2.99   psi 4.03, 4.01, 4.01
+//
+// -- tier 2's psi tables to the digit (psi_converges_too,
+// the_multi_dof_field_converges_the_same_way). The worst gap to tier 2 in the
+// u error is 7.1e-11 at tier 0, 7.7e-11 at tier 1 and 1.3e-10 with the
+// differenced G', against an rtol of 1e-9. The coupling here is weak enough
+// that even tier 0 costs IDA little: each tier is about a second.
+BOOST_DATA_TEST_CASE(the_lower_tiers_converge_at_k_plus_one,
+                     boost::unit_test::data::make({LowerTier::Consistent, LowerTier::Reduced,
+                                                   LowerTier::ReducedDifferenced}),
+                     tier)
+{
+    for (Index k = 1; k <= 3; ++k)
+        checkLowerTierAgainst(tier,
+                              solveCoupledAndMeasure<ManufacturedField>(
+                                  k, kCells, false, SystemSolver::FieldSolveMode::Iterative, 0.25, {},
+                                  lowerTier<ManufacturedField>(tier)),
+                              iterativeSweep(k), k, "scalar");
+    checkLowerTierAgainst(tier,
+                          solveCoupledAndMeasure<ManufacturedFieldVector>(
+                              2, kCells, false, SystemSolver::FieldSolveMode::Iterative, 0.25, {},
+                              lowerTier<ManufacturedFieldVector>(tier)),
+                          vectorSweep(), 2, "multi-DOF");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

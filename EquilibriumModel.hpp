@@ -32,10 +32,14 @@
         residual is handed it.
       * Geometry is then asked for the slots at whichever points the solver is
         about to evaluate the physics at.
-      * The Jacobian carries no coupling: the transport derivatives are taken at
-        the geometry of the build's state, held fixed. So the solver's Newton
-        converges linearly in the coupling, which is the price of asking for
-        nothing but G.
+      * At tier 0 (FieldCoupling = "consistent") the Jacobian carries no
+        coupling: the transport derivatives are taken at the geometry of the
+        build's state, held fixed. So the solver's Newton converges linearly in
+        the coupling, which is the price of asking for nothing but G.
+      * At tier 1 (FieldCoupling = "reduced") it carries G' too, through
+        applyResponse -- by default a forward difference of Solve, so a model
+        still need supply nothing but G, and pays in equilibrium solves rather
+        than in Newton iterations.
 
     `Equilibrium` is opaque to the solver. It holds whatever the model caches --
     a spline, Fourier coefficients, a file handle -- and the solver only stores
@@ -45,6 +49,28 @@ class Equilibrium
 {
 public:
     virtual ~Equilibrium() = default;
+
+private:
+    // The response EquilibriumModel::applyResponseTranspose's default assembles,
+    // kept with the equilibrium it is the derivative at: so it is built once per
+    // equilibrium whatever number of objectives or iterations transpose it, and
+    // cannot outlive it. Keyed on the points it was assembled for.
+    friend class EquilibriumModel;
+    mutable std::vector<Position> assembledInputPoints, assembledGeometryPoints;
+    mutable Matrix assembledResponse;
+};
+
+/// Where a model's response G'(p) dp comes from (EquilibriumModel::applyResponse).
+///
+/// `Differenced` is the default implementation, a forward difference of Solve;
+/// `Model` declares that the model overrides applyResponse with its own, exact,
+/// derivative. Declared as data rather than inferred from the override, the way
+/// SystemSpec::geometryDerivatives is, because a default that differences looks
+/// from outside exactly like one that does not.
+enum class EquilibriumResponse
+{
+    Differenced,
+    Model,
 };
 
 /// What a tier-0 model is, as data: FieldModelSpec without the unknowns.
@@ -57,6 +83,7 @@ struct EquilibriumSpec
     std::vector<FieldSlot> geometry;
     std::string label;
     std::string name = "Field";
+    EquilibriumResponse response = EquilibriumResponse::Differenced;
 
     Index nGeometry() const { return static_cast<Index>(geometry.size()); }
 
@@ -110,6 +137,52 @@ public:
     /// The geometry slots of `e` at each of `points`: g is (nGeometry, points.size()).
     virtual void Geometry(MatrixRef g, Equilibrium const &e, std::vector<Position> const &points) = 0;
 
+    /// The response of the geometry to the input, dg = G'(p) dp: tier 1.
+    ///
+    /// `e` is the equilibrium Solve returned for `states` (on `inputPoints`, with
+    /// `weights`, at `t`), `dp` a direction in that same space -- every component
+    /// of the transport state at the basis nodes -- and dg is filled as
+    /// (nGeometry, geometryPoints.size()), at the points the solver evaluates the
+    /// physics at.
+    ///
+    /// The default is a forward difference of Solve, warm-started from `e`: one
+    /// equilibrium solve per call, at a step of responseStep() relative to the
+    /// input (see the definition). A model that can do better -- a code with its
+    /// own linearisation, or FieldModelEquilibrium -- overrides this and declares
+    /// EquilibriumResponse::Model in its spec.
+    virtual void applyResponse(MatrixRef dg, Equilibrium const &e, GlobalState const &states,
+                               GlobalState const &dp, std::vector<Position> const &inputPoints,
+                               Vector const &weights, Time t,
+                               std::vector<Position> const &geometryPoints);
+
+    /// The transposed response, dp = G'(p)^T dg: the adjoint at tier 1.
+    ///
+    /// `dg` is (nGeometry, geometryPoints.size()), a sensitivity to the geometry
+    /// at the points the physics is evaluated at, and `dp` arrives zeroed and
+    /// shaped like `states`; its Variable, Derivative, Flux and Aux rows are
+    /// filled. The other arguments are applyResponse's.
+    ///
+    /// **The default assembles G' and transposes it**: one applyResponse per
+    /// component of the input -- every row of Variable, Derivative, Flux and Aux
+    /// at every input point, so (3 nVars + nAux) times the number of points --
+    /// which under the differenced applyResponse is that many equilibrium
+    /// solves. Assembled once per equilibrium and kept on it, so every further
+    /// call at that equilibrium is a matrix product. A forward difference has no
+    /// transpose action of its own; the assembled matrix is the only one there
+    /// is. A model that has one -- a code with an adjoint, or
+    /// FieldModelEquilibrium -- overrides this, and declares
+    /// EquilibriumResponse::Model as it does for applyResponse.
+    virtual void applyResponseTranspose(GlobalState &dp, Equilibrium const &e, GlobalState const &states,
+                                        Matrix const &dg, std::vector<Position> const &inputPoints,
+                                        Vector const &weights, Time t,
+                                        std::vector<Position> const &geometryPoints);
+
+    /// The relative step the default applyResponse takes. sqrt(eps), which is
+    /// right for an equilibrium converged to round-off. A model that converges
+    /// only to a tolerance tol should return about sqrt(tol), or the difference
+    /// is its own convergence error divided by the step.
+    virtual double responseStep() const;
+
     /// How accurately the geometry has to be resolved, relative and absolute,
     /// in the units of the slots. Handed over once per run, from initialize().
     ///
@@ -128,5 +201,59 @@ public:
 protected:
     EquilibriumSpec spec;
 };
+
+// ---- the registry -------------------------------------------------------------
+//
+// The FieldModel registry's pattern exactly: a process-global map filled by
+// static initialisers, a duplicate name and an unknown one both thrown, and
+// each model handed the parsed config file and the grid, so it reads its own
+// table. `EquilibriumModel = "<name>"` selects one; a model built outside this
+// tree reaches the map through PhysicsPlugins the way a physics case does.
+
+#include "gridStructures.hpp"
+#include <toml.hpp>
+
+#include <functional>
+#include <map>
+
+template <typename T>
+std::unique_ptr<EquilibriumModel> createEquilibriumModel(toml::value const &config, Grid const &grid)
+{
+    return std::make_unique<T>(config, grid);
+}
+
+struct EquilibriumModels
+{
+public:
+    typedef std::function<std::unique_ptr<EquilibriumModel>(toml::value const &, Grid const &)> function_type;
+    typedef std::map<std::string, function_type> map_type;
+
+    static std::unique_ptr<EquilibriumModel> InstantiateEquilibriumModel(std::string const &s,
+                                                                         toml::value const &config,
+                                                                         Grid const &grid);
+
+    // Throws on a duplicate name, as the other two registries do.
+    static void RegisterEquilibriumModel(std::string const &s, function_type creator);
+
+protected:
+    static map_type *getMap();
+
+public:
+    static map_type *map;
+};
+
+template <typename T>
+struct EquilibriumModelRegister
+{
+    explicit EquilibriumModelRegister(std::string const &name)
+    {
+        EquilibriumModels::RegisterEquilibriumModel(name, createEquilibriumModel<T>);
+    }
+};
+
+// A model only appears if its object file is linked in -- nothing references it
+// directly, so a missing entry is a link-line problem with no compile error.
+#define REGISTER_EQUILIBRIUM_MODEL_HEADER(T) static EquilibriumModelRegister<T> registerEquilibriumModel_##T;
+#define REGISTER_EQUILIBRIUM_MODEL_IMPL(T) EquilibriumModelRegister<T> T::registerEquilibriumModel_##T(#T);
 
 #endif // EQUILIBRIUMMODEL_HPP
