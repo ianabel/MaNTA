@@ -511,11 +511,14 @@ value of `Tier` in the file: `Coupled`, `Consistent`, and `Reduced` and
   the transient study above, one case per degree: tier 2's orders to the digit,
   and its errors in `N` to 6e-11 - 3.4e-9 against an `rtol ||N||` of 4.4e-9 --
   integration error, asserted below ten times that, because the two tiers take
-  different steps. The price is steps, not order: 2 to 18 times tier 2's
-  (2234 against 120 at `k = 3`, 16 cells), with no coupling in the Jacobian.
+  different steps. The price is Newton iterations, not order: with no coupling
+  in the Jacobian Newton converges linearly, and tier 0 makes two to three times
+  tier 1's equilibrium solves at about tier 2's steps. That needs the algebraic
+  error out of IDA's test, as a run with a field has by default; with it in,
+  the steps went 2 to 18 times tier 2's (2234 against 120 at `k = 3`, 16 cells).
 * *Tier 1* (`FieldCoupling = "reduced"`, `FieldSolve = "iterative"`), at both
   responses, one case per degree: tier 2's orders to the digit, its errors in
-  `N` to 2e-12 - 1.9e-10, and tier 2's steps -- 97 - 249 against 96 - 326 --
+  `N` to 1.5e-11 - 1.2e-9, and tier 2's steps -- 59 - 168 against 61 - 166 --
   with no fallback. `krylov` gives the same table in 45 s against the sweep's
   16 s, and is not run.
 * *Steady*, at every tier: the source frozen at `t = 0.25`, a Newton solve from
@@ -552,11 +555,13 @@ that only a run can provide.**
   20000 steps against the exact solve's 213, and the answer was right. The
   sweep left an error in `sigma` and `q` near the axis that is O(1) in IDA's
   error weights. `the_iterative_solve_does_not_stall_ida` runs that case in both
-  modes and requires the iterative run's steps within five times the exact
-  run's. That bound is set by round-off, not by the sweep: IDA falls in and out
-  of an order-2 trap on this case in both modes, so exact takes 149 to 278 steps
-  and iterative 142 to 564 over small changes of tolerance or CPU, and with
-  `SuppressAlgebraicError` both take 99-101. No unit test
+  modes and requires the iterative run's steps within twice the exact run's.
+  That holds because a run with a field suppresses the algebraic error by
+  default, and then both modes take 99-101 steps over a +-8% tolerance sweep.
+  With the algebraic rows in IDA's error test it would not: IDA falls in and
+  out of an order-2 trap on this case in both modes, as round-off decides, and
+  exact takes 149 to 278 steps and iterative 142 to 564 over small changes of
+  tolerance or CPU. No unit test
   with random right-hand sides at a fixture state sees it, because the residue
   only concentrates there on Newton's own corrections.
 

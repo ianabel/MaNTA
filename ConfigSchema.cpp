@@ -297,7 +297,8 @@ const std::vector<Entry> &table()
          "Let IDA grow the step by 10x rather than 2x between steps."},
         {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
          "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
-         "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
+         "Absent: on for a run with a FieldModel or EquilibriumModel, off otherwise. "
+         "See docs/running.rst."},
         {"FieldSolve", {}, Type::String, Category::Solver, false, false, std::string{"iterative"},
          "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default), "
          "krylov (GMRES on the system with the field eliminated) or exact (the eliminated "

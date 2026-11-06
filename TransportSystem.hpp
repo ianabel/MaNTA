@@ -186,35 +186,55 @@ public:
     restart_dYdt = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_dYdt_data.data(), nScalars, nAux, nField);
     restarting = true;
 
-    // Pull boundary conditions directly from restart values
-    Position xL = restart_grid->lowerBoundary();
-    Position xR = restart_grid->upperBoundary();
+    // Recover boundary data from the restarted profile -- but only for a case
+    // that has none of its own. The defaults below read uL/uR, and a case may
+    // fill them itself: AutodiffTransportSystem from its [AutodiffTransportSystem]
+    // uL/uR keys, AdjointPlasma from its edge values. Overwriting those with
+    // values sampled from the solution changed the problem being solved. HDG
+    // imposes a Neumann value weakly, so q_h at the face is not the datum: on
+    // ADTest, whose zero-flux axis resumed as q_h(0), the restarted run carried a
+    // spurious flux through the axis, landed 8.3e-4 off the uninterrupted run in
+    // q at rtol 1e-4, and at rtol 1e-6 failed its first step ten times with a
+    // dsm of 1.17 that no step size moved. So data the case owns is kept, and
+    // data an earlier restart recovered is recovered again, since it belongs to
+    // that restart rather than to the case.
+    const bool recoverLower = uL.size() != static_cast<size_t>(nVars) || lowerFromRestart;
+    const bool recoverUpper = uR.size() != static_cast<size_t>(nVars) || upperFromRestart;
+    if (!recoverLower && !recoverUpper)
+      return;
 
     uL.resize(nVars);
     uR.resize(nVars);
+    const Index lastFace = restart_grid->getNCells();
 
     for (Index i = 0; i < nVars; ++i)
     {
-      // q, not sigma. A Neumann boundary value is applied to q -- see
-      // SystemSolver.cpp's L_global assembly and docs/physics_interface.rst --
-      // so seeding it from sigma handed the resumed run the wrong quantity, and
-      // with the wrong sign into the bargain, since the stored sigma is
-      // -sigma_hat. For sigma_hat = kappa q that made the resumed boundary
-      // -kappa q rather than q: a sign flip even at kappa = 1. It stayed hidden
-      // because it needs three things at once -- a Neumann boundary, a *nonzero*
-      // value on it, and a case that does not override LowerBoundary, since an
-      // overriding case never reads these at all.
+      // A Dirichlet end's datum is the trace entry: the solver writes g_D(t)
+      // into it before every report, the restart file included, so it is the
+      // datum itself rather than u_h at the face, which misses it by the
+      // discretisation error there.
+      //
+      // q, not sigma, at a Neumann end. A Neumann boundary value is applied to
+      // q -- see SystemSolver.cpp's L_global assembly and
+      // docs/physics_interface.rst -- so seeding it from sigma handed the
+      // resumed run the wrong quantity, and with the wrong sign into the
+      // bargain, since the stored sigma is -sigma_hat. For sigma_hat = kappa q
+      // that made the resumed boundary -kappa q rather than q: a sign flip even
+      // at kappa = 1. It stayed hidden because it needs three things at once --
+      // a Neumann boundary, a *nonzero* value on it, and a case that does not
+      // override LowerBoundary, since an overriding case never reads these at
+      // all.
       // A Mixed end has one datum to recover and it is c, so evaluate the row's
       // own left-hand side on the restarted profile. Note `d` multiplies the
       // *stored* sigma, which is -sigma_hat, because that is what the assembly
       // multiplies -- reading the other one here is exactly the defect above,
       // one level up.
-      auto recover = [&](BoundaryCondition const &bc, Position x)
+      auto recover = [&](BoundaryCondition const &bc, Position x, Index face)
       {
         switch (bc.kind)
         {
         case BoundaryKind::Dirichlet:
-          return restart_Y->u(i)(x);
+          return restart_Y->lambda(i)[face];
         case BoundaryKind::Neumann:
           return restart_Y->q(i)(x);
         case BoundaryKind::Mixed:
@@ -224,9 +244,13 @@ public:
         return restart_Y->q(i)(x);
       };
 
-      uL[i] = recover(lowerBoundaryCondition(i), xL);
-      uR[i] = recover(upperBoundaryCondition(i), xR);
+      if (recoverLower)
+        uL[i] = recover(lowerBoundaryCondition(i), restart_grid->lowerBoundary(), 0);
+      if (recoverUpper)
+        uR[i] = recover(upperBoundaryCondition(i), restart_grid->upperBoundary(), lastFace);
     }
+    lowerFromRestart = lowerFromRestart || recoverLower;
+    upperFromRestart = upperFromRestart || recoverUpper;
   }
 
   bool isRestarting() const { return restarting; };
@@ -865,6 +889,10 @@ protected:
   std::vector<Values> m_sourceCache; // since sources might be expensive to calculate, cache them for use in outputs
 
   std::vector<Value> uL, uR;
+  // Whether uL and uR were recovered by setRestartValues rather than set by
+  // the case, so that a later restart recovers them again and never overwrites
+  // a case's own.
+  bool lowerFromRestart = false, upperFromRestart = false;
 
   // Shared rather than copied: the solver keeps no copy of its own, and a case
   // that ignores the plan should not pay for one.
