@@ -16,6 +16,7 @@ Version: @PROJECT_VERSION@
 # the first time the solver touches its state. -DEIGEN_USE_BLAS travels for the
 # same reason. The architecture is recorded concretely rather than as `native`,
 # so a plugin compiled on a different machine is a compile error here instead of
-# a run-time crash there.
-Cflags: -I${prefix}/@CMAKE_INSTALL_INCLUDEDIR@ -I${includedir} -std=@MANTA_PC_STD@ -DEIGEN_USE_BLAS @MANTA_PC_MARCH@
+# a run-time crash there. -DEIGEN_DONT_PARALLELIZE likewise: the core's Eigen
+# never threads, and a plugin's instantiations must be the same code.
+Cflags: -I${prefix}/@CMAKE_INSTALL_INCLUDEDIR@ -I${includedir} -std=@MANTA_PC_STD@ -DEIGEN_USE_BLAS -DEIGEN_DONT_PARALLELIZE @MANTA_PC_MARCH@
 Libs: -L${libdir} -lmanta
