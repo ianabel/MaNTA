@@ -44,6 +44,25 @@ Raised 2026-09-30, when the build stopped writing into the source tree.
   or goes, and docs/_build/ leaves .gitignore.
 
 
+Revisit a better error measure for the discretisation.
+Raised 2026-11-06; the last attempt stalled on a choice rather than a defect.
+
+  The run has no calibrated measure of its own discretisation error. The
+  modal-decay sensor ranks cells and degrees but is not an error;
+  ||u* - u_h|| under-predicts the true error by up to 250x on Shestakov, worse
+  with resolution, and a ladder's two-level difference over-predicts by up to
+  12x (PERFORMANCE.md, "Why the tolerance is not chosen automatically"; commit
+  9be3e48). The dual-weighted estimate is calibrated, but only for a named
+  objective.
+
+  What blocked the last attempt was a choice of error, not an implementation:
+  for steady-state diffusion the error in q drives the error in u, so which
+  quantity the measure is taken on -- u, q, the flux, or a norm coupling them --
+  had to be settled first and was not. Settle that before writing code; the
+  answer serves whatever the measure then drives (a tolerance, mesh grading,
+  the degree).
+
+
 SteadyStateTolerance barely affects a TimeMarch run.
 Found 2026-09-23, re-measuring the paper's steady-cost table at a tolerance a
 plasma transport run would actually use.
@@ -310,8 +329,6 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
   and CI's two
   g++-14 legs should be treated as capable of failing for reasons unrelated to
   the change under review.
-
-Investigate occasional wiggles in outputs.
 
 Left over from the TransportSystem interface work. Everything else in that plan
 landed; these are the pieces that were deliberately not done, with the reason.
