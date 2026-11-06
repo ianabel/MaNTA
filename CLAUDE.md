@@ -711,9 +711,10 @@ Two return codes worth being able to read without looking them up:
 else may write one, and nothing else may thread either: the build defines
 `EIGEN_DONT_PARALLELIZE` (`cmake/MantaDependencies.cmake`, and `manta.pc`), so
 Eigen does not thread its matrix products under `-fopenmp` the way it would by
-default. BLAS threading is the one exception, and it is the BLAS's, below. `manta::parallel_for(n, body, grain)` is the only entry
-point, and it exists because three properties were needed at all eight sites and
-present at none of them.
+default. BLAS threading is the one exception, and it is the BLAS's, below.
+`manta::parallel_for(n, body, grain)` is the only entry point, and it exists
+because three properties were needed at all eight sites and present at none of
+them.
 
 **Exceptions.** A physics hook throwing is *supported*: `static_residual`
 catches it, prints, and returns 1, which IDA treats as recoverable and retries
