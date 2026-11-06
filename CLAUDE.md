@@ -2465,6 +2465,21 @@ formula, not the operator, if the data cannot tell them apart.
   2.0e-7, in 36 steps against 48 and with half the error-test failures.
   `test_a_run_can_be_restarted_from_its_own_output` runs that way for this
   reason.
+* **`setRestartValues` recovers boundary data only for a case that has none.**
+  The `LowerBoundary`/`UpperBoundary` defaults read `uL`/`uR`, and a case may
+  fill those itself -- every `AutodiffTransportSystem` does, from its config --
+  so recovering them from the restarted profile replaced the case's data with
+  values sampled off the solution. HDG imposes Neumann and mixed data weakly, so
+  `q_h` at the face is not the datum: `ADTest`'s zero-flux axis resumed as a
+  flux of 2.7e-4, the resumed run solved a different problem, and at rtol 1e-6
+  its first step failed ten times with a `dsm` of 1.17 that no `h` moved -- the
+  inconsistent-state signature, from a state that was consistent with the
+  problem it was written by. `uL`/`uR` are now recovered only when absent, or
+  when an earlier restart recovered them (`lowerFromRestart`), and a Dirichlet
+  end takes the trace entry, which holds `g_D(t)` exactly.
+  `a_restart_keeps_the_boundary_data_the_case_owns` is the guard; the same call
+  is how `DegreeAdaptation` and `MeshAdaptation` hand state between levels, so
+  those were resampling an autodiff case's boundary data at every rung too.
 * **A projected restart solves for its algebraic `y'`, exactly, after
   `IDACalcIC`.** `IDA_YA_YDP_INIT` makes algebraic *values* and differential
   *derivatives* consistent and leaves the algebraic derivatives at zero; on a
