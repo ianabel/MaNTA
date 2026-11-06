@@ -1953,12 +1953,27 @@ BOOST_AUTO_TEST_CASE(the_tier_two_krylov_solve_agrees_with_the_exact_one)
 
 // The adapter's exact response against the base class's difference of Solve,
 // on one direction at the theta pinch's state.
+//
+// The comparison is made at two steps on the truncation side of the forward
+// difference, and what is required is that the gap closes in proportion to the
+// step: an exact response that is wrong leaves a gap no step removes. At the
+// default step, sqrt(eps), the difference sits on the other side, where Solve's
+// convergence error over h is the larger term -- ~1e-6 relative here, and how
+// much of it depends on round-off, so a bound there flips with the compiler.
+// Measured on this state: 1.38e-4, 1.38e-5, 1.38e-6, 1.42e-7 at steps 1e-3 to
+// 1e-6, then 1.0e-7, 6.6e-7, 1.2e-5, 1.5e-4 from 1e-7 to 1e-10.
 BOOST_AUTO_TEST_CASE(the_adapters_response_is_the_derivative_of_its_solve)
 {
     auto pinch = reducedThetaPinch(5, 3, false);
     SystemSolver &sys = *pinch.sys;
     auto &b = sys.reducedBlocks;
-    FieldModelEquilibrium exact(pinch.field, false), differenced(pinch.field, true);
+
+    struct Stepped : FieldModelEquilibrium
+    {
+        double step;
+        Stepped(std::shared_ptr<FieldModel> f, double s) : FieldModelEquilibrium(std::move(f), true), step(s) {}
+        double responseStep() const override { return step; }
+    };
 
     GlobalState dp = *b.states;
     dp.Variable().setConstant(0.0);
@@ -1967,14 +1982,23 @@ BOOST_AUTO_TEST_CASE(the_adapters_response_is_the_derivative_of_its_solve)
     dp.Aux() = 0.3 * dp.Variable();
 
     const Eigen::Index nPoints = static_cast<Eigen::Index>(b.physicsPoints.size());
-    Matrix dgExact(sys.getGeometrySlots(), nPoints), dgDiff(sys.getGeometrySlots(), nPoints);
+    FieldModelEquilibrium exact(pinch.field, false);
+    Matrix dgExact(sys.getGeometrySlots(), nPoints);
     exact.applyResponse(dgExact, *b.eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
-    differenced.applyResponse(dgDiff, *b.eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
-    const double diff = (dgExact - dgDiff).norm() / dgExact.norm();
-    BOOST_TEST_MESSAGE("theta pinch response, exact against differenced: " << diff << " relative; |dg| "
-                                                                          << dgExact.norm());
     BOOST_TEST(dgExact.norm() > 1e-3);
-    BOOST_TEST(diff < 1e-6);
+
+    auto gapAt = [&](double step) {
+        Stepped differenced(pinch.field, step);
+        Matrix dg(sys.getGeometrySlots(), nPoints);
+        differenced.applyResponse(dg, *b.eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
+        return (dgExact - dg).norm() / dgExact.norm();
+    };
+    const double coarse = gapAt(1e-4), fine = gapAt(1e-5);
+    BOOST_TEST_MESSAGE("theta pinch response, exact against differenced: " << coarse << " at step 1e-4, " << fine
+                                                                          << " at 1e-5; |dg| " << dgExact.norm());
+    BOOST_TEST(fine < 1e-5);
+    BOOST_TEST(coarse / fine > 8.0);
+    BOOST_TEST(coarse / fine < 12.0);
 }
 
 BOOST_AUTO_TEST_CASE(a_reduced_equilibrium_needs_the_cases_geometry_derivatives)
