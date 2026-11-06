@@ -38,9 +38,9 @@ Raised 2026-09-30, when the build stopped writing into the source tree.
 
   To decide: whether RTD is still the right host once it is only serving
   files (GitHub Pages from that repository would do the same), who pushes to
-  it (a CI job on main, most likely, which is also what would finally put a
-  docs build in CI -- see the entry below), and how versions map to branches or
-  tags there. Once it exists, MANTA_DOCS_SOURCE_COPY defaults to that checkout,
+  it (a CI job on main, most likely -- the Docs leg already builds the HTML, so
+  publishing is one more step there), and how versions map to branches or tags
+  there. Once it exists, MANTA_DOCS_SOURCE_COPY defaults to that checkout,
   or goes, and docs/_build/ leaves .gitignore.
 
 
@@ -154,25 +154,6 @@ answer as a direct solve and finding it did not, in exactly two entries.
   argument for leaving them as they are, and the only thing that made the
   difference visible has been closed. Left here because "the two paths write
   different things into the same slot" is worth knowing before touching either.
-
-
-No CI leg builds the documentation, so a -W failure reaches main unnoticed.
-Found 2026-08-26, by putting one there.
-
-  The `docs` target builds with -W, as Read the Docs does, and it is the only
-  thing in the tree that would catch a broken reST cross-reference. Nothing runs
-  it: the eleven CI contexts are the compiler matrix, the two Fedora legs and
-  Coverage. A blank line dropped before `.. _warm-starts:` during a conflict
-  resolution silently deleted the label, `docs/configuration.rst` went on
-  referencing it, and the first thing to notice was a Read the Docs build of main
-  -- one PR later, and only because the CMake branch happened to build docs.
-
-  The job is cheap: `cmake --build build --target docs` needs the venv-docs
-  it builds from docs/requirements.txt and no compiler at all. It is a separate leg
-  rather than a step in an existing one precisely because it needs neither the
-  solver nor the matrix, and adding it means adding its context to the protection
-  rule -- merge the leg first, then require it, per the ordering rule in
-  CLAUDE.md.
 
 
 K_global is factorised densely, and it is 73-91% of a low-k run.

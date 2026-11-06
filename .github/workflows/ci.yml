@@ -706,3 +706,47 @@ jobs:
         with:
           name: coverage-report
           path: build-coverage/coverage/
+
+  # The Sphinx build, with -W, as Read the Docs runs it. It is the only check on
+  # the reST -- a broken cross-reference or a label deleted by a conflict
+  # resolution compiles everywhere else -- and before this leg the first thing to
+  # notice one was a Read the Docs build of main.
+  #
+  # It runs cmake/MantaDocs.cmake in script mode, which is exactly what the `docs`
+  # target runs, rather than configuring the project to reach the target: that
+  # would need SUNDIALS, Eigen, netCDF and a compiler for a job that uses none of
+  # them. Python 3.14 because .readthedocs.yaml says so; the pins are
+  # docs/requirements.txt's, the same file RTD installs.
+  #
+  # One failure here is not ours: conf.py's intersphinx fetches objects.inv from
+  # docs.python.org and numpy.org, and a timeout is a warning, so under -W it
+  # fails the leg. Rerun it; .readthedocs.yaml has the longer note.
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Build the documentation
+        run: |
+          cmake -DDOCS_VENV="$PWD/build/venv-docs" \
+                -DDOCS_HTML="$PWD/build/docs/html" \
+                -DDOCS_DOCTREES="$PWD/build/docs/doctrees" \
+                -DVENV_PYTHON=python3 \
+                -DSOURCE_DIR="$PWD" \
+                -P cmake/MantaDocs.cmake
+
+      - name: Nothing was written outside the build tree
+        run: |
+          status=$(git status --porcelain --ignored)
+          stray=$(printf '%s\n' "$status" | grep -vE '^(!!|\?\?) build/' | grep -v '^$' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the docs build wrote into the source tree"
+            echo "$stray"
+            exit 1
+          fi
