@@ -187,8 +187,8 @@ def run_python(stem, coupling):
 
 # The Python port and the C++ model compute the same balance by the same rules,
 # summed in a different order, so their equilibria agree to round-off; the
-# integrator then sees round-off-different residuals, which it may answer with a
-# different step here and there. Measured worst relative gap: see the bound.
+# integrator then sees round-off-different residuals. Measured worst relative
+# gap over every output variable: 5.3e-11 at tier 0, 6.8e-11 at tier 1.
 PORT_GAP = 1e-9
 
 
@@ -293,3 +293,174 @@ def test_a_failing_python_solve_is_a_recoverable_step_failure():
         assert model.failures == 2
     finally:
         remove_output("balance_flaky")
+
+
+# ------------------------------------------ a Python case reading the geometry --
+
+
+from theta_pinch_case import PythonThetaPinch  # noqa: E402
+
+# The Python case writes by hand what the C++ case's autodiff derives, so the
+# two agree to round-off per evaluation; the gap below is the integrator's
+# answer to that. Measured worst relative gap: 2.0e-11 coupled, 2.4e-12
+# reduced, 2.1e-11 at tier 0 on the native model.
+CASE_GAP = 1e-9
+
+
+@pytest.mark.parametrize(
+    "source,coupling",
+    [
+        pytest.param(FIELD_MODEL, "coupled", id="field-coupled"),
+        pytest.param(FIELD_MODEL, "reduced", id="field-reduced"),
+        pytest.param(NATIVE, "consistent", id="native-consistent"),
+    ],
+)
+def test_a_python_case_reads_the_geometry_as_the_cpp_case_does(source, coupling):
+    """The same theta pinch, the transport case written in C++ and in Python.
+
+    Coupled at tier 2, the Python case's dSigmaFn_dGeometry, dSources_dGeometry
+    and dAuxG_dGeometry build the coupled Jacobian's A1 blocks; reduced, A_g.
+    """
+    config = tier(source, coupling)
+    try:
+        cpp = MaNTA.Runner("ThetaPinchDiffusion")
+        cpp.configure(dict(config, OutputFilename="case_cpp"))
+        cpp.run()
+
+        case = PythonThetaPinch()
+        py_runner = MaNTA.Runner(case)
+        py_runner.configure(dict(config, OutputFilename="case_python"))
+        py_runner.run()
+        assert case.slots_seen == 4
+
+        a, b = read_groups("case_cpp"), read_groups("case_python")
+        for key in a:
+            scale = max(np.max(np.abs(a[key])), 1e-30)
+            gap = np.max(np.abs(a[key] - b[key])) / scale
+            assert gap < CASE_GAP, f"{key}: Python case is {gap:.3e} from the C++ case"
+    finally:
+        remove_output("case_cpp")
+        remove_output("case_python")
+
+
+def test_a_run_can_be_python_on_both_sides_of_the_field():
+    """A Python transport case and a Python equilibrium model, together."""
+    try:
+        cpp = MaNTA.Runner("ThetaPinchDiffusion")
+        cpp.configure(dict(tier(NATIVE, "reduced"), OutputFilename="both_cpp"))
+        cpp.run()
+
+        runner = MaNTA.Runner(PythonThetaPinch())
+        model = PythonPressureBalance(np.linspace(0.0, 1.0, BASE["GridSize"] + 1))
+        runner.set_equilibrium_model(model)
+        runner.configure(dict(BASE, FieldCoupling="reduced", OutputFilename="both_python"))
+        runner.run()
+
+        a, b = read_groups("both_cpp"), read_groups("both_python")
+        # Tier 1 with the native model's exact response against the port's
+        # differenced one. The response only steers Newton, so the answers
+        # still agree to the solver's tolerances: measured 1.6e-10.
+        for key in a:
+            scale = max(np.max(np.abs(a[key])), 1e-30)
+            gap = np.max(np.abs(a[key] - b[key])) / scale
+            assert gap < 1e-8, f"{key}: {gap:.3e}"
+    finally:
+        remove_output("both_cpp")
+        remove_output("both_python")
+
+
+def test_a_geometry_slot_name_the_model_does_not_have_raises():
+    class Misnamed(PythonThetaPinch):
+        def metric(self, state):
+            return state.geom["NotASlot"], 0.0, 1.0, 1.0
+
+    runner = MaNTA.Runner(Misnamed())
+    runner.configure(dict(tier(NATIVE, "consistent"), OutputFilename="misnamed"))
+    try:
+        with pytest.raises(Exception, match="NotASlot"):
+            runner.run()
+    finally:
+        remove_output("misnamed")
+
+
+@pytest.fixture
+def _float64():
+    jax = pytest.importorskip("jax")
+    previous = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
+    yield
+    jax.config.update("jax_enable_x64", previous)
+
+
+@pytest.mark.parametrize(
+    "source,coupling",
+    [
+        pytest.param(FIELD_MODEL, "coupled", id="field-coupled"),
+        pytest.param(NATIVE, "reduced", id="native-reduced"),
+    ],
+)
+def test_a_jax_case_differentiates_through_the_geometry(_float64, source, coupling):
+    """State.Geometry, and dSigmaFn_dGeometry and friends by jax.grad.
+
+    The geometry derivatives come out of the same gradient as the others, so a
+    coupled run on them is the C++ case's run to the integrator's answer to
+    round-off.
+    """
+    pytest.importorskip("equinox")
+    from theta_pinch_case import jax_theta_pinch
+
+    config = tier(source, coupling)
+    try:
+        cpp = MaNTA.Runner("ThetaPinchDiffusion")
+        cpp.configure(dict(config, OutputFilename="jax_cpp"))
+        cpp.run()
+
+        runner = MaNTA.Runner(jax_theta_pinch())
+        runner.configure(dict(config, OutputFilename="jax_python"))
+        runner.run()
+
+        a, b = read_groups("jax_cpp"), read_groups("jax_python")
+        for key in a:
+            scale = max(np.max(np.abs(a[key])), 1e-30)
+            gap = np.max(np.abs(a[key] - b[key])) / scale
+            assert gap < CASE_GAP, f"{key}: JAX case is {gap:.3e} from the C++ case"
+    finally:
+        remove_output("jax_cpp")
+        remove_output("jax_python")
+
+
+def test_an_objective_reading_the_geometry_has_the_right_gradient(_float64):
+    """dg's "Geometry" rows cross to the solver and reach dG/dp.
+
+    G = Int B N over the steady theta pinch, coupled, against central
+    differences in D0: B moves with D0 through the pressure, so a gradient
+    missing dg/dB -- the rows the solver contracts with dGeometry/dpsi -- is
+    off by that share. Measured: with State.to_manta dropping the "Geometry"
+    rows the adjoint gives -0.70304 against -0.69713, 0.85% out.
+    """
+    pytest.importorskip("equinox")
+    from theta_pinch_case import jax_theta_pinch
+
+    steady = dict(
+        tier(FIELD_MODEL, "coupled"),
+        SteadyStateSolver="Newton",
+        SteadyStateTolerance=1e-10,
+        WriteOutput=False,
+        OutputFilename="geometry_objective",
+    )
+
+    def solve(D0, adjoint):
+        runner = MaNTA.Runner(jax_theta_pinch(D0=D0))
+        runner.configure(dict(steady, solveAdjoint=adjoint))
+        runner.run_ss()
+        if adjoint:
+            G, grads = runner.getAdjointGradients()
+            return float(np.asarray(G)[0]), np.asarray(grads["G_p"]).reshape(-1)
+        return float(runner.G()[0]), None
+
+    D0, h = 0.5, 1e-4
+    _, grad = solve(D0, True)
+    Gp, _ = solve(D0 * (1 + h), False)
+    Gm, _ = solve(D0 * (1 - h), False)
+    fd = (Gp - Gm) / (2 * h * D0)
+    assert grad[0] == pytest.approx(fd, rel=1e-5), f"adjoint {grad[0]:.10e}, differences {fd:.10e}"
