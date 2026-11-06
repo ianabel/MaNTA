@@ -601,7 +601,18 @@ runs fell in was set by round-off, so it showed up as a CI leg timing out on
 one compiler and BLAS and not another -- and a green run proved nothing. The
 weights are also the norm of IDA's Newton test, the field sweep's stopping test
 and the NewtonStep steady test, so a change here moves all four.
-`SuppressAlgebraicError` is separate and composes with any scheme.
+`SuppressAlgebraicError` is separate and composes with any scheme. **It is on by
+default for a run with a field** -- a `FieldModel` or an `EquilibriumModel` --
+and off otherwise; the config key is a `std::optional` read by presence and the
+solver resolves it (`suppressesAlgebraicError`), since only the solver knows by
+`initialize()` whether a field is attached. With the algebraic rows in IDA's
+error test the coupled theta pinch falls into an order-2 trap or does not as
+round-off decides (149-290 steps over a +-8% tolerance sweep, 564 on one CI
+runner); suppressed it takes 99-101 at every tolerance. Without a field the
+trade goes the other way: its error stops following the tolerance on the
+nonlinear-flux configs, and a restart reads `sigma` and `q` back from the file,
+so `LinearDiffusion`'s restarted `q` lands 100x further from the uninterrupted
+run. `docs/running.rst` has the tables.
 
 **The three can be run again on the same object**, and a reused solver gives the
 same answer as a fresh one *bit for bit*. That is pinned by
@@ -656,9 +667,14 @@ Two return codes worth being able to read without looking them up:
 * **`IDA_ERR_FAIL` (-3) on the *first* step means the initial condition violates
   the algebraic constraints.** It takes ten error-test failures in one step attempt
   to produce it, and each one cuts `h`; a local error estimate that will not shrink
-  with `h` is the signature of an inconsistent state, because `IDASetSuppressAlg`
-  is never called and so `sigma`, `q`, `lambda` and `phi` are all in the error
-  test. Look at what `IDACalcIC` was given, not at the time loop.
+  with `h` is the signature of an inconsistent state, when `IDASetSuppressAlg`
+  is off and so `sigma`, `q`, `lambda` and `phi` are all in the error test. Look
+  at what `IDACalcIC` was given, not at the time loop. A `dsm` that *does* fall
+  in proportion to `h` and runs into `MinStepSize` is a different thing: on a
+  cold start the algebraic `y'` is zero (`IDA_YA_YDP_INIT` holds it), the
+  predictor's error in those rows goes like `h |y'|`, and a tight enough
+  tolerance needs a first step below the default 1e-7. Lower `MinStepSize` or
+  suppress the algebraic error.
 * **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
   the Newton/linesearch could not reach a consistent state from the guess
   `setInitialConditions` built. The guess is worth suspecting before the solver is.

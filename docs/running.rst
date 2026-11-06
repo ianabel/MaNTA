@@ -291,19 +291,20 @@ solution and a time derivative that did not belong together.
 
 .. warning::
 
-   Restarting is **fragile at tight tolerances**, and more so with ``nAux > 0``.
-   The regression suite exercises three restart round trips, each at the tightest
-   tolerance that completes; below that, ``IDACalcIC`` can fail to converge on
-   the resumed run. If a restart fails where the original run succeeded, loosen
-   the tolerances before looking for a deeper cause.
+   A restart at the file's own degree resumes from the stored state **without
+   running** ``IDACalcIC``, on the grounds that the run which wrote it had
+   already converged it. If the resumed problem is not the problem that run was
+   solving, that is false, and the symptom is ``IDA_ERR_FAIL`` on the first
+   step with a ``dsm`` that does not fall as ``h`` does. Changing the case's
+   parameters or boundary data across a restart does that.
+   ``ForceConsistentIC = true`` runs ``IDACalcIC`` anyway. Every
+   regression config's half-time round trip completes at ten and at a hundred
+   times tighter than its own tolerances, with ``SuppressAlgebraicError``
+   either way, as do the coupled theta pinch's at every ``FieldCoupling``.
 
-   Such a failure now reports itself: ``IDACalcIC could not complete``. It did not
-   used to — the return value was overwritten before it was checked, so a failed
-   initial-condition calculation carried on into the time loop with whatever
-   partial state IDA had reached, and the symptom appeared later and elsewhere.
-
-   :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
-   accuracy of the algebraic components that a restart resumes from.
+   :ref:`suppress-algebraic-error` costs fidelity on a restart without a
+   field: the resumed run starts from the file's ``sigma`` and ``q``, and with
+   them out of the error test they are less accurate there.
 
 .. _coupled-field-sweeps:
 
@@ -1559,8 +1560,6 @@ nothing.
    indexed by physics node, so changing the degree changes how many parameters
    there are.
 
-.. _suppress-algebraic-error:
-
 .. _error-weights:
 
 Error weights
@@ -1662,51 +1661,141 @@ The ``Derivative`` family shows what is right about the wall layer -- ``q``'s
 tolerance follows from ``u``'s -- but :math:`\mathrm{tol}_u / h` is too loose in
 general, since on a diffusion problem ``q`` drives the flux that drives ``u``.
 ``SuppressAlgebraicError``, measured on the same grid, also ends the crawl at a
-third of the steps, and stops controlling the error: tightening
-``AuxVarADTest``'s tolerance tenfold leaves its error where it was.
+third of the steps, and stops controlling the error on some configs; see below.
+
+.. _suppress-algebraic-error:
 
 Dropping the algebraic rows from the error test
 -----------------------------------------------
 
 ``SuppressAlgebraicError = true`` calls SUNDIALS' ``IDASetSuppressAlg``, which
 takes ``sigma``, ``q``, ``lambda`` and ``phi`` out of IDA's local error test and
-leaves only ``u`` and the differential scalars in it. It is **off by default**,
-and this is a trade rather than an improvement.
+leaves only ``u`` and the differential scalars in it. They stay in the Newton
+test, so every step still solves for them; what goes is the check on their
+truncation error.
 
-What it buys. Any problem whose flux grows steeply — a degenerate diffusivity, a
-critical-gradient model near its kink — puts a large ``sigma`` into an error test
-that no reduction in step size can satisfy, because the offending component is
-algebraic. The signature is an ``IDA_ERR_FAIL`` (-3) whose ``dsm`` in the
-SUNDIALS log is *identical* as ``h`` shrinks, with the Newton converging happily
-each time. Setting this key is the direct fix, and it also dissolves the
-``Absolute_tolerance`` floor that otherwise makes ``atol <= 1e-7`` fail on the
-first step of such a problem. Measured on the benchmarks under
-``python-examples/``, it costs 13–44% *fewer* calls into the physics and moves
-the answer of a direct run by nothing at five significant figures.
+**Absent, it is on for a run with a field and off otherwise** -- a field being a
+``FieldModel`` or an ``EquilibriumModel``, at any ``FieldCoupling``. Neither
+setting preserves answers, and the measurements below are why the default
+differs between the two kinds of run. Set the key either way to override it.
 
-What it costs. ``sigma``, ``q``, ``lambda`` and ``phi`` are then controlled only
-by the Newton tolerance, and two things read them:
+**What it costs in accuracy.** Each regression config, at its own tolerances,
+against the same config at a thousandth of them; the error is the largest
+difference over every output time and point, relative to the reference's largest
+magnitude, and cost is residual evaluations plus twice the Jacobian builds:
 
-* **Restart files serialise the whole DOF vector.** A round trip that agreed to
-  ``1.9e-6`` degrades to ``8.6e-4`` with this on — see the warning above, which
-  this key makes worse rather than better.
-* **``phi`` is a physics quantity when ``nAux > 0``**, not merely an
-  intermediate, and ``q`` and ``sigma`` are what the flag drops from the error
-  test. On ``AuxVarTest`` those land 1.0e-6 from a converged solution with this
-  on against 4.1e-7 with it off — a factor of 2.5. (This bullet used to claim a
-  1.0% drift past a 0.84% tolerance. That was measured when the case ran at
-  ``rtol = atol = 1e-2``, where its own answer is 4.1% from converged, so the
-  drift was step-sequence noise; at the ``1e-6 / 1e-8`` the case now uses the
-  flag moves ``u`` by 3.5e-7 and passes the regression outright.)
+.. list-table::
+   :header-rows: 1
 
-So it is the right key for a hard steady-state or transient solve whose output is
-``u``, and the wrong one if you intend to restart from the result or care about
-the auxiliary variables. ``python-examples/shestakov-nonlinear`` is a problem
-that cannot be integrated at all without it — though that turns out to depend on
-the initial condition rather than on the formulation, which is worth knowing
-before reaching for this key. A start whose flux is badly scaled needs it; the
-same problem from a physically scaled start does not. That example's
-``ANALYSIS.md`` measures both.
+   * - config
+     - off: ``u`` / ``q``
+     - on: ``u`` / ``q``
+     - cost, on / off
+   * - ``ADTest``
+     - 6.3e-8 / 1.6e-7
+     - 1.4e-7 / 3.5e-7
+     - 0.54
+   * - ``AdjointTestProblem``
+     - 2.1e-5 / 2.6e-5
+     - 6.6e-5 / 1.1e-4
+     - 0.65
+   * - ``AuxVarADTest``
+     - 8.4e-7 / 2.9e-7
+     - 1.5e-6 / 5.1e-7
+     - 0.69
+   * - ``AuxVarTest``
+     - 4.8e-7 / 1.6e-7
+     - 1.9e-7 / 1.4e-7
+     - 0.88
+   * - ``LinearDiffusion``
+     - 2.3e-5 / 3.2e-4
+     - 1.1e-4 / 1.1e-3
+     - 0.90
+   * - ``NeumannTestLower``
+     - 5.7e-4 / 3.3e-4
+     - 1.9e-3 / 1.1e-3
+     - 0.80
+   * - ``Nonlin2``
+     - 2.3e-5 / 3.9e-5
+     - 9.0e-5 / 1.5e-4
+     - 0.52
+   * - ``PIDTest``
+     - 1.4e-5 / 6.3e-5
+     - 6.8e-4 / 2.2e-3
+     - 0.62
+   * - ``ld``
+     - 3.3e-5 / 4.2e-5
+     - 3.1e-4 / 5.8e-4
+     - 0.66
+   * - ``nonlin``
+     - 1.4e-4 / 9.6e-4
+     - 6.7e-4 / 8.7e-3
+     - 0.84
+   * - ``nonlin_ss``
+     - 6.9e-4 / 1.2e-3
+     - 8.0e-4 / 1.4e-3
+     - 0.48
+   * - ``ThetaPinch``
+     - 3.3e-7 / 1.2e-6
+     - 5.7e-7 / 2.2e-6
+     - 0.90
+   * - ``ThetaPinchNative``
+     - 3.2e-7 / 1.2e-6
+     - 3.6e-7 / 2.9e-6
+     - 0.96
+
+So at a given tolerance it is 1-5 times the error for 4-52% less work, with
+outliers in ``ld``, ``nonlin``'s ``q`` and ``PIDTest``. Tightened tenfold, which costs about what the
+default does at the stock tolerance, it is the more accurate on 11 of the 15
+configs whose references converged. The four it loses -- ``Nonlin2``,
+``nonlin``, ``PIDTest`` and ``ld``'s ``q`` -- are where its error stops
+following the tolerance: tightening ``Nonlin2`` tenfold takes it from 9.0e-5 to
+8.2e-5 with this on, against 7.6 times better with it off. (``MatTest`` and
+``MatTestAlpha`` are left out: a run a thousand times tighter is not converged
+there.)
+
+**What it costs a restart.** A restart reads ``sigma`` and ``q`` back from the
+file and resumes from them, so their accuracy is the restarted run's starting
+point. Split at half time and resumed, against the uninterrupted run, the plain
+diffusion cases come out worse with it on -- ``LinearDiffusion``'s ``q`` from
+3.2e-5 to 3.2e-3, ``Nonlin2``'s ``u`` from 3.4e-8 to 1.1e-6, ``nonlin``'s
+``sigma`` from 2.7e-3 to 2.0e-2 -- while ``AuxVarTest``, ``AuxVarADTest`` and both
+theta pinches are as faithful either way.
+
+**Why a field turns it on.** With the algebraic unknowns in the error test,
+IDA's order selection on the coupled theta pinch either holds order 2 for 120 to
+200 steps early in the transient or climbs to order 5, and round-off decides
+which: on the manufactured theta pinch at ``k = 3`` on 8 cells and ``rtol``
+1e-9, a run takes anywhere from 149 to 290 steps as the tolerance moves by
+:math:`\pm 8\%`, under either ``FieldSolve``, and 564 on one CI runner. With it
+on, every one of those runs takes 99 to 101 steps, and the two field solves
+agree to ten digits. Its time error there is about five times the default's --
+``N`` 4e-10 to 8e-10 against 2e-11 to 3e-10 -- and both are a millionth of the
+spatial error, 7.6e-5. The field's own quantities follow ``u``: ``psi``, ``V'``,
+``B`` and the pressure are within a factor of three of the default's error on
+both theta-pinch configs. A step count that round-off can triple is worse than a
+time error nobody can see.
+
+**What it buys without a field.** Any problem whose flux grows steeply -- a
+degenerate diffusivity, a critical-gradient model near its kink -- puts a large
+``sigma`` into an error test that no reduction in step size can satisfy, because
+the offending component is algebraic. The signature is an ``IDA_ERR_FAIL`` (-3)
+whose ``dsm`` in the SUNDIALS log is *identical* as ``h`` shrinks, with the
+Newton converging each time. Setting this key is the direct fix.
+It also removes a first-step limit: a cold start leaves the algebraic ``y'`` at
+zero, the predictor's error in those rows grows like :math:`h|y'|`, and at a
+thousandth of their own tolerances 9 of the 17 regression configs need a first
+step below the default ``MinStepSize`` of 1e-7 and fail. With this on, all of
+them run.
+
+So it is the right key for a hard solve whose output is ``u``, and the wrong
+one, without a field, if you intend to restart from the result or want the
+error to follow the tolerance on a nonlinear flux.
+``python-examples/shestakov-nonlinear`` is a problem that cannot be integrated
+at all without it -- though that turns out to depend on the initial condition
+rather than on the formulation, which is worth knowing before reaching for this
+key. A start whose flux is badly scaled needs it; the same problem from a
+physically scaled start does not. That example's ``ANALYSIS.md`` measures both.
 
 .. _the-run-lifecycle:
 

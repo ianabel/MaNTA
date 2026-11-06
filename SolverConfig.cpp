@@ -315,7 +315,6 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(WriteDebugDatFiles, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
-    READ(SuppressAlgebraicError, bool);
     READ(ForceConsistentIC, bool);
     READ(SteadyStateSolver, std::string);
     READ(PseudoTransientInitialStep, double);
@@ -374,6 +373,8 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         c.SteadyStateTolerance = std::get<double>(source.get(*s, Type::Double));
     if (auto s = spelling("Superconvergent"))
         c.Superconvergent = std::get<bool>(source.get(*s, Type::Bool));
+    if (auto s = spelling("SuppressAlgebraicError"))
+        c.SuppressAlgebraicError = std::get<bool>(source.get(*s, Type::Bool));
     c.LowerBoundaryFractionGiven = spelling("LowerBoundaryFraction").has_value();
     c.UpperBoundaryFractionGiven = spelling("UpperBoundaryFraction").has_value();
     c.CellsGiven = spelling("GridSize").has_value() || spelling("GridPoints").has_value();

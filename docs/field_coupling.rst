@@ -572,8 +572,8 @@ The solver holds the answer as a **cache, not as unknowns**:
   a second run starts from the same cold state as a fresh one.
 * The **Jacobian carries no coupling**: the transport derivatives are taken at
   the geometry of the build's state, held fixed. Newton therefore converges
-  linearly in the coupling rather than quadratically, which costs IDA steps
-  and residual evaluations -- see the measurements below.
+  linearly in the coupling rather than quadratically, which costs residual
+  evaluations, each an equilibrium solve -- see the measurements below.
 * ``initialize()`` hands the model a thousandth of the run's ``rtol`` and
   smallest ``atol`` through ``setTolerances``. An equilibrium converged no
   tighter than its own looser tolerance puts that error into every residual,
@@ -766,53 +766,57 @@ comparable with this one:
      - ``PseudoTransient``
      - ``Newton``
    * - T = 0.3, coupled, ``Analytic``
-     - 6,375 (+1,000)
+     - 6,025 (+1,200)
      - 625 (+400)
      - 325 (+200)
    * - T = 0.3, reduced, ``Analytic``
-     - 6,700 (+1,050)
+     - 5,825 (+1,150)
      - 625 (+400)
      - 325 (+200)
    * - T = 0.3, coupled, ``Differenced``
-     - 8,875
+     - 9,025
      - 1,625
      - 825
    * - T = 0.3, reduced, ``Differenced``
-     - 9,325
+     - 8,700
      - 1,625
      - 825
    * - T = 0.3, consistent
-     - 13,150
+     - 8,925
      - 700
      - 400
    * - T = 0.9, coupled, ``Analytic``
-     - 10,250 (+1,150)
+     - 7,600 (+1,200)
      - 625 (+400)
      - 325 (+200)
    * - T = 0.9, reduced, ``Analytic``
-     - 7,350 (+1,050)
+     - 6,350 (+1,150)
      - 625 (+400)
      - 325 (+200)
    * - T = 0.9, coupled, ``Differenced``
-     - 13,125
+     - 10,600
      - 1,625
      - 1,025
    * - T = 0.9, reduced, ``Differenced``
-     - 9,975
+     - 9,225
      - 1,625
      - 825
    * - T = 0.9, consistent
-     - 34,275
+     - 18,800
      - 700
      - 475
 
 The model's own response and the differenced one give the same counts to the
 call: the difference between them is equilibrium solves, which the case never
-sees. The transients take 183 and 215 steps against tier 2's 175 and 269 and
-tier 0's 341 and 937, so tier 1 is 0.7–1.05 times tier 2 and 1.4–4.7 times
-cheaper than the black box. It agrees with tier 2 to the integration error:
-on six cells at :math:`k = 3` to :math:`t = 0.5`, within :math:`2.5\times10^{-7}`
-in :math:`N` and :math:`2.3\times10^{-8}` in :math:`B`, and steady states to
+sees. The transients take 146 and 155 steps against tier 2's 143 and 147 and
+tier 0's 170 and 169, so tier 1 costs 0.85–0.97 times tier 2, and the black
+box 1.0–2.5 times tier 1: its Newton converges linearly, which costs residual
+evaluations rather than steps, because a run with a field keeps the algebraic
+unknowns out of IDA's error test by default (:ref:`suppress-algebraic-error`). With them in it, tier 0's linearly
+converged algebraic unknowns read as local error and it took 341 and 937 steps.
+Tier 1 agrees with tier 2 to the integration error: on six cells at
+:math:`k = 3` to :math:`t = 0.5`, within :math:`2.7\times10^{-7}` in :math:`N`
+and :math:`2.6\times10^{-8}` in :math:`B`, and steady states to
 :math:`4\times10^{-13}` in the same Newton iterations. ``IDACalcIC`` keeps its
 line search here, unlike tier 0: the Jacobian carries the coupling, and the
 runs are step for step the same with it on or off, at :math:`T = 0.9` too.
@@ -876,34 +880,36 @@ are in its total.
      - ``PseudoTransient``
      - ``Newton``
    * - T = 0.3, coupled, ``Analytic``
-     - 6,375 (+1,000)
+     - 6,025 (+1,200)
      - 550 (+350)
      - 325 (+200)
    * - T = 0.3, coupled, ``Differenced``
-     - 8,875
+     - 9,025
      - 1,425
      - 825
    * - T = 0.3, consistent
-     - 13,150
+     - 8,925
      - 550
      - 400
    * - T = 0.9, coupled, ``Analytic``
-     - 10,250 (+1,150)
+     - 7,600 (+1,200)
      - 550 (+350)
      - 325 (+200)
    * - T = 0.9, coupled, ``Differenced``
-     - 13,125
+     - 10,600
      - 1,425
      - 1,025
    * - T = 0.9, consistent
-     - 34,275
+     - 18,800
      - 625
      - 475
 
 **A transient wants the coupled Jacobian whatever the derivatives cost.** IDA
 reuses each Jacobian over many steps, so its cost is almost all residual
-values, and the black box's linearly converging Newton costs it 1.5–2.6 times
-the calls even against differenced derivatives. **A steady solve is decided by
+values, and the black box's linearly converging Newton costs it as much as the
+differenced coupling at low pressure and 1.8 times the calls at high, and 1.2–2.1
+times the analytic coupling with its hooks priced in. Coupling a transient is
+never the more expensive choice. **A steady solve is decided by
 what the derivatives cost**, because it builds a Jacobian at nearly every
 iteration. Differenced, they make the coupled solve 2.1–2.6 times the black
 box's under either steady solver, so ``auto`` runs those as a black box.
