@@ -157,7 +157,7 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**Ten of the eleven contexts `ci.yml` publishes are required**, each pinned to app
+**Eleven of the twelve contexts `ci.yml` publishes are required**, each pinned to app
 15368 (GitHub Actions), so a status of that name from anything else does not
 count:
 
@@ -167,6 +167,7 @@ Build + tests (g++-16)                    Build + tests (clang++-20)
 Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
 Build + tests (clang++-19, Eigen 5.0.1)   Build + tests (fedora:latest)
 Build + tests (g++-15, OpenMP)            Build + tests (fedora:latest, OpenMP)
+Docs
 ```
 
 **`Coverage` is the one that is deliberately *not* required**, and it is the only
@@ -256,10 +257,11 @@ cost real time here, and none of them announces itself.
   compiles.** Two reached `main` that way: a `Solver.cpp` comment joined
   mid-sentence into "does not apply about it does not either", and a blank line
   dropped before a reST label, which deletes the label outright. The compiler
-  sees neither. The docs one *is* caught by the `docs` target, which builds with
-  `-W` — but **no CI leg runs it**, so the first thing to notice was a Read the
-  Docs build of `main`. Read every resolved hunk that is prose, and run
-  `cmake --build build --target docs` before pushing anything touching `docs/`.
+  sees neither. The docs one is caught by the `docs` target, which builds with
+  `-W`, and by CI's `Docs` leg, which runs the same script
+  (`cmake/MantaDocs.cmake`); a comment is caught by nothing. Read every resolved
+  hunk that is prose, and run `cmake --build build --target docs` before pushing
+  anything touching `docs/` rather than waiting for the leg.
 
 * **A clean rebase can still revert a fix.** When the branch and the commits it
   replays onto both touch a file, "no conflicts" means git found no textual
