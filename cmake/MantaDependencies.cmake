@@ -311,7 +311,15 @@ endif()
 # expression templates from the core's and the two disagree about layout. It is
 # also why every header must reach <Eigen/Core> and <Eigen/Dense> before the
 # project headers -- see the note in Postprocessing.hpp.
-target_compile_definitions(manta_deps INTERFACE EIGEN_USE_BLAS)
+#
+# EIGEN_DONT_PARALLELIZE because MaNTA's parallelism is explicit: every thread
+# team comes from util/ParallelFor.hpp. Under -fopenmp (MANTA_OPENMP) Eigen
+# would otherwise thread its own matrix-matrix products, making a second team
+# inside parallel_for's and a summation order that follows OMP_NUM_THREADS --
+# which is what the byte-identical serial-against-threaded check rests on not
+# happening. Without OpenMP it changes nothing. ABI like EIGEN_USE_BLAS, so it
+# travels in manta.pc too.
+target_compile_definitions(manta_deps INTERFACE EIGEN_USE_BLAS EIGEN_DONT_PARALLELIZE)
 
 find_package(Threads REQUIRED)
 target_link_libraries(manta_deps INTERFACE BLAS::BLAS Threads::Threads ${CMAKE_DL_LIBS} m)

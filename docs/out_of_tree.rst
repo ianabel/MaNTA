@@ -161,7 +161,9 @@ physics is not a solver setting.
    the plugin's state. This is why ``manta.pc`` records the concrete
    architecture rather than ``native``: a plugin compiled on a different machine
    is then rejected by the compiler instead of crashing at run time.
-   ``-DEIGEN_USE_BLAS`` is carried for the same reason.
+   ``-DEIGEN_USE_BLAS`` and ``-DEIGEN_DONT_PARALLELIZE`` are carried for the
+   same reason: each changes the code Eigen's templates expand to, and both
+   sides of the boundary must expand them alike.
 
    *Linking the library.* The solver links the core objects directly, so a
    plugin that also pulled in ``libmanta.so`` would get a **second** copy of
