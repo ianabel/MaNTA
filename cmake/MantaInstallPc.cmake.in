@@ -18,6 +18,42 @@ set(CMAKE_INSTALL_LIBDIR "@CMAKE_INSTALL_LIBDIR@")
 set(MANTA_PC_STD "@MANTA_PC_STD@")
 set(MANTA_PC_MARCH "@MANTA_PC_MARCH@")
 
+# The dependency include directories (see CMakeLists.txt), as -isystem flags --
+# SYSTEM, as the core includes them, so a plugin built with -Werror is not held
+# to the warnings in Eigen's headers. Two kinds are dropped:
+#
+#   * the compiler's own search directories. Handing one to -isystem is not a
+#     no-op: it moves the directory ahead of the libstdc++ headers, and
+#     <cstdlib>'s #include_next <stdlib.h> then fails in every translation unit
+#     (CLAUDE.md has the trap). CMake filters them from its own flags; this file
+#     is not CMake's, so it does it itself.
+#   * the vendored directories under the source tree, which an installed .pc
+#     must not point into. toml11 is installed instead; autodiff is not needed.
+file(READ "@PROJECT_BINARY_DIR@/manta-pc-includes.txt" _dirs)
+set(_implicit "@CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES@")
+set(_source_dir "@PROJECT_SOURCE_DIR@")
+set(MANTA_PC_DEPENDENCY_CFLAGS "")
+foreach(_d IN LISTS _dirs)
+  if(_d STREQUAL "")
+    continue()
+  endif()
+  cmake_path(NORMAL_PATH _d)
+  string(REGEX REPLACE "/$" "" _d "${_d}")
+  set(_skip FALSE)
+  foreach(_i IN LISTS _implicit)
+    cmake_path(NORMAL_PATH _i)
+    string(REGEX REPLACE "/$" "" _i "${_i}")
+    if(_d STREQUAL _i)
+      set(_skip TRUE)
+    endif()
+  endforeach()
+  cmake_path(IS_PREFIX _source_dir "${_d}" NORMALIZE _inside)
+  if(NOT _skip AND NOT _inside AND NOT " ${MANTA_PC_DEPENDENCY_CFLAGS} " MATCHES " -isystem${_d} ")
+    string(APPEND MANTA_PC_DEPENDENCY_CFLAGS " -isystem${_d}")
+  endif()
+endforeach()
+string(STRIP "${MANTA_PC_DEPENDENCY_CFLAGS}" MANTA_PC_DEPENDENCY_CFLAGS)
+
 # DESTDIR is a staging directory, not part of the recorded prefix: the .pc must
 # say where the files will BE, while being written where they are staged.
 set(_pc "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/pkgconfig/manta.pc")

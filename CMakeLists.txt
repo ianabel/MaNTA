@@ -249,6 +249,25 @@ install(TARGETS manta
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         COMPONENT runtime NAMELINK_COMPONENT devel)
 
+# toml11 is vendored, and PhysicsCases.hpp and FieldModel.hpp include
+# <toml.hpp> -- a case's constructor takes a toml::value -- so a plugin cannot
+# compile without it. Installed beside the headers that need it, at the version
+# the core was built against, and named in manta.pc. (extern/autodiff is not:
+# no installed header includes it.)
+install(DIRECTORY extern/toml11/include/
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/manta/extern/toml11"
+        COMPONENT devel)
+
+# The other dependency headers the installed ones include -- SUNDIALS, Eigen,
+# Boost, netCDF -- are wherever this configure found them, so manta.pc has to
+# say where. Taken from manta_deps's usage requirements, transitively, rather
+# than from any one variable: each dependency has more than one route to it (a
+# system Eigen or MANTA_EIGEN_INCLUDE_DIR; netCDF through pkg-config or its
+# fallback), and these are the directories the core was compiled against.
+# MantaInstallPc.cmake filters them.
+file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/manta-pc-includes.txt"
+     CONTENT "$<TARGET_PROPERTY:manta_deps,INTERFACE_INCLUDE_DIRECTORIES>")
+
 set(MANTA_PC_STD "c++${MANTA_CXX_STANDARD}")
 set(MANTA_PC_MARCH "")
 if(MANTA_ABI_MARCH)
