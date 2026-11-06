@@ -81,11 +81,10 @@ inline std::vector<Index> scalarRowsCalcICCannotReach(TransportSystem &problem, 
 //
 // Returns the largest disagreement found, and reports each one.
 //
-// It also requires every scalar row to be one IDACalcIC can move, apart from the
-// rows named in `knownUnreachable` -- see scalarRowsCalcICCannotReach.
+// It also requires every scalar row to be one IDACalcIC can move -- see
+// scalarRowsCalcICCannotReach.
 inline double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln &dydt,
-                                    Grid const &grid, Index k, double t, double tolerance,
-                                    std::vector<Index> const &knownUnreachable = {})
+                                    Grid const &grid, Index k, double t, double tolerance)
 {
     const Index nVars = problem.getNumVars();
     const Index nScalars = problem.getNumScalars();
@@ -138,8 +137,7 @@ inline double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln 
                          << ", finite difference " << fd);
     };
 
-    BOOST_TEST(scalarRowsCalcICCannotReach(problem, y, dydt, grid, k, t) == knownUnreachable,
-               boost::test_tools::per_element());
+    BOOST_TEST(scalarRowsCalcICCannotReach(problem, y, dydt, grid, k, t).empty());
 
     for (Index s = 0; s < nScalars; ++s)
     {
@@ -157,6 +155,8 @@ inline double checkScalarDerivative(TransportSystem &problem, DGSoln &y, DGSoln 
                             &y.q(v).getCoeff(cell).second(l));
                     compare("sigma", s, cell, l, v, reported[s].Flux()(v, node),
                             &y.sigma(v).getCoeff(cell).second(l));
+                    compare("du/dt", s, cell, l, v, reported_dt[s].Variable()(v, node),
+                            &dydt.u(v).getCoeff(cell).second(l));
                 }
                 for (Index a = 0; a < nAux; ++a)
                     compare("aux", s, cell, l, a, reported[s].Aux()(a, node),

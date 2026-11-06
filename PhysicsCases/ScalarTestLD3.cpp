@@ -47,12 +47,11 @@ REGISTER_PHYSICS_IMPL(ScalarTestLD3);
 // case keeps nothing from an evaluation plan, so a new plan changes nothing it
 // built.
 ScalarTestLD3::ScalarTestLD3(toml::value const &config, Grid const &)
-	// E and I are differential -- dE/dt appears in G_1 and dI/dt in G_2 -- while
-	// J is algebraic. G_0 = E - (M0 - M) reads only differential values, so it is
-	// a row IDACalcIC cannot move: the run starts only because the initial E
-	// satisfies it already (scalar_jacobian_tests pins this).
+	// I is differential -- G_2 is dI/dt = E -- while E and J are algebraic. E is
+	// M0 - M, a function of u, so G_0 fixes its value; the dE/dt the controller
+	// reads is -dM/dt, which G_1 writes in terms of du/dt.
 	: TransportSystem({.variables = {{"u", "the diffused quantity", ""}},
-					   .scalars = {{"E", "mass error, M0 - M", "", true},
+					   .scalars = {{"E", "mass error, M0 - M", "", false},
 								   {"J", "source strength from the PID controller", "", false},
 								   {"I", "integral of the error", "", true}},
 					   .regrid = RegridPolicy::InPlace})
@@ -163,7 +162,6 @@ Value ScalarTestLD3::ScalarG(Index s, GlobalState const &y, GlobalState const &y
 {
     using namespace ScalarHooks;
 
-    const double dEdt = ydot.Scalars()(0);
     const double dIdt = ydot.Scalars()(2);
     const double E = y.Scalars()(0);
     const double J = y.Scalars()(1);
@@ -183,7 +181,9 @@ Value ScalarTestLD3::ScalarG(Index s, GlobalState const &y, GlobalState const &y
     }
     else if (s == 1)
     {
-        // J = gamma E + gamma_d dE/dt + gamma_I I + [ sigma(+1) - sigma(-1) ]
+        // J = gamma E + gamma_d dE/dt + gamma_I I + [ sigma(+1) - sigma(-1) ],
+        // with dE/dt = -dM/dt, the same quadrature applied to du/dt.
+        const double dEdt = -integrate(ydot.Variable().row(0), weights);
         const double sigmaUpper = boundaryValue(y.Flux().row(0), phiBoundary, Upper);
         const double sigmaLower = boundaryValue(y.Flux().row(0), phiBoundary, Lower);
         return J - gamma * E - gamma_d * dEdt - gamma_I * I - (sigmaUpper - sigmaLower);
@@ -226,7 +226,8 @@ void ScalarTestLD3::ScalarGPrime(GlobalStateMatrix &dG, GlobalStateMatrix &dGdot
     // dG_1/dI. G_1 carries a -gamma_I * I term that was never differentiated;
     // latent only because gamma_I defaults to 0.
     dG[1].Scalars()(2) = -gamma_I;
-    dGdot[1].Scalars()(0) = -gamma_d;
+    // -gamma_d dE/dt = +gamma_d dM/dt, so dG_1/d(du_j/dt) = +gamma_d weights(j).
+    dGdot[1].Variable().row(0) = gamma_d * weights.transpose();
 
     // G_2 = dI/dt - E
     dG[2].Scalars()(0) = -1.0;
@@ -270,12 +271,9 @@ Value ScalarTestLD3::InitialScalarValue(Index s) const
 
 Value ScalarTestLD3::InitialScalarDerivative(Index s, const DGSoln &y, const DGSoln &dydt) const
 {
-	// Our job to make sure this is consistent!
-	if( s == 0 ) // dE/dt at t=0
-    {
-        double Mdot = Mass( dydt, 0 );
-        return Mdot;
-    } else if ( s == 2 ) {
+	// Our job to make sure this is consistent! Called for I alone, the one
+	// differential scalar.
+	if ( s == 2 ) {
         double E = y.Scalar(0);
         return E; // dI/dt = E
     } else

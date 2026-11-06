@@ -477,6 +477,8 @@ BOOST_AUTO_TEST_CASE(scalar_test_ld3_reports_its_own_scalar_derivatives_correctl
         alpha = 0.2
         beta = 1.0
         gamma = 1.0
+        gamma_d = -0.1
+        gamma_I = -0.5
         u0 = 0.1
     )"_toml;
 
@@ -505,12 +507,11 @@ BOOST_AUTO_TEST_CASE(scalar_test_ld3_reports_its_own_scalar_derivatives_correctl
         DGSoln dydt(problem.getNumVars(), grid, k, N_VGetArrayPointer(dYdt),
                     problem.getNumScalars(), problem.getNumAux());
 
-        // G_0 = E - (M0 - M) reads only E and u, both differential, so it is a
-        // row IDACalcIC cannot move: E's d/dt is in G_1, not G_0. PIDTest runs
-        // because the initial E satisfies G_0 already. Pinned rather than
-        // excused, so a change to the declaration has to update this.
+        // PIDTest's gains, so G_1's gamma_d dE/dt -- written as gamma_d dM/dt,
+        // a du/dt term -- and its gamma_I I are both differenced, and every row
+        // is one IDACalcIC can move.
         const double worst =
-            checkScalarDerivative(problem, y, dydt, grid, k, 0.0, 1e-6, {0});
+            checkScalarDerivative(problem, y, dydt, grid, k, 0.0, 1e-6);
         BOOST_TEST_MESSAGE("ScalarTestLD3 derivative k=" << k << " n=" << nCells
                                                          << ": worst " << worst);
 
