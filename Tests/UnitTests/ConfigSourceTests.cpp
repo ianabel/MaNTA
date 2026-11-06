@@ -98,7 +98,9 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     const bool superconvergentAbsent = !c.Superconvergent.has_value();
     BOOST_TEST(superconvergentAbsent);
     BOOST_TEST(!c.AggressiveTimesteps);
-    BOOST_TEST(!c.SuppressAlgebraicError);
+    // Absent too, so that the solver can decide by whether a field is attached.
+    const bool suppressAbsent = !c.SuppressAlgebraicError.has_value();
+    BOOST_TEST(suppressAbsent);
     // Off by default: a steady solve and a restart skip IDACalcIC, and this is
     // what puts it back. See setForceConsistentIC.
     BOOST_TEST(!c.ForceConsistentIC);
@@ -993,7 +995,9 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         fromToml.Superconvergent == fromMap.Superconvergent;
     BOOST_TEST(superconvergentAgrees);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
-    BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
+    const bool suppressAgrees = fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError &&
+                                fromToml.SuppressAlgebraicError == std::optional<bool>(true);
+    BOOST_TEST(suppressAgrees);
     BOOST_TEST(fromToml.ForceConsistentIC == fromMap.ForceConsistentIC);
     BOOST_TEST(fromToml.SteadyStateSolver == fromMap.SteadyStateSolver);
     BOOST_TEST(fromToml.PseudoTransientInitialStep == fromMap.PseudoTransientInitialStep);

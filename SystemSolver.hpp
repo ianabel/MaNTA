@@ -1235,11 +1235,21 @@ class SystemSolver
         void setAggressiveTimesteps(bool in) { aggressiveTimesteps = in; };
 
         // IDASetSuppressAlg: take sigma, q, lambda and phi out of IDA's local
-        // error test, leaving only u and the differential scalars in it. Off by
-        // default, and the default is load-bearing rather than conservative --
-        // turning it on is measurably not answer-preserving. See
-        // setSuppressAlgebraicError's use in Solver.cpp and docs/running.rst.
-        void setSuppressAlgebraicError(bool in) { suppressAlgebraicError = in; };
+        // error test, leaving only u and the differential scalars in it. Unset,
+        // it is on for a run with a field -- a FieldModel or an EquilibriumModel
+        // -- and off otherwise; std::nullopt restores that default. Neither
+        // choice is answer-preserving: see suppressesAlgebraicError, its use in
+        // Solver.cpp, and docs/running.rst.
+        void setSuppressAlgebraicError(std::optional<bool> in) { suppressAlgebraicError = in; };
+
+        // What IDA will do: the setting if one was made, else whether a field
+        // is attached. Read at initialize(), so the field has to be attached by
+        // then, which every path does. The NewtonStep steady test masks its
+        // norm only on an explicit setting -- see errorWeightedNorm.
+        bool suppressesAlgebraicError() const
+        {
+            return suppressAlgebraicError.value_or(fieldModel != nullptr || equilibriumModel != nullptr);
+        };
 
         // Run IDACalcIC on a run that would otherwise skip it.
         //
@@ -1951,8 +1961,8 @@ class SystemSolver
         // solve. What SteadyStateMeasureCorrection reports.
         double steadyCorrectionNorm();
 
-        // N_VWrmsNorm, masked to the differential components under
-        // SuppressAlgebraicError exactly as IDA masks its own norm.
+        // N_VWrmsNorm, masked to the differential components when
+        // SuppressAlgebraicError was set explicitly.
         double errorWeightedNorm(N_Vector v, N_Vector ewt) const;
 
         SUNNonlinearSolver steadyNLS = nullptr;
@@ -2639,7 +2649,7 @@ class SystemSolver
         bool aggressiveTimesteps = false;
 
         // IDASetSuppressAlg. See setSuppressAlgebraicError.
-        bool suppressAlgebraicError = false;
+        std::optional<bool> suppressAlgebraicError;
 
         double alpha = 1.0;
         bool testing = false;

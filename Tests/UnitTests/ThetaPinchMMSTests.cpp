@@ -647,6 +647,34 @@ BOOST_AUTO_TEST_CASE(the_manufactured_source_is_the_cases_own_pde)
     }
 }
 
+// SuppressAlgebraicError's default is decided by the solver, from whether a
+// field is attached, because only the solver knows: a config's absent key and a
+// solver built by hand both arrive with nothing set. Every tier counts as a
+// field, and an explicit setting wins either way.
+BOOST_AUTO_TEST_CASE(a_run_with_a_field_suppresses_the_algebraic_error_by_default)
+{
+    Grid grid(0.0, 1.0, 4);
+    const PinchExact exact;
+    ManufacturedThetaPinch problem(exact, grid);
+    auto field = std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{}, grid);
+
+    SystemSolver plain(grid, 2, &problem);
+    BOOST_TEST(!plain.suppressesAlgebraicError());
+    plain.setSuppressAlgebraicError(true);
+    BOOST_TEST(plain.suppressesAlgebraicError());
+
+    for (Tier tier : {Tier::Coupled, Tier::Consistent, Tier::Reduced, Tier::Native})
+    {
+        SystemSolver sys(grid, 2, &problem);
+        attachField(sys, field, grid, tier, SystemSolver::FieldSolveMode::Iterative);
+        BOOST_TEST(sys.suppressesAlgebraicError());
+        sys.setSuppressAlgebraicError(false);
+        BOOST_TEST(!sys.suppressesAlgebraicError());
+        sys.setSuppressAlgebraicError(std::nullopt);
+        BOOST_TEST(sys.suppressesAlgebraicError());
+    }
+}
+
 // The run that found the sweep's stopping test wanting. Under a relative
 // 2-norm test on psi alone, this case at 1e-9 / 1e-11 held IDA at order one
 // with h ~ 2e-5 for more than 20000 steps, against the exact solve's 213: the
@@ -666,18 +694,15 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_does_not_stall_ida)
                                    iterative.steps, iterative.N, exact.steps, exact.N,
                                    std::abs(iterative.N - exact.N), mms::Tolerances{}.relative * normN));
     BOOST_TEST(iterative.fallbacks == 0);
-    // The bound is set by how far either mode's step count moves under
-    // round-off, which is a long way, while the stall was a factor of a hundred.
-    // IDA falls in and out of an order-2 trap on this case -- 120-200 steps held
-    // at order 2 over t in [1e-3, 1e-2], and sometimes again over [0.05, 0.15]
-    // -- in both modes, set by round-off. Measured over the tolerances scaled by
-    // 0.92-1.08: exact 149 to 278 steps, iterative 142 to 374 at any
-    // FieldSolveTolerance from 1e-4 to 1e-7; and on CI's AVX-512 runners
-    // iterative 564 against exact 175. The algebraic unknowns in IDA's error
-    // test are the cause: with SuppressAlgebraicError both modes take 99-101
-    // steps at every one of those tolerances. Five times is clear of that
-    // scatter and still forty times inside the stall.
-    BOOST_TEST(iterative.steps < 5 * exact.steps);
+    // The stall was a factor of a hundred; the bound is set by how far the two
+    // step counts can drift apart otherwise. That is not far, because a run with
+    // a field suppresses the algebraic error by default: over the tolerances
+    // scaled by 0.92-1.08 both modes take 99-101 steps at every one. With the
+    // algebraic unknowns in IDA's error test instead, IDA falls in and out of an
+    // order-2 trap here as round-off decides -- exact 149 to 278 steps,
+    // iterative 142 to 374 over the same sweep, and 564 against 175 on CI's
+    // AVX-512 runners -- which is what a bound of twice would not survive.
+    BOOST_TEST(iterative.steps < 2 * exact.steps);
     // Both runs are IDA solutions at rtol 1e-9, so they agree to the run's
     // integration error and no better, and round-off moves that as much as the
     // field solve does. Measured, against an rtol ||N|| of 4.4e-9: 3e-11 to
@@ -710,20 +735,23 @@ BOOST_AUTO_TEST_CASE(the_coupled_theta_pinch_converges_at_k_plus_one)
 // Tier 0, the same model as a black box (FieldModelEquilibrium,
 // FieldCoupling = "consistent"), through the same study at the same tolerances:
 // the order of the method has to survive taking psi out of the state. Measured,
-// on the same grids as tier 2 above:
+// on the same grids as tier 2 above, with steps and equilibrium solves:
 //
-//     k = 1   N 1.99, 1.99    V' 2.55, 2.49    580, 560, 1416 steps (tier 2: 326, 311, 231)
-//     k = 2   N 3.01, 3.00    V' 3.59, 3.53    410, 388, 284 steps  (178, 154, 126)
-//     k = 3   N 3.95, 3.99    V' 3.97, 3.98    1439, 2234, 521 steps (193, 120, 96)
+//     k = 1   N 1.99, 1.99    V' 2.55, 2.49    168, 163, 155 steps; 459, 456, 406 solves (tier 2: 166, 161, 152 steps)
+//     k = 2   N 3.01, 3.00    V' 3.59, 3.53    130, 107, 86;        344, 268, 206          (127, 101, 80)
+//     k = 3   N 3.95, 3.99    V' 3.97, 3.98    104, 76, 58;         295, 176, 119          (100, 74, 61)
 //
-// -- tier 2's orders to the digit, and its errors to 6e-11 to 3.4e-9 in N
+// -- tier 2's orders to the digit, and its errors to 3e-12 to 4.6e-10 in N
 // against an rtol ||N|| of 4.4e-9: integration error, which checkAgainstCoupled
-// bounds by ten times that. The cost is IDA's steps, 2 to 18 times tier 2's:
-// the Jacobian carries no coupling, so Newton converges linearly in it. That is
-// affordable only under the default ErrorWeights = "AlgebraicMax": under
-// "Pointwise" the k = 1, 8-cell run went 455 s and then failed in IDASolve,
-// where it takes 3 s now, while tier 2 runs either way. One case per degree,
-// to keep each under a minute.
+// bounds by ten times that. The Jacobian carries no coupling, so Newton
+// converges linearly in it, and the cost is residual evaluations -- each an
+// equilibrium solve, two to three times tier 1's below -- not steps, since a
+// run with a field keeps the algebraic unknowns out of IDA's error test. With
+// them in it, tier 0's linearly converged algebraic unknowns read as local
+// error and the steps went 2 to 18 times tier 2's (2234 against 120 at k = 3,
+// 16 cells), and under ErrorWeights = "Pointwise" the k = 1, 8-cell run went
+// 455 s and failed in IDASolve. One case per degree, to keep each under a
+// minute.
 BOOST_DATA_TEST_CASE(the_consistent_theta_pinch_converges_at_k_plus_one,
                      boost::unit_test::data::make({1, 2, 3}), k)
 {
@@ -733,21 +761,21 @@ BOOST_DATA_TEST_CASE(the_consistent_theta_pinch_converges_at_k_plus_one,
 
 // Tier 1 (FieldCoupling = "reduced"), with the exact G' FieldModelEquilibrium
 // supplies and with a forward difference of its Solve, under the default
-// FieldSolve = "iterative". Measured, on the same grids, with IDA's steps
-// against tier 2's and tier 0's:
+// FieldSolve = "iterative". Measured, on the same grids, with IDA's steps and
+// equilibrium solves at either response, against tier 2's steps:
 //
-//             N            V'           steps, exact G'   differenced G'   tier 2          tier 0
-//     k = 1   1.99, 1.99   2.55, 2.49   249, 224, 224     246, 230, 218    326, 311, 231   580, 560, 1416
-//     k = 2   3.01, 3.00   3.59, 3.53   172, 154, 122     161, 185, 122    178, 154, 126   410, 388, 284
-//     k = 3   3.95, 3.99   3.97, 3.98   157, 121, 97      166, 121, 97     193, 120, 96    1439, 2234, 521
+//             N            V'           steps          equilibrium solves   tier 2
+//     k = 1   1.99, 1.99   2.55, 2.49   168, 161, 150  200, 214, 195        166, 161, 152
+//     k = 2   3.01, 3.00   3.59, 3.53   127, 105, 83   176, 158, 124        127, 101, 80
+//     k = 3   3.95, 3.99   3.97, 3.98   100, 75, 59    133, 117, 85         100, 74, 61
 //
 // -- tier 2's orders to the digit, at either response, and its N errors to
-// 2e-12 - 1.9e-10 against an rtol ||N|| of 4.4e-9, an order closer than tier 0
-// gets: the response restores the Newton rate the black box loses, so the
-// two take tier 2's steps rather than 2 to 18 times them, and the sweep never
-// fell back. FieldSolve = "krylov" gives the same table and errors, but took 45 s
-// over the three degrees against the sweep's 16 s (and tier 2's 23 s under
-// krylov), so it is not run here.
+// 1.5e-11 - 1.2e-9 against an rtol ||N|| of 4.4e-9. The response restores the
+// Newton rate the black box loses, so the two take tier 2's steps and a third
+// to a half of tier 0's equilibrium solves, and the sweep never fell back.
+// FieldSolve = "krylov" gives the same orders, but took 45 s over the three
+// degrees against the sweep's 16 s (and tier 2's 23 s under krylov), so it is
+// not run here.
 BOOST_DATA_TEST_CASE(the_reduced_theta_pinch_converges_at_k_plus_one,
                      boost::unit_test::data::make({1, 2, 3}), k)
 {

@@ -137,9 +137,16 @@ namespace
 
 } // namespace
 
+// Masked only when SuppressAlgebraicError was set, never by the default a field
+// brings. This is a Newton test, and masking it stops the iteration on u's
+// correction alone; IDASetSuppressAlg leaves IDA's Newton test whole and masks
+// only the truncation-error test, which is why the field default can apply
+// there and not here. Measured: a tier-0 theta pinch -- Newton linear, no
+// coupling in its Jacobian -- solved to steady state under Newton lands 3.2e-8
+// from the coupled answer with the test masked, against 3.6e-10 unmasked.
 double SystemSolver::errorWeightedNorm(N_Vector v, N_Vector ewt) const
 {
-    return suppressAlgebraicError ? N_VWrmsNormMask(v, ewt, id) : N_VWrmsNorm(v, ewt);
+    return suppressAlgebraicError.value_or(false) ? N_VWrmsNormMask(v, ewt, id) : N_VWrmsNorm(v, ewt);
 }
 
 void SystemSolver::allocateNewtonStepScratch()

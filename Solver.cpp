@@ -383,26 +383,31 @@ void SystemSolver::initialize()
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
-	// Optionally take the algebraic rows out of IDA's local error test. `id`
-	// above is what makes this meaningful: u and the differential scalars carry
-	// 1.0, everything else 0.0, and IDASetSuppressAlg drops exactly the zeros.
+	// Take the algebraic rows out of IDA's local error test, by default for a
+	// run with a field and otherwise only when asked. `id` above is what makes
+	// this meaningful: u and the differential scalars carry 1.0, everything
+	// else 0.0, and IDASetSuppressAlg drops exactly the zeros. sigma, q, lambda
+	// and phi stay in the Newton test, so they are converged at every step;
+	// what goes is the check of their local truncation error.
 	//
-	// It is off by default because it is *not* answer-preserving, however much
-	// the direct-run numbers suggest otherwise. On a single run to a steady
-	// state it reproduces the same answer to five significant figures for
-	// 13-44% fewer calls into the physics, and it dissolves the
-	// Absolute_tolerance cliff that otherwise makes atol <= 1e-7 fail on the
-	// first step. But sigma, q, lambda and phi are then controlled only by the
-	// Newton tolerance, and two things read them: a restart file serialises the
-	// whole DOF vector, and phi is a physics quantity in its own right when
-	// nAux > 0. Measured, a restart round trip degrades from 1.9e-6 to 8.6e-4,
-	// and on AuxVarTest q and sigma -- the fields the flag drops from the error
-	// test -- land 1.0e-6 from a converged solution against 4.1e-7 with it off.
-	// (This used to cite a 1.0% drift past a 0.84% tolerance on that case. It
-	// was measured when the case ran at rtol = atol = 1e-2, where its own answer
-	// is 4.1% from converged, so the drift was step-sequence noise rather than
-	// the flag.) Turning it on is a trade, not an improvement.
-	if (suppressAlgebraicError)
+	// Neither choice is answer-preserving, which is why the default depends on
+	// the run. Measured against runs 1000x tighter (docs/running.rst has the
+	// tables): at matched tolerance, suppression gives 1-5x the time error on
+	// most of the regression configs, for 4-52% less work; tightened tenfold to
+	// cost about the same, it is the more accurate on 11 of 15. Where it loses
+	// -- Nonlin2, nonlin, PIDTest, ld's q -- its error stops following the
+	// tolerance. And it costs restart fidelity on plain diffusion: a restart
+	// reads sigma and q back from the file, and LinearDiffusion's q lands 100x
+	// further from the uninterrupted run.
+	//
+	// A field changes the balance. With the algebraic rows in the test, IDA's
+	// order selection on the coupled theta pinch falls into a trap at order 2
+	// for 120-200 steps or does not, as round-off decides: 149-290 steps over a
+	// +-8% tolerance sweep, under either FieldSolve. Suppressed, it takes 99-101
+	// at every one of those tolerances, both field solves agree to ten digits,
+	// and its 5x larger time error is a millionth of the spatial one; restarts
+	// of both theta-pinch regression configs are as faithful either way.
+	if (suppressesAlgebraicError())
 	{
 		retval = IDASetSuppressAlg(IDA_mem, SUNTRUE);
 		if (ErrorChecker::check_retval(&retval, "IDASetSuppressAlg", 1))

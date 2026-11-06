@@ -70,7 +70,6 @@ struct SolverConfig
     bool                     WriteDebugDatFiles;
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
-    bool                     SuppressAlgebraicError;
     bool                     ForceConsistentIC;
     std::string              SteadyStateSolver;
     double                   PseudoTransientInitialStep;
@@ -166,6 +165,11 @@ struct SolverConfig
     // distinction is impossible to draw from a plain bool carrying the schema's
     // default.
     std::optional<bool> Superconvergent;
+
+    // Presence again: absent, the solver turns it on for a run with a field and
+    // leaves it off otherwise (SystemSolver::suppressesAlgebraicError), and only
+    // the solver knows by then whether a field was attached.
+    std::optional<bool> SuppressAlgebraicError;
 
     // Whether LowerBoundaryFraction / UpperBoundaryFraction were given. The manual
     // GradedGridBoundary path reads the values with their schema default either

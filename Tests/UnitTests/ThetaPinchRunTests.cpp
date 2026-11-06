@@ -332,8 +332,9 @@ Vector sampleWithGeometry(SystemSolver &sys)
 BOOST_AUTO_TEST_CASE(a_tier_zero_theta_pinch_reaches_the_coupled_answer)
 {
     // The same DAE, solved without differentiating through the field: Newton
-    // converges more slowly and IDA takes more steps, but each step is held to
-    // the same tolerances, so the two runs agree to the integration error.
+    // converges more slowly and costs more residual evaluations, but each step
+    // is held to the same tolerances, so the two runs agree to the integration
+    // error.
     auto coupled = makeRun({}, "theta_pinch_tier2");
     auto tier0 = makeRun({.consistent = true}, "theta_pinch_tier0");
     {
@@ -347,10 +348,11 @@ BOOST_AUTO_TEST_CASE(a_tier_zero_theta_pinch_reaches_the_coupled_answer)
     BOOST_TEST_MESSAGE("tier 0 against coupled at t = 0.5: N " << dN << " relative, B " << dB
                                                                 << "; equilibrium solves "
                                                                 << tier0.sys->getEquilibriumSolves());
-    // At rtol 1e-6 / atol 1e-8, measured 2.9e-6 and 1.1e-7 under the default
-    // ErrorWeights, 8.8e-8 and 6.6e-9 under Pointwise: integration error either
-    // way, and which is smaller is a matter of which steps each run happened to
-    // take.
+    // At rtol 1e-6 / atol 1e-8, measured 4.3e-7 and 4.1e-8 as the runs default
+    // (AlgebraicMax, algebraic error suppressed); 2.9e-6 and 1.1e-7 with the
+    // algebraic rows in the error test, 8.8e-8 and 6.6e-9 under Pointwise:
+    // integration error each way, and which is smallest is a matter of which
+    // steps each run happened to take.
     BOOST_TEST(dN < 1e-5);
     BOOST_TEST(dB < 1e-6);
     // Not vacuous: the field has left the vacuum, B = 1.
@@ -437,58 +439,64 @@ BOOST_AUTO_TEST_CASE(differenced_geometry_derivatives_give_the_analytic_run)
     BOOST_TEST(site->calls == differenced.sys->getGeometrySlots() + 1);
 }
 
-/// "Total Number of Timesteps" from a run's report, as a number.
-long stepsIn(std::string const &log)
+/// A "Total Number of ..." count from a run's report, as a number.
+long countIn(std::string const &log, std::string const &what)
 {
-    const auto at = log.find("Total Number of Timesteps");
+    const auto at = log.find("Total Number of " + what);
     if (at == std::string::npos)
         return -1;
     return std::stol(log.substr(log.find(':', at) + 1));
 }
 
+long stepsIn(std::string const &log) { return countIn(log, "Timesteps"); }
+
 // Tier 1 carries the coupling in its Jacobian, so IDA's Newton converges as it
-// does at tier 2 and the run takes about tier 2's steps, not tier 0's crawl --
-// with the model's own response or the differenced default, under either
-// solve. Measured: 163 steps under iterative and 157 to 197 under krylov,
-// against tier 2's 144 and tier 0's 321 (on the regression config, 174 at both
-// tiers); N within 2.5e-7 and 3.7e-8 of tier 2's.
+// does at tier 2 rather than linearly as at tier 0 -- with the model's own
+// response or the differenced default, under either solve. What that saves is
+// Newton iterations, i.e. residual evaluations, each an equilibrium solve.
+// Measured, with the algebraic error suppressed as a run with a field is by
+// default: 128 steps and 197 residuals under iterative, 146 and 208 under
+// krylov, against tier 2's 126 and 166 and tier 0's 136 and 262; N within
+// 5.7e-8 and 2.7e-7 of tier 2's.
 //
-// The step counts are a sample, not a property: they move by tens of percent
-// with the last bits of the arithmetic. Over rtol x {0.9, 0.95, 1, 1.05, 1.1}
-// tier 2 took 210, 174, 144, 175 and 146 steps and the tier-1 modes 150 to 172,
-// and the differenced response under krylov went from 157 to 197 at rtol 1e-6
-// on a rebuild that changed only this file's code generation. Hence 1.5 times
-// tier 2's count, where 144 is tier 2's own best case, and half again under
-// tier 0's, which is what tier 1 exists to avoid.
+// Steps alone no longer separate the tiers. With the algebraic rows in IDA's
+// error test, tier 0's linearly converged algebraic unknowns read as local error
+// and it crawled -- 321 steps against tier 1's 163 -- but suppressed, its
+// Newton's slower convergence costs residuals and not steps. Hence the step
+// bound against tier 2 alone, at 1.5 times since step counts move by tens of
+// percent with the last bits of the arithmetic, and residuals against tier 0.
 BOOST_AUTO_TEST_CASE(a_reduced_theta_pinch_reaches_the_coupled_answer)
 {
-    auto run = [](Options const &o, std::string const &stem, long &steps)
+    auto run = [](Options const &o, std::string const &stem, long &steps, long &residuals)
     {
         auto r = makeRun(o, stem);
         CapturedOutput capture;
         r.sys->runSolver(0.5);
         steps = stepsIn(capture.text());
+        residuals = countIn(capture.text(), "Residual Evaluations");
         return r;
     };
-    long coupledSteps = 0, tier0Steps = 0;
-    auto coupled = run({}, "theta_pinch_tier2_t1", coupledSteps);
-    auto tier0 = run({.consistent = true}, "theta_pinch_tier0_t1", tier0Steps);
+    long coupledSteps = 0, tier0Steps = 0, coupledResiduals = 0, tier0Residuals = 0;
+    auto coupled = run({}, "theta_pinch_tier2_t1", coupledSteps, coupledResiduals);
+    auto tier0 = run({.consistent = true}, "theta_pinch_tier0_t1", tier0Steps, tier0Residuals);
     const Vector want = sampleWithGeometry(*coupled.sys);
 
     for (bool differenced : {false, true})
         for (bool krylov : {false, true})
         {
-            long steps = 0;
+            long steps = 0, residuals = 0;
             auto reduced = run({.reduced = true, .differencedResponse = differenced, .krylov = krylov},
-                               "theta_pinch_tier1", steps);
+                               "theta_pinch_tier1", steps, residuals);
             const Vector got = sampleWithGeometry(*reduced.sys);
             const double dN =
                 (want.head(5) - got.head(5)).cwiseAbs().maxCoeff() / want.head(5).cwiseAbs().maxCoeff();
             const double dB = (want.tail(5) - got.tail(5)).cwiseAbs().maxCoeff();
             const auto stats = reduced.sys->getFieldSweepStats();
             BOOST_TEST_MESSAGE("tier 1, differenced response = "
-                               << differenced << ", krylov = " << krylov << ": " << steps << " steps (tier 2 "
-                               << coupledSteps << ", tier 0 " << tier0Steps << "); N " << dN << " relative, B "
+                               << differenced << ", krylov = " << krylov << ": " << steps << " steps, "
+                               << residuals << " residuals (tier 2 " << coupledSteps << ", " << coupledResiduals
+                               << "; tier 0 " << tier0Steps << ", " << tier0Residuals << "); N " << dN
+                               << " relative, B "
                                << dB << "; " << stats.iterations << " sweeps / " << stats.solves << " solves, "
                                << stats.krylovIterations << " GMRES iterations / " << stats.krylovSolves
                                << ", " << stats.responses << " responses, " << stats.fallbacks
@@ -497,7 +505,7 @@ BOOST_AUTO_TEST_CASE(a_reduced_theta_pinch_reaches_the_coupled_answer)
             BOOST_TEST(dB < 1e-6);
             BOOST_TEST(reduced.sys->getFieldDOF() == 0);
             BOOST_TEST(steps <= coupledSteps + coupledSteps / 2);
-            BOOST_TEST(2 * steps < 3 * tier0Steps / 2);
+            BOOST_TEST(residuals < tier0Residuals);
         }
 }
 
