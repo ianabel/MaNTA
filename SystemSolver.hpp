@@ -1832,6 +1832,25 @@ class SystemSolver
         std::vector<Matrix> A1_cellwise;
         N_Vector *a2 = nullptr;
 
+        // Scratch for the coupled Jacobian solves, which run once per Newton
+        // iteration -- nField + 1 times that under the exact solve -- and used
+        // to N_VClone and destroy each of these on every call: nField + 2 full-
+        // length vectors per exact solve, 518 at the theta pinch's nField = 516.
+        // Each routine has slots of its own, so no two that run in one solve can
+        // share one, and every slot is written before it is read, so a reused
+        // vector computes exactly what a fresh clone did. Allocated on first use
+        // and again whenever the solution vector's length changes (workVector),
+        // freed with the solver.
+        struct CouplingWork
+        {
+            N_Vector exactCol = nullptr, exactAinvR1 = nullptr; // solveCoupledJacExact
+            std::vector<N_Vector> exactAinvA1;                  // ... one per field DOF
+            N_Vector sweepWork = nullptr, sweepEwt = nullptr,   // couplingSweep
+                sweepPrev = nullptr, sweepChange = nullptr;
+            N_Vector krylovEwt = nullptr, krylovWork = nullptr, krylovZ = nullptr; // couplingKrylov
+            N_Vector genericWork = nullptr, genericZ = nullptr; // couplingExact
+        } couplingWork;
+
         // ---- state of one run, owned between initialize() and destroySundials()
         //
         // These were locals of runSolver(). They are members so the three phases
@@ -2416,6 +2435,13 @@ class SystemSolver
         // Free the a2 vectors, using the *current* nField as the count -- so
         // call it before changing nField, not after.
         void freeFieldWorkVectors();
+
+        // The slot, as a vector as long as `like`: allocated on first use, and
+        // reallocated if a field model has since changed the length. The
+        // contents are whatever the last use left; every caller writes before
+        // reading, as it did with a fresh N_VClone.
+        N_Vector workVector(N_Vector &slot, N_Vector like);
+        void freeCouplingWorkVectors();
 
         // Where trace node `node` of variable `var` sits in the *band form's*
         // ordering, which is not the solution vector's. See K_banded.

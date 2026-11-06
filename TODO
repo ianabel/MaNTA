@@ -175,29 +175,6 @@ Found 2026-08-26, by putting one there.
   CLAUDE.md.
 
 
-Per-call N_Vector allocation in the coupled Jacobian solve.
-The scalar half of this is fixed (2026-08-25): solveTransportJac used to
-N_VClone and destroy nScalars + 2 full-length vectors on *every* call -- once per
-Newton iteration, and nField + 1 times that under solveCoupledJacExact -- for
-working space whose size is fixed by nScalars at construction. They are now
-members (solveScalarD/E/G), allocated beside v and w by
-allocateScalarWorkVectors() and rebuilt by setFieldModel when getDoF() changes.
-
-  What is left, in the same shape and for the same reason:
-
-    solveCoupledJacExact   N_Vector col, AinvA1[nField], Ainv_r1   (nField + 2)
-    solveCoupledJacIterative  N_Vector work                        (1)
-
-  nField is fixed once setFieldModel has run, exactly as nScalars is fixed at
-  construction, so the same treatment applies -- a2 already demonstrates the
-  pattern for an nField-sized array of full-length vectors.
-
-  A model is registered now, and the theta pinch is a fixture that would notice:
-  under FieldSolve = exact at nField = 516 that is 518 full-length vectors made
-  and destroyed per Jacobian solve. The exact path is the verification tool,
-  though, and the iterative one allocates one, so it is a cost on the path
-  nobody should be timing.
-
 K_global is factorised densely, and it is 73-91% of a low-k run.
 Found 2026-08-25. FIXED the same day -- util/BandedMatrix.hpp, and the entry is
 kept because the measurements are what justify the shape of the fix and the
