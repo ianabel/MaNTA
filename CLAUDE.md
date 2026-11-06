@@ -710,9 +710,13 @@ Two return codes worth being able to read without looking them up:
 ### Parallelism (`MANTA_OPENMP`, off by default)
 
 **Every `#pragma omp` in the tree is inside `util/ParallelFor.hpp`.** Nothing
-else may write one. `manta::parallel_for(n, body, grain)` is the only entry
-point, and it exists because three properties were needed at all eight sites and
-present at none of them.
+else may write one, and nothing else may thread either: the build defines
+`EIGEN_DONT_PARALLELIZE` (`cmake/MantaDependencies.cmake`, and `manta.pc`), so
+Eigen does not thread its matrix products under `-fopenmp` the way it would by
+default. BLAS threading is the one exception, and it is the BLAS's, below.
+`manta::parallel_for(n, body, grain)` is the only entry point, and it exists
+because three properties were needed at all eight sites and present at none of
+them.
 
 **Exceptions.** A physics hook throwing is *supported*: `static_residual`
 catches it, prints, and returns 1, which IDA treats as recoverable and retries
@@ -1840,7 +1844,7 @@ process-global map. Two traps, neither of which is a link error:
   load (`_mm512_load_pd`) the first time the solver touches its state. `manta.pc`
   records the *concrete* architecture (`-march=znver4`, not `native`) so a
   mismatch is a compile error rather than a run-time crash. `-DEIGEN_USE_BLAS`
-  travels for the same reason.
+  and `-DEIGEN_DONT_PARALLELIZE` travel for the same reason.
 * **A plugin must not link `-lmanta`.** The solver links the core objects
   directly, so a plugin that also pulled in `libmanta.so` would get a second copy
   of `PhysicsCases::map` and register into a map the solver never reads —
