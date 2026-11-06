@@ -1609,11 +1609,16 @@ gives. Four pieces to know:
 
 * **Trampolines.** `PyTransportSystem` / `PyAdjointProblem` dispatch each virtual
   to a Python override. `PyTransportSystem::initializeOverrides` probes the
-  subclass once and classifies it as *pointwise* or *vectorised* (the latter
-  requires both `ComputePhysics` and `ComputePhysicsDerivatives`); it also
-  enforces the extra hooks required when `nScalars > 0` or `nAux > 0`. Look up
+  subclass once. It is *vectorised* if it overrides both `ComputePhysics` and
+  `ComputePhysicsDerivatives`; otherwise each hook is pointwise or batched
+  (`SigmaFn_v`, `Sources_v`, `AuxG_v`, `dSigma`, `dSources`, `AuxGPrime_v` --
+  `batched_hook_names`), freely mixed, and a requirement -- including the extra
+  ones when `nScalars > 0` or `nAux > 0` -- is met by either form. Look up
   overrides with `override_for(name)`, never `method_overrides[name]` — the
-  latter default-constructs a null `py::function` and calling it segfaults.
+  latter default-constructs a null `py::function` and calling it segfaults. And
+  hand `py::get_override` a stable name pointer, never a temporary's `c_str()`:
+  pybind11 caches a *missing* override keyed on the pointer, so a reused buffer
+  makes one name's miss answer for the next.
 * **State is a view, GlobalState is a dict.** A pointwise `State` reaches Python
   as a non-owning window onto solver memory (`PyState.hpp`) with named fields —
   `s.u`, `s.q`, `s.sigma`, `s.sigmaHat`, `s.phi`, `s.scalars` — each indexable by

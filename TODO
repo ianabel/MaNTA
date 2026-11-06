@@ -310,14 +310,6 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
 Left over from the TransportSystem interface work. Everything else in that plan
 landed; these are the pieces that were deliberately not done, with the reason.
 
-  - Per-hook vectorisation in the Python trampoline. `override_for("SigmaFn_v")`
-    and the other `_v` names are looked up but never inserted into
-    method_overrides, so they can only throw: implementing `ComputePhysics` and
-    `ComputePhysicsDerivatives` together remains the only vectorised route. A
-    case that wants to vectorise one hook and leave the rest pointwise cannot.
-    Registering the `_v` names in initializeOverrides is most of the fix; the
-    rest is dropping the all-or-nothing classification.
-
   - The autodiff Source still receives the *stored* sigma, not sigma_hat.
     State::sigmaHat exists and is correct, but AutodiffTransportSystem::Sources
     builds its RealVector from the stored (negated) value, so a case that starts
@@ -354,24 +346,6 @@ landed; these are the pieces that were deliberately not done, with the reason.
 Found since, and left undone deliberately rather than overlooked. Each says what
 would have to exist before the fix could be checked, which in every case is the
 reason it was not made:
-
-  - PyAdjointProblem::dAux disagrees with the Python dAux it calls. The
-    trampoline (PyAdjointProblem.hpp:217) hands the Python method a raw
-    GlobalState, but JAXAdjointProblem.dAux expects a converted jax State,
-    because the only caller that matters -- ComputePhysicsDerivatives, which is
-    what SystemSolver.cpp:1661 invokes -- is @Physics_Decorator and converts
-    before calling it. So `AdjointProblem.dAux(...)` from Python raises a vmap
-    in_axes error, while the path the solver takes works. dSigma and dSources
-    have the same shape and presumably the same split.
-
-    Harmless today: nothing in the tree calls the trampoline. Left alone
-    because fixing it means choosing which contract the Python dAux has, and
-    the decorated-state one is load-bearing for ComputePhysicsDerivatives --
-    so the honest fix is probably to stop binding these three, the way
-    ScalarGPrime and ComputePhysicsDerivatives already are not. Found while
-    fixing the JAXAuxTest xfail; it cost a wrong turn there, because a test
-    driving AdjointProblem.dAux looks like it exercises the solver's path and
-    does not.
 
   - AutodiffTransportSystem::MMS_Source (PhysicsCases/AutodiffTransportSystem.cpp)
     still evaluates the plain, geometry-blind Flux/Source overloads directly,

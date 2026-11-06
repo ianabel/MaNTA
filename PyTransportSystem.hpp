@@ -22,7 +22,8 @@
 // handed it over, and the framework hands over a zeroed one (see State's
 // constructor). "I did not write this derivative" and "this derivative is zero"
 // are then the same statement, which is what they always were in practice.
-constexpr std::array<std::string_view, 2> required_method_names = {"SigmaFn", "Sources"};
+constexpr std::array<std::pair<std::string_view, std::string_view>, 2> required_method_names = {{
+    {"SigmaFn", "SigmaFn_v"}, {"Sources", "Sources_v"}}};
 
 // Looked up, used when present, and silently zero when not.
 constexpr std::array<std::string_view, 12> optional_derivative_names = {
@@ -34,13 +35,29 @@ constexpr std::array<std::string_view, 12> optional_derivative_names = {
 constexpr std::array<std::string_view, 2> required_method_names_vectorized = {
     "ComputePhysics", "ComputePhysicsDerivatives"};
 
+// One hook at a time, over the whole batch: each of these stands in for the
+// pointwise hooks beside it, and a case may write any of them and leave the
+// rest pointwise. ComputePhysics and ComputePhysicsDerivatives above are all of
+// them at once. The value hooks take (i, states, x, t) and return one value per
+// point; the derivative hooks return a GlobalState dict, as the states arrive.
+//
+//   SigmaFn_v     SigmaFn
+//   Sources_v     Sources
+//   AuxG_v        AuxG
+//   dSigma        dSigmaFn_du, dSigmaFn_dq, dSigma_dPhi
+//   dSources      dSources_du, dSources_dq, dSources_dsigma, dSources_dPhi
+//   AuxGPrime_v   AuxGPrime
+constexpr std::array<std::string_view, 6> batched_hook_names = {
+    "SigmaFn_v", "Sources_v", "AuxG_v", "dSigma", "dSources", "AuxGPrime_v"};
+
 constexpr std::array<std::string_view, 4> required_scalar_methods = {
     "ScalarG", "ScalarGPrime", "InitialScalarDerivative", "dSources_dScalars"};
 
-// Needed by the pointwise path whenever nAux > 0. A vectorised subclass
-// supplies ComputePhysicsDerivatives instead and never reaches these.
-constexpr std::array<std::string_view, 3> required_aux_methods = {
-    "AuxGPrime", "dSources_dPhi", "dSigma_dPhi"};
+// Needed whenever nAux > 0, each in its pointwise or its batched form. A
+// vectorised subclass supplies ComputePhysicsDerivatives instead and never
+// reaches these.
+constexpr std::array<std::pair<std::string_view, std::string_view>, 3> required_aux_methods = {{
+    {"AuxGPrime", "AuxGPrime_v"}, {"dSources_dPhi", "dSources"}, {"dSigma_dPhi", "dSigma"}}};
 
 namespace py = pybind11;
 
@@ -53,122 +70,77 @@ public:
   explicit PyTransportSystem(SystemSpec spec) : TransportSystem(std::move(spec)) {}
 
   void initializeOverrides() {
-    auto make_override = [this](const char *method_name) {
+    // name.data(), never a temporary's c_str(): every name here is a string
+    // literal, so data() is null-terminated and stable, and pybind11 caches a
+    // missing override keyed on the name's *pointer* -- a reused temporary
+    // buffer makes one name's miss answer for the next name looked up.
+    auto insert_if_present = [this](std::string_view name) {
       py::gil_scoped_acquire gil;
-      py::function _override = py::get_override(this, method_name);
-      return _override;
+      py::function f = py::get_override(this, name.data());
+      if (!f)
+        return false;
+      method_overrides.insert(std::make_pair(name, std::move(f)));
+      return true;
+    };
+    auto present = [this](std::string_view name) {
+      return optional_override(name) != nullptr;
     };
 
-    std::vector<std::string_view> missing_methods;
-    std::vector<std::string_view> missing_vectorized_methods;
-    std::vector<std::string_view> missing_scalar_method;
+    for (const auto &name : optional_derivative_names)
+      insert_if_present(name);
+    for (const auto &name : batched_hook_names)
+      insert_if_present(name);
 
-    for (const auto &method_name : required_method_names) {
-      auto _override = make_override(method_name.data());
-      if (!_override) {
-        missing_methods.push_back(method_name);
-      } else {
-        method_overrides.insert(
-            std::make_pair(method_name, std::move(_override)));
-      }
-    }
+    bool all_batched = true;
+    for (const auto &name : required_method_names_vectorized)
+      all_batched = insert_if_present(name) && all_batched;
+    vectorized = all_batched;
 
-    for (const auto &method_name : optional_derivative_names) {
-      auto _override = make_override(method_name.data());
-      if (_override)
-        method_overrides.insert(
-            std::make_pair(method_name, std::move(_override)));
-    }
+    // A requirement is met by the pointwise hook or by its batched form.
+    std::vector<std::string> missing;
+    auto require = [&](std::pair<std::string_view, std::string_view> hook, std::string_view why) {
+      const bool pointwise = insert_if_present(hook.first);
+      if (!pointwise && !present(hook.second))
+        missing.push_back(std::string(hook.first) + " (or, over the whole batch, " +
+                          std::string(hook.second) + ")" + std::string(why));
+    };
 
-    for (const auto &method_name : required_method_names_vectorized) {
-      auto _override = make_override(method_name.data());
-      if (!_override) {
-        missing_vectorized_methods.push_back(method_name);
-      } else {
-        method_overrides.insert(
-            std::make_pair(method_name, std::move(_override)));
-      }
-    }
-
-    if (nScalars > 0) {
-      for (const auto &method_name : required_scalar_methods) {
-        auto _override = make_override(method_name.data());
-        if (!_override) {
-          missing_scalar_method.push_back(method_name);
-        } else {
-          method_overrides.insert(
-              std::make_pair(method_name, std::move(_override)));
-        }
-      }
-    }
-
-    bool non_vectorized = missing_methods.empty();
-    bool has_scalar = missing_scalar_method.empty();
-    vectorized = missing_vectorized_methods.empty();
-
-    if (!vectorized || !non_vectorized) {
-      if (vectorized || non_vectorized) {
-        // do nothing
-      } else {
-        std::string error_message = "The following required methods are "
-                                    "missing in the Python subclass:\n";
-        error_message += "Non-vectorized methods:\n";
-        for (const auto &method_name : missing_methods) {
-          error_message += std::string(method_name) + "\n";
-        }
-        error_message += "Vectorized methods:\n";
-        for (const auto &method_name : missing_vectorized_methods) {
-          error_message += std::string(method_name) + "\n";
-        }
-        error_message += "MaNTA requires either all vectorized or all "
-                         "non-vectorized methods to be implemented. Please "
-                         "implement the missing methods and try again.\n";
-        throw std::runtime_error(error_message);
-      }
-    }
-
-    if (!has_scalar) {
-      std::string error_message = "The following required scalar methods are "
-                                  "missing in the Python subclass:\n";
-      for (const auto &method_name : missing_scalar_method) {
-        error_message += std::string(method_name) + "\n";
-      }
-      throw std::runtime_error(error_message);
-    }
-
-    if (nAux > 0) {
+    if (!vectorized) {
+      for (const auto &hook : required_method_names)
+        require(hook, "");
       // These used to be inserted unconditionally, including when
       // py::get_override returned an empty function -- and the call sites then
       // invoked it. A Python subclass that set nAux = 1 and forgot AuxGPrime
       // therefore *segfaulted* partway through the first Jacobian evaluation,
-      // with nothing naming the missing method. Collect and report them the
-      // same way the scalar methods are, so the failure happens at setup and
-      // says what to write.
-      //
-      // Only required on the pointwise path: a vectorised subclass provides
-      // ComputePhysicsDerivatives, which supersedes all three.
-      std::vector<std::string_view> missing_aux_methods;
-      for (const auto &method_name : required_aux_methods) {
-        auto _override = make_override(method_name.data());
-        if (!_override) {
-          if (!vectorized)
-            missing_aux_methods.push_back(method_name);
-        } else {
-          method_overrides.insert(
-              std::make_pair(method_name, std::move(_override)));
-        }
-      }
+      // with nothing naming the missing method.
+      if (nAux > 0)
+        for (const auto &hook : required_aux_methods)
+          require(hook, " -- required because this case sets nAux > 0");
+    } else if (nAux > 0) {
+      for (const auto &hook : required_aux_methods)
+        insert_if_present(hook.first);
+    }
 
-      if (!missing_aux_methods.empty()) {
-        std::string error_message =
-            "This physics case sets nAux > 0, so the following methods are "
-            "required in the Python subclass but are missing:\n";
-        for (const auto &method_name : missing_aux_methods) {
+    if (!missing.empty()) {
+      std::string error_message = "The Python transport system subclass is missing:\n";
+      for (const auto &m : missing)
+        error_message += "  " + m + "\n";
+      error_message += "Write each, pointwise or over the whole batch, or implement "
+                       "ComputePhysics and ComputePhysicsDerivatives to supply them all "
+                       "at once.\n";
+      throw std::runtime_error(error_message);
+    }
+
+    if (nScalars > 0) {
+      std::vector<std::string_view> missing_scalar_method;
+      for (const auto &method_name : required_scalar_methods)
+        if (!insert_if_present(method_name))
+          missing_scalar_method.push_back(method_name);
+      if (!missing_scalar_method.empty()) {
+        std::string error_message = "The following required scalar methods are "
+                                    "missing in the Python subclass:\n";
+        for (const auto &method_name : missing_scalar_method)
           error_message += std::string(method_name) + "\n";
-        }
-        error_message +=
-            "Provide them, or implement ComputePhysics and "
-            "ComputePhysicsDerivatives to take the vectorised path instead.\n";
         throw std::runtime_error(error_message);
       }
     }
@@ -176,13 +148,42 @@ public:
     initialized = true;
   }
 
+  // A batched derivative hook's dict, into the solver's block -- pre-sized and
+  // zeroed -- one slice at a time with its shape checked. GlobalState's own
+  // assignment checks nothing, and a slice of the wrong shape would otherwise
+  // resize the solver's block under it. An empty slice is a zero one: the dict
+  // has to carry every key (the caster reads them all), but a case need not
+  // build a block of zeros it has no entries for.
+  static void assignBatched(GlobalState &out, GlobalState const &in, std::string_view hook) {
+    auto put = [&](Matrix &dst, Matrix const &src, const char *slice) {
+      if (src.size() == 0)
+        return;
+      if (src.rows() != dst.rows() || src.cols() != dst.cols())
+        throw std::runtime_error(std::string(hook) + " returned \"" + slice + "\" of shape (" +
+                                 std::to_string(src.cols()) + ", " + std::to_string(src.rows()) +
+                                 "); it must be (" + std::to_string(dst.cols()) + ", " +
+                                 std::to_string(dst.rows()) + "), (points, variables) like the states.");
+      dst = src;
+    };
+    put(out.Variable(), in.Variable(), "Variable");
+    put(out.Derivative(), in.Derivative(), "Derivative");
+    put(out.Flux(), in.Flux(), "Flux");
+    put(out.Aux(), in.Aux(), "Aux");
+  }
+
+  // A batched value hook's result, checked for one value per point.
+  static Values batchedValues(py::object const &result, Index nPoints, std::string_view hook) {
+    Values v = result.cast<Values>();
+    if (v.size() != nPoints)
+      throw std::runtime_error(std::string(hook) + " returned " + std::to_string(v.size()) +
+                               " values for " + std::to_string(nPoints) + " points.");
+    return v;
+  }
+
   /// Look up a Python override, failing with its name rather than crashing.
   ///
   /// `method_overrides[name]` default-constructs an empty py::function for a
-  /// key that was never inserted, and calling that dereferences null. Several
-  /// of the names used at the call sites below -- the "_v" variants in
-  /// particular -- are never inserted by initializeOverrides at all, so this is
-  /// not a hypothetical.
+  /// key that was never inserted, and calling that dereferences null.
   /// Wrap a State so Python sees named, name-indexable fields rather than a
   /// dict of five arrays. Non-owning, so this must not outlive the call.
   ///
@@ -374,13 +375,9 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      if (!vectorized)
-        return TransportSystem::SigmaFn(
-            i, states, abscissae, time); // Call base class version which will
-                                         // loop over non-vectorized method
-
-      return override_for("SigmaFn_v")(i, states, abscissae, time)
-          .cast<Values>();
+      if (auto *f = optional_override("SigmaFn_v"))
+        return batchedValues((*f)(i, states, abscissae, time), states.size(), "SigmaFn_v");
+      return TransportSystem::SigmaFn(i, states, abscissae, time); // the pointwise hook, point by point
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate SigmaFn: ") +
@@ -409,13 +406,9 @@ public:
 
     try {
       py::gil_scoped_acquire gil;
-      if (!vectorized)
-        return TransportSystem::Sources(
-            i, states, abscissae, time); // Call base class version which will
-                                         // loop over non-vectorized method
-
-      return override_for("Sources_v")(i, states, abscissae, time)
-          .cast<Values>();
+      if (auto *f = optional_override("Sources_v"))
+        return batchedValues((*f)(i, states, abscissae, time), states.size(), "Sources_v");
+      return TransportSystem::Sources(i, states, abscissae, time); // the pointwise hook, point by point
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate Sources: ") +
@@ -585,15 +578,11 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      if (!vectorized) {
-        TransportSystem::dSigma(i, out, states, abscissae,
-                                time); // Call base class version which will
-                                       // loop over non-vectorized method
+      if (auto *f = optional_override("dSigma")) {
+        assignBatched(out, (*f)(i, states, abscissae, time).cast<GlobalState>(), "dSigma");
         return;
       }
-
-      out = override_for("dSigma")(i, states, abscissae, time)
-                .cast<GlobalState>();
+      TransportSystem::dSigma(i, out, states, abscissae, time); // the pointwise hooks
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSigma: ") +
@@ -607,15 +596,11 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      if (!vectorized) {
-        TransportSystem::dSources(i, out, states, abscissae,
-                                  time); // Call base class version which will
-                                         // loop over non-vectorized method
+      if (auto *f = optional_override("dSources")) {
+        assignBatched(out, (*f)(i, states, abscissae, time).cast<GlobalState>(), "dSources");
         return;
       }
-
-      out = override_for("dSources")(i, states, abscissae, time)
-                .cast<GlobalState>();
+      TransportSystem::dSources(i, out, states, abscissae, time); // the pointwise hooks
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate dSources: ") +
@@ -642,13 +627,9 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      if (!vectorized)
-        return TransportSystem::AuxG(
-            i, states, abscissae, time); // Call base class version which will
-                                         // loop over non-vectorized method
-
-      return override_for("AuxG_v")(i, states, abscissae, time)
-          .cast<Values>();
+      if (auto *f = optional_override("AuxG_v"))
+        return batchedValues((*f)(i, states, abscissae, time), states.size(), "AuxG_v");
+      return TransportSystem::AuxG(i, states, abscissae, time); // the pointwise hook, point by point
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate AuxG_v: ") +
@@ -676,15 +657,11 @@ public:
       initializeOverrides();
     try {
       py::gil_scoped_acquire gil;
-      if (!vectorized) {
-        TransportSystem::AuxGPrime(i, out, states, abscissae,
-                                   time); // Call base class version which will
-                                          // loop over non-vectorized method
+      if (auto *f = optional_override("AuxGPrime_v")) {
+        assignBatched(out, (*f)(i, states, abscissae, time).cast<GlobalState>(), "AuxGPrime_v");
         return;
       }
-
-      out = override_for("AuxGPrime_v")(i, states, abscissae, time)
-                .cast<GlobalState>();
+      TransportSystem::AuxGPrime(i, out, states, abscissae, time); // the pointwise hook
     } catch (const std::exception &e) {
       throw std::runtime_error(
           std::string("Error occurred when trying to calculate AuxGPrime: ") +

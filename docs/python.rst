@@ -300,12 +300,49 @@ identically zero, which is what the framework's zeroed output buffer already
 provides. Before this, the simplest possible case had to write four functions
 returning ``np.zeros(nVars)`` before it would run.
 
-The subclass is inspected **once**, when it is first used, and classified as
-either *pointwise* or *vectorised*. The vectorised path requires **both**
-``ComputePhysics`` and ``ComputePhysicsDerivatives`` to be overridden; supplying
-one without the other is rejected rather than silently half-used. The same probe
-enforces the extra hooks that become mandatory when ``nScalars > 0`` or
-``nAux > 0``.
+The subclass is inspected **once**, when it is first used. It can supply the
+physics three ways, and mix the first two freely:
+
+* **pointwise**, one point per call, through the hooks above;
+* **one hook at a time over the whole batch**, through the batched form of a
+  hook, which stands in for the pointwise ones it covers;
+* **all at once**, through ``ComputePhysics`` and ``ComputePhysicsDerivatives``
+  together -- the *vectorised* path, which supersedes every hook.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 40 38
+
+   * - Batched hook
+     - Stands in for
+     - Returns
+   * - ``SigmaFn_v``
+     - ``SigmaFn``
+     - one value per point
+   * - ``Sources_v``
+     - ``Sources``
+     - one value per point
+   * - ``AuxG_v``
+     - ``AuxG``
+     - one value per point
+   * - ``dSigma``
+     - ``dSigmaFn_du``, ``dSigmaFn_dq``, ``dSigma_dPhi``
+     - a GlobalState dict
+   * - ``dSources``
+     - ``dSources_du``, ``dSources_dq``, ``dSources_dsigma``, ``dSources_dPhi``
+     - a GlobalState dict
+   * - ``AuxGPrime_v``
+     - ``AuxGPrime``
+     - a GlobalState dict
+
+Each takes ``(i, states, x, t)``, ``states`` being the GlobalState dict below
+and ``x`` the points. A derivative hook's dict carries every key, each slice
+shaped like the states' (``(nPoints, nVars)``, ``(nPoints, nAux)``); a slice
+with no entries may be left empty, and a slice of any other shape is refused by
+name. ``SigmaFn`` and ``Sources`` -- and, with ``nAux > 0``, ``AuxGPrime``,
+``dSources_dPhi`` and ``dSigma_dPhi`` -- are required in one form or the other
+unless the case is vectorised; a missing one is reported with both of its
+names, at first use. ``nScalars > 0`` adds its own hooks, in every form.
 
 State and GlobalState
 ---------------------
