@@ -82,7 +82,7 @@ struct LevelError
 // problem it had solved exactly at k = 1. A `> 0.0` guard does not catch it,
 // because 2.6e-15 is greater than zero.
 //
-// Absolute_tolerance is the right floor and costs no new configuration key: it
+// AbsoluteTolerance is the right floor and costs no new configuration key: it
 // is per variable, and it already means exactly "values of u below this do not
 // matter" -- the user has had to choose it for this very problem. Adding it
 // rather than switching on it keeps the measure smooth, and on any problem with
@@ -95,7 +95,7 @@ double errorScale(AccuracyEstimate const &e, SolverConfig const &config,
                   Grid const &grid, Index var)
 {
     // One value, or one per variable.
-    const auto &atol = config.Absolute_tolerance;
+    const auto &atol = config.AbsoluteTolerance;
     const double a = atol.empty()
                          ? 0.0
                          : atol[std::min<size_t>(var, atol.size() - 1)];

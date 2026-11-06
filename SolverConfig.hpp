@@ -58,7 +58,7 @@ struct SolverConfig
     double                   t_initial;
     double                   Relative_tolerance;
     std::string              ErrorWeights;
-    std::vector<double>      Absolute_tolerance;
+    std::vector<double>      AbsoluteTolerance;
     double                   MinStepSize;
     double                   initialTimestep;
     int                      OutputPoints;

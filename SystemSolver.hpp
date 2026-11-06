@@ -892,7 +892,7 @@ class SystemSolver
             // length used to fall through getErrorWeights to a hard-coded 1e-8,
             // silently -- a far tighter solve than was asked for.
             if (a.size() != 1 && a.size() != static_cast<size_t>(nVars))
-                throw std::invalid_argument("Absolute_tolerance has " + std::to_string(a.size()) +
+                throw std::invalid_argument("AbsoluteTolerance has " + std::to_string(a.size()) +
                                             " entries; it takes one, or one per variable (" +
                                             std::to_string(nVars) + ").");
             atol = a;
