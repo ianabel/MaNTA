@@ -7,7 +7,7 @@ import enum
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'getPhysicsNodes', 'getPhysicsWeights', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EquilibriumModel', 'EquilibriumResponse', 'EquilibriumSpec', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'GeometryDerivatives', 'GeometrySlot', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'getPhysicsNodes', 'getPhysicsWeights', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerEquilibriumModel', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -119,6 +119,42 @@ class BoundaryKind:
         ...
     @property
     def value(self) -> int:
+        ...
+class EquilibriumModel:
+    def __init__(self, spec: EquilibriumSpec) -> None:
+        ...
+    def resetForRun(self) -> None:
+        ...
+    def responseStep(self) -> float:
+        ...
+    def setTolerances(self, relative: typing.SupportsFloat | typing.SupportsIndex, absolute: typing.SupportsFloat | typing.SupportsIndex) -> bool:
+        ...
+    @property
+    def nGeometry(self) -> int:
+        ...
+    @property
+    def spec(self) -> EquilibriumSpec:
+        ...
+class EquilibriumResponse(enum.Enum):
+    """
+    Where an equilibrium model's response dg = G'(p) dp comes from: Differenced, a forward difference of Solve (the default); Model, the model's own applyResponse and applyResponseTranspose.
+    """
+    Differenced: typing.ClassVar[EquilibriumResponse]  # value = <EquilibriumResponse.Differenced: 0>
+    Model: typing.ClassVar[EquilibriumResponse]  # value = <EquilibriumResponse.Model: 1>
+class EquilibriumSpec:
+    def __init__(self, geometry: collections.abc.Sequence[GeometrySlot], label: str, name: str = 'Field', response: EquilibriumResponse = ...) -> None:
+        ...
+    @property
+    def geometry(self) -> list[GeometrySlot]:
+        ...
+    @property
+    def label(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def response(self) -> EquilibriumResponse:
         ...
 class EvaluationCadence:
     """
@@ -363,6 +399,57 @@ class Field:
     @source_reads_time_derivatives.setter
     def source_reads_time_derivatives(self, arg0: bool) -> None:
         ...
+class GeometryDerivatives:
+    """
+    Members:
+    
+      None_
+    
+      Analytic
+    
+      Differenced
+    """
+    Analytic: typing.ClassVar[GeometryDerivatives]  # value = <GeometryDerivatives.Analytic: 1>
+    Differenced: typing.ClassVar[GeometryDerivatives]  # value = <GeometryDerivatives.Differenced: 2>
+    None_: typing.ClassVar[GeometryDerivatives]  # value = <GeometryDerivatives.None_: 0>
+    __members__: typing.ClassVar[dict[str, GeometryDerivatives]]  # value = {'None_': <GeometryDerivatives.None_: 0>, 'Analytic': <GeometryDerivatives.Analytic: 1>, 'Differenced': <GeometryDerivatives.Differenced: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
+class GeometrySlot:
+    """
+    One geometry slot an equilibrium model supplies: the only channel from the field into the transport physics, read there as State.geom.
+    """
+    description: str
+    name: str
+    units: str
+    def __init__(self, name: str, description: str = '', units: str = '') -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
 class Grid:
     @typing.overload
     def __init__(self) -> None:
@@ -469,6 +556,10 @@ class Runner:
         ...
     def run_ss(self) -> None:
         ...
+    def set_equilibrium_model(self, model: EquilibriumModel) -> None:
+        """
+        Take the run's geometry from this EquilibriumModel object at the next configure(), in place of one the dict names. None clears it.
+        """
     def solve_adjoint(self, g: typing.SupportsInt | typing.SupportsIndex | None = None) -> None:
         """
         Solve the adjoint J^T z = dG/dy at the current state for objective g, or for every objective when g is None, from the last Jacobian build and without calling the physics. Read the answer with adjoint_state() and objective_sensitivity().
@@ -476,6 +567,9 @@ class Runner:
     def start_steady(self, estimate: bool = True) -> SteadyOutcome:
         ...
     def steadyStats(self) -> dict:
+        ...
+    @property
+    def equilibrium_model(self) -> EquilibriumModel:
         ...
     @property
     def physics_case(self) -> str:
@@ -574,7 +668,8 @@ class SteadyOutcome(enum.IntEnum):
         Convert to a string according to format_spec.
         """
 class SystemSpec:
-    def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = [], regrid: Regrid = ...) -> None:
+    geometryDerivatives: GeometryDerivatives
+    def __init__(self, variables: collections.abc.Sequence[Field], scalars: collections.abc.Sequence[Scalar] = [], aux: collections.abc.Sequence[Aux] = [], regrid: Regrid = ..., readsGeometry: bool = False, geometryDerivatives: GeometryDerivatives = ...) -> None:
         ...
     def validate(self) -> None:
         ...
@@ -583,6 +678,14 @@ class SystemSpec:
         ...
     @aux.setter
     def aux(self, arg0: collections.abc.Sequence[Aux]) -> None:
+        ...
+    @property
+    def readsGeometry(self) -> bool:
+        """
+        Whether the flux, sources or aux rows read State.geom -- the only channel from a field into the physics. A field model is refused for a case without it.
+        """
+    @readsGeometry.setter
+    def readsGeometry(self, arg0: bool) -> None:
         ...
     @property
     def regrid(self) -> Regrid:
@@ -764,6 +867,10 @@ def numbered_spec(nVars: typing.SupportsInt | typing.SupportsIndex, nScalars: ty
 def physics_cases() -> list[str]:
     """
     Every physics case name manta.Runner(name) will accept, ascending. Includes the C++ cases compiled into this extension, anything a loaded plugin registered, and anything registerPhysicsCase was called with.
+    """
+def registerEquilibriumModel(name: str, factory: collections.abc.Callable[[TomlValue, Grid], EquilibriumModel]) -> None:
+    """
+    Register an equilibrium model under the name a config file's EquilibriumModel key, or a Runner.configure dict's, can ask for. factory(config, grid) builds it.
     """
 def registerPhysicsCase(name: str, factory: collections.abc.Callable[[TomlValue, Grid], TransportSystem]) -> None:
     """

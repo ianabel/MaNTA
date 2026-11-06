@@ -221,6 +221,14 @@ it was loaded. Both traps in :doc:`out_of_tree` apply unchanged — compile with
 the flags ``pkg-config --cflags manta`` reports, and do **not** link the plugin
 against ``-lmanta``.
 
+A field
+~~~~~~~
+
+A run with a magnetic field — a registered field or equilibrium model named in
+the dict, or a ``manta.EquilibriumModel`` written in Python and handed over with
+``Runner.set_equilibrium_model`` — and a case reading its geometry through
+``state.geom`` are described in :ref:`field-from-python`.
+
 Writing physics in Python
 -------------------------
 
