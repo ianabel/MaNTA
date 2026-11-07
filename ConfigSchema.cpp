@@ -77,11 +77,12 @@ const std::vector<Entry> &table()
          "Time the integration starts from."},
         {"t_final", {}, Type::Double, Category::Solver, true, false, 0.0,
          "Time the integration ends at; Runner.run(tFinal) overrides it."},
-        {"Relative_tolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
+        {"RelativeTolerance", {"Relative_tolerance"}, Type::Double, Category::Solver, false, false, 1e-3,
          "IDA relative error tolerance."},
-        {"Absolute_tolerance", {}, Type::DoubleList, Category::Solver, false, false,
+        {"AbsoluteTolerance", {"Absolute_tolerance"}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{1e-3},
-         "IDA absolute error tolerance; one value, or one per variable."},
+         "Absolute tolerance, one value or one per variable: the floor of IDA's error weights, "
+         "and of the steady-state test a TimeMarch run stops on."},
         {"ErrorWeights", {}, Type::String, Category::Solver, false, false, std::string{"AlgebraicMax"},
          "How IDA's error weights hold each class of unknown: AlgebraicMax (sigma, q and aux "
          "floored at rtol times their largest magnitude), Pointwise, AllMax, Derivative, "

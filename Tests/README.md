@@ -167,7 +167,7 @@ other block unchanged. The fix declares the derivative rather than removing the
 term from `SigmaFn`, so the physics -- and the solution -- are untouched.
 
 Both times the trigger was the same and was not the fix: at
-`Relative_tolerance = Absolute_tolerance = 1e-2` **the case's own answer is 4.1%
+`RelativeTolerance = AbsoluteTolerance = 1e-2` **the case's own answer is 4.1%
 from the converged one**, against a comparison tolerance of 5e-3. Measured
 against a rtol = 1e-10 run of the same discretisation:
 
@@ -1072,7 +1072,7 @@ These are deliberate and tracked, not oversights:
   formed per *variable* and the auxiliary variables are not looked at, which is
   a real question rather than a missing line — an under-resolved `phi` would not
   raise the degree. Nor is a **multi-variable** case exercised, so the "worst
-  variable wins" reduction and the per-variable `Absolute_tolerance` floor are
+  variable wins" reduction and the per-variable `AbsoluteTolerance` floor are
   covered by inspection only. Under the solution target nothing reads the adjoint
   problem, so `setAdjointProblem` being re-applied to each level's solver is
   tested only through the objective target, below, whose every level needs it.

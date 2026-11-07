@@ -797,7 +797,7 @@ void SystemSolver::initialize()
 // The weights are the state's, not the residual's, which is the scaling IDA
 // itself uses for the quantity this stands in for -- IDACalcIC tests
 // ||J^-1 F||_WRMS, a correction to y, against epsNewt. So the threshold means
-// the same thing at every tolerance setting: tightening Absolute_tolerance
+// the same thing at every tolerance setting: tightening AbsoluteTolerance
 // tightens what counts as a consistent initial state, exactly as it tightens
 // everything else.
 //
@@ -939,9 +939,17 @@ void SystemSolver::integrate(double tFinal)
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
 
-	// Steady-state stopping conditions
+	// The TimeMarch steady-state test: dY/dt on the trace, over one output
+	// interval, in weights built the way IDA builds its own --
+	// 1 / (rtol |lambda| + atol) -- with SteadyStateTolerance as the relative
+	// part and AbsoluteTolerance, per variable, as the floor. The floor was a
+	// hard-coded 1e-3, which for a trace of order one governed at any
+	// SteadyStateTolerance tighter than 1e-3: the key moved nothing across
+	// nine orders. 1e-3 is AbsoluteTolerance's default, so a config that does
+	// not set it stops where it always did.
 	const sunrealtype dydt_rel_tol = steady_state_tol;
-	const sunrealtype dydt_abs_tol = 1e-3;
+	auto dydt_abs_tol = [this](Index v)
+	{ return atol.size() == static_cast<size_t>(nVars) ? atol[v] : atol[0]; };
 
 	if (t0 > tFinal)
 	{
@@ -1076,7 +1084,7 @@ void SystemSolver::integrate(double tFinal)
 				for (Index v = 0; v < nVars; v++)
 				{
 					sunrealtype xi = dydt.lambda(v)[i] * dt;
-					sunrealtype wi = 1.0 / (y.lambda(v)[i] * dydt_rel_tol + dydt_abs_tol);
+					sunrealtype wi = 1.0 / (std::abs(y.lambda(v)[i]) * dydt_rel_tol + dydt_abs_tol(v));
 					dydt_norm += xi * xi * wi * wi;
 				}
 			dydt_norm = sqrt(dydt_norm);
