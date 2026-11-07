@@ -1,6 +1,7 @@
 #ifndef DEGREEADAPTATION_HPP
 #define DEGREEADAPTATION_HPP
 
+#include <exception>
 #include <memory>
 
 #include "SolverConfig.hpp"
@@ -149,6 +150,64 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 unsigned int k0,
                                                 double tFinal,
                                                 std::unique_ptr<SystemSolver> solvedFirstLevel);
+
+// runAdaptiveDegree's loop, a level at a time, for a driver that solves each
+// level itself -- PyRunner's sliced steady solve, which runs a level in slices
+// and has to hand back between them. runAdaptiveDegree is this with every
+// level's solve made by runSolver, so the two make the same levels from the same
+// states and arrive at the same answer bit for bit.
+//
+//     DegreeAdaptationLoop loop(config, physics, grid, k0);
+//     for (;;) {
+//         loop.openLevel(system);   // built and configured, not initialised
+//         ... solve it to a steady state, and finish the run on it ...
+//         if (loop.closeLevel(system)) break;   // false: state handed on, system reset
+//     }
+//     loop.finish();
+//
+// Everything runAdaptiveDegree's comment says about one solver alive at a time,
+// the restart transfer and the refusals is this class's. finish() clears the
+// restart state the transfers set, and must be called however the loop ends --
+// a driver that abandons it too -- or the next run on the configuration resumes
+// from the last level handed on.
+class DegreeAdaptationLoop
+{
+public:
+    DegreeAdaptationLoop(SolverConfig const &config, PhysicsInstance &physics, Grid const &grid,
+                         unsigned int k0);
+    ~DegreeAdaptationLoop();
+    DegreeAdaptationLoop(DegreeAdaptationLoop const &) = delete;
+    DegreeAdaptationLoop &operator=(DegreeAdaptationLoop const &) = delete;
+
+    // Build the current level's solver into `system`, configured from the
+    // configuration (with the previous level's pseudo-time step carried) and
+    // with the adjoint problem attached. The first level is refused here if the
+    // configuration time-marches.
+    void openLevel(std::unique_ptr<SystemSolver> &system);
+
+    // A level after the first that failed from a carried pseudo-time step can be
+    // retried from the configured one: `system` is rebuilt from the
+    // configuration, keeping the warm state. False when there is nothing to
+    // fall back to, and the failure is the caller's to propagate.
+    bool retry(std::unique_ptr<SystemSolver> &system, std::exception const &failure);
+
+    // The level `system` holds has been solved: count it, measure it, and decide.
+    // True when the loop is done, leaving the answer in `system`; false when the
+    // state has been handed to the next degree and `system` reset.
+    bool closeLevel(std::unique_ptr<SystemSolver> &system);
+
+    // Clear the restart state and, with SteadyStateDiagnostics, print the run's
+    // totals. Idempotent; `report` false skips the totals, for a loop abandoned
+    // part way.
+    void finish(bool report = true);
+
+    unsigned int degree() const;
+    int levels() const;
+
+private:
+    struct State;
+    std::unique_ptr<State> s;
+};
 std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                                                 PhysicsInstance &physics,
                                                 Grid const &grid,

@@ -1685,8 +1685,17 @@ gives. Four pieces to know:
   SUNDIALS objects that **nothing else frees** — `~SystemSolver` does not call
   `destroySundials` — so `configure()`, `~PyRunner` and any exception out of the
   loop all abandon it explicitly; that is why the context manager is the form to
-  prefer. `DegreeAdaptation` is refused, since adapting the degree replaces the
-  solver the loop is holding.
+  prefer. Under `DegreeAdaptation` the loop is `runAdaptiveDegree`'s own,
+  `DegreeAdaptationLoop`, a level at a time: the slice that converges a level
+  finishes the run on it exactly as `runSolver` would, closes the level, and if
+  the degree goes up builds and initialises the next and returns `Refined` (the
+  enum's last value, so the FFI's int32s keep their meaning). One loop is what
+  makes a sliced run land on `run_ss()`'s state bit for bit
+  (`test_a_sliced_degree_adaptation_reaches_the_answer_run_ss_does`); a second
+  copy of the sequencing would drift. Every exit clears the restart state the
+  level transfers set -- `abandonAdaptation` -- or the next run on the
+  configuration resumes from the last level handed on. `MeshAdaptation` and the
+  ladders are still refused: they replace the mesh too.
   The same four names are FFI ops (`ffi.hpp`, CPU only like `run`/`run_ss`), so
   `manta.SteadySolve(ffi_runner)` works — `steadyStats()` and
   `objectiveEstimate()` need none, being host-side reads that touch no device
