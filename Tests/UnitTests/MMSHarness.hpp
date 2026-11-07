@@ -144,14 +144,14 @@ struct Tolerances
     double relative = 1e-9;
 };
 
-// Run to tFinal on a uniform grid of nCells cells at degree k, and return the L2
-// errors of the final solution and of its postprocessing.
+// Run to tFinal on a uniform grid of nCells cells at degree k, and return
+// whatever `measure(sys, grid, tFinal)` makes of the final state.
 //
 // runSolver writes <stem>.nc / .dat / .restart.nc into the working directory,
 // so the output name is unique per case and the files are removed afterwards.
-template <class Problem>
-Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
-                           bool superconvergent = false, Tolerances tol = {})
+template <class Problem, class Measure>
+auto solveAndMeasureWith(Index k, Index nCells, double tFinal, bool superconvergent,
+                         Tolerances tol, Measure &&measure)
 {
     Grid grid(0.0, 1.0, nCells);
     Problem problem;
@@ -184,18 +184,32 @@ Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
     // destroyed. Rebuild it from yJac, which the solver owns.
     sys.postprocessor->computeUStar(sys.yJac);
 
-    Errors err{
-        l2Error(sys, grid, tFinal),
-        l2ErrorOf([&](double x) { return sys.getPostprocessor()->uStar(0)(x); }, grid,
-                  tFinal)};
-
-    if constexpr (HasExtraError<Problem>)
-        err.extra = Problem::extraError(sys, grid, tFinal);
+    auto result = measure(sys, grid, tFinal);
 
     for (const char *suffix : {".nc", ".dat", ".restart.nc"})
         std::remove((stem + suffix).c_str());
 
-    return err;
+    return result;
+}
+
+// The two errors every problem reports, plus the problem's extra one if it has
+// one. solveAndMeasureWith takes any measurement, for a problem with more than
+// one thing to measure.
+template <class Problem>
+Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
+                           bool superconvergent = false, Tolerances tol = {})
+{
+    return solveAndMeasureWith<Problem>(
+        k, nCells, tFinal, superconvergent, tol,
+        [](SystemSolver &sys, Grid const &grid, double t)
+        {
+            Errors err{l2Error(sys, grid, t),
+                       l2ErrorOf([&](double x) { return sys.getPostprocessor()->uStar(0)(x); },
+                                 grid, t)};
+            if constexpr (HasExtraError<Problem>)
+                err.extra = Problem::extraError(sys, grid, t);
+            return err;
+        });
 }
 
 /// The order between two consecutive grids, log(e0/e1) / log(n1/n0).
