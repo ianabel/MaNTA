@@ -702,8 +702,14 @@ Two return codes worth being able to read without looking them up:
   `python-physics/mirror-plasma`'s voltage controller from ever starting — and the
   C++ `MirrorPlasma` had the same misdeclaration, so neither implementation ever
   ran with `useConstantVoltage`. **Before theorising about the guess, ask which
-  unknowns each failing row can actually reach**: print `ScalarGPrime`'s `dGdot`
-  and check it is nonzero for every differential scalar. The trap is that the
+  unknowns each failing row can actually reach** -- `checkScalarDerivative`
+  (`Tests/UnitTests/ScalarDerivativeCheck.hpp`) asks it of every scalar row it is
+  handed, through `scalarRowsCalcICCannotReach`. A row reaches CalcIC if it
+  touches a `d/dt` of `u` or of a differential scalar, or the value of `sigma`,
+  `q`, an aux variable or an algebraic scalar. `ScalarTestLD3`'s `G_0 = E - (M0 - M)`
+  did not while E was declared differential; E is a function of `u`, so it is
+  algebraic, and the `dE/dt` its controller reads is `-dM/dt`, a `du/dt` term.
+  A scalar whose `d/dt` some row wants is not thereby differential. The trap is that the
   residual can be tiny — 4.3e-6 there, just the difference between two quadrature
   rules for the same integral — and still fatal, because irreducible beats small.
 
@@ -1609,11 +1615,16 @@ gives. Four pieces to know:
 
 * **Trampolines.** `PyTransportSystem` / `PyAdjointProblem` dispatch each virtual
   to a Python override. `PyTransportSystem::initializeOverrides` probes the
-  subclass once and classifies it as *pointwise* or *vectorised* (the latter
-  requires both `ComputePhysics` and `ComputePhysicsDerivatives`); it also
-  enforces the extra hooks required when `nScalars > 0` or `nAux > 0`. Look up
+  subclass once. It is *vectorised* if it overrides both `ComputePhysics` and
+  `ComputePhysicsDerivatives`; otherwise each hook is pointwise or batched
+  (`SigmaFn_v`, `Sources_v`, `AuxG_v`, `dSigma`, `dSources`, `AuxGPrime_v` --
+  `batched_hook_names`), freely mixed, and a requirement -- including the extra
+  ones when `nScalars > 0` or `nAux > 0` -- is met by either form. Look up
   overrides with `override_for(name)`, never `method_overrides[name]` — the
-  latter default-constructs a null `py::function` and calling it segfaults.
+  latter default-constructs a null `py::function` and calling it segfaults. And
+  hand `py::get_override` a stable name pointer, never a temporary's `c_str()`:
+  pybind11 caches a *missing* override keyed on the pointer, so a reused buffer
+  makes one name's miss answer for the next.
 * **State is a view, GlobalState is a dict.** A pointwise `State` reaches Python
   as a non-owning window onto solver memory (`PyState.hpp`) with named fields —
   `s.u`, `s.q`, `s.sigma`, `s.sigmaHat`, `s.phi`, `s.scalars` — each indexable by

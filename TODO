@@ -44,6 +44,25 @@ Raised 2026-09-30, when the build stopped writing into the source tree.
   or goes, and docs/_build/ leaves .gitignore.
 
 
+Revisit a better error measure for the discretisation.
+Raised 2026-11-06; the last attempt stalled on a choice rather than a defect.
+
+  The run has no calibrated measure of its own discretisation error. The
+  modal-decay sensor ranks cells and degrees but is not an error;
+  ||u* - u_h|| under-predicts the true error by up to 250x on Shestakov, worse
+  with resolution, and a ladder's two-level difference over-predicts by up to
+  12x (PERFORMANCE.md, "Why the tolerance is not chosen automatically"; commit
+  9be3e48). The dual-weighted estimate is calibrated, but only for a named
+  objective.
+
+  What blocked the last attempt was a choice of error, not an implementation:
+  for steady-state diffusion the error in q drives the error in u, so which
+  quantity the measure is taken on -- u, q, the flux, or a norm coupling them --
+  had to be settled first and was not. Settle that before writing code; the
+  answer serves whatever the measure then drives (a tolerance, mesh grading,
+  the degree).
+
+
 TimeMarch stops on dY/dt; the other two steady modes stop on the residual.
 Found 2026-09-23, re-measuring the paper's steady-cost table at a tolerance a
 plasma transport run would actually use.
@@ -132,29 +151,6 @@ answer as a direct solve and finding it did not, in exactly two entries.
   difference visible has been closed. Left here because "the two paths write
   different things into the same slot" is worth knowing before touching either.
 
-
-Per-call N_Vector allocation in the coupled Jacobian solve.
-The scalar half of this is fixed (2026-08-25): solveTransportJac used to
-N_VClone and destroy nScalars + 2 full-length vectors on *every* call -- once per
-Newton iteration, and nField + 1 times that under solveCoupledJacExact -- for
-working space whose size is fixed by nScalars at construction. They are now
-members (solveScalarD/E/G), allocated beside v and w by
-allocateScalarWorkVectors() and rebuilt by setFieldModel when getDoF() changes.
-
-  What is left, in the same shape and for the same reason:
-
-    solveCoupledJacExact   N_Vector col, AinvA1[nField], Ainv_r1   (nField + 2)
-    solveCoupledJacIterative  N_Vector work                        (1)
-
-  nField is fixed once setFieldModel has run, exactly as nScalars is fixed at
-  construction, so the same treatment applies -- a2 already demonstrates the
-  pattern for an nField-sized array of full-length vectors.
-
-  A model is registered now, and the theta pinch is a fixture that would notice:
-  under FieldSolve = exact at nField = 516 that is 518 full-length vectors made
-  and destroyed per Jacobian solve. The exact path is the verification tool,
-  though, and the iterative one allocates one, so it is a cost on the path
-  nobody should be timing.
 
 K_global is factorised densely, and it is 73-91% of a low-k run.
 Found 2026-08-25. FIXED the same day -- util/BandedMatrix.hpp, and the entry is
@@ -288,18 +284,8 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
   g++-14 legs should be treated as capable of failing for reasons unrelated to
   the change under review.
 
-Investigate occasional wiggles in outputs.
-
 Left over from the TransportSystem interface work. Everything else in that plan
 landed; these are the pieces that were deliberately not done, with the reason.
-
-  - Per-hook vectorisation in the Python trampoline. `override_for("SigmaFn_v")`
-    and the other `_v` names are looked up but never inserted into
-    method_overrides, so they can only throw: implementing `ComputePhysics` and
-    `ComputePhysicsDerivatives` together remains the only vectorised route. A
-    case that wants to vectorise one hook and leave the rest pointwise cannot.
-    Registering the `_v` names in initializeOverrides is most of the fix; the
-    rest is dropping the all-or-nothing classification.
 
   - The autodiff Source still receives the *stored* sigma, not sigma_hat.
     State::sigmaHat exists and is correct, but AutodiffTransportSystem::Sources
@@ -337,38 +323,6 @@ landed; these are the pieces that were deliberately not done, with the reason.
 Found since, and left undone deliberately rather than overlooked. Each says what
 would have to exist before the fix could be checked, which in every case is the
 reason it was not made:
-
-  - PyAdjointProblem::dAux disagrees with the Python dAux it calls. The
-    trampoline (PyAdjointProblem.hpp:217) hands the Python method a raw
-    GlobalState, but JAXAdjointProblem.dAux expects a converted jax State,
-    because the only caller that matters -- ComputePhysicsDerivatives, which is
-    what SystemSolver.cpp:1661 invokes -- is @Physics_Decorator and converts
-    before calling it. So `AdjointProblem.dAux(...)` from Python raises a vmap
-    in_axes error, while the path the solver takes works. dSigma and dSources
-    have the same shape and presumably the same split.
-
-    Harmless today: nothing in the tree calls the trampoline. Left alone
-    because fixing it means choosing which contract the Python dAux has, and
-    the decorated-state one is load-bearing for ComputePhysicsDerivatives --
-    so the honest fix is probably to stop binding these three, the way
-    ScalarGPrime and ComputePhysicsDerivatives already are not. Found while
-    fixing the JAXAuxTest xfail; it cost a wrong turn there, because a test
-    driving AdjointProblem.dAux looks like it exercises the solver's path and
-    does not.
-
-  - No C++ test asserts that a scalar declared differential has a time
-    derivative in its G. Without one, IDACalcIC is handed a row whose every
-    quantity it holds fixed, and it fails with IDA_LINESEARCH_FAIL (-13) before
-    the first step -- a message about the linesearch, for a defect in the
-    declaration. That is what kept python-physics/mirror-plasma's voltage
-    controller from ever starting, and the C++ MirrorPlasma carried the same
-    misdeclaration before it was removed, so this is not specific to the Python
-    surface. The Python side now pins it in
-    test_a_differential_scalars_constraint_reaches_a_calcic_unknown; the C++
-    equivalent belongs next to checkScalarDerivative in ScalarJacobianTests.cpp
-    and is cheap -- call ScalarGPrime and assert dGdot is not identically zero
-    for each differential scalar. Two of the three fixtures there would have to
-    be checked against it first.
 
   - AutodiffTransportSystem::MMS_Source (PhysicsCases/AutodiffTransportSystem.cpp)
     still evaluates the plain, geometry-blind Flux/Source overloads directly,

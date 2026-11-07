@@ -346,6 +346,47 @@ BOOST_AUTO_TEST_CASE(the_reported_scalar_derivative_is_the_real_one)
     SUNContext_Free(&ctx);
 }
 
+// The check checkScalarDerivative now runs on every case it is handed: a scalar
+// row IDACalcIC cannot move. Here against the declaration that kept the mirror
+// plasma's voltage controller from starting -- MinimalScalarSystem's G,
+// mu - BETA Int u, with mu flagged differential, so the row reads only frozen
+// values -- and against the honest pair, which it must leave alone.
+BOOST_AUTO_TEST_CASE(a_scalar_row_calcic_cannot_reach_is_named)
+{
+    const Index k = 2;
+    Grid grid(0.0, 1.0, 4);
+
+    auto missingFor = [&](TransportSystem &problem)
+    {
+        SystemSolver sys(grid, k, &problem);
+        sys.setTau(1.0);
+        sys.resetCoeffs();
+        sys.initialiseMatrices();
+        SUNContext ctx;
+        SUNContext_Create(SUN_COMM_NULL, &ctx);
+        DGSoln shape(problem.getNumVars(), grid, k, problem.getNumScalars(), problem.getNumAux());
+        N_Vector Y = N_VNew_Serial(shape.getDoF(), ctx), dYdt = N_VClone(Y);
+        N_VConst(0.0, Y);
+        N_VConst(0.0, dYdt);
+        sys.setInitialConditions(Y, dYdt);
+        DGSoln y(problem.getNumVars(), grid, k, N_VGetArrayPointer(Y), problem.getNumScalars(),
+                 problem.getNumAux());
+        DGSoln dydt(problem.getNumVars(), grid, k, N_VGetArrayPointer(dYdt), problem.getNumScalars(),
+                    problem.getNumAux());
+        const auto missing = scalarcheck::scalarRowsCalcICCannotReach(problem, y, dydt, grid, k, 0.0);
+        N_VDestroy(Y);
+        N_VDestroy(dYdt);
+        SUNContext_Free(&ctx);
+        return missing;
+    };
+
+    MinimalScalarSystem misdeclared(true), algebraic(false);
+    DifferentialScalarSystem differential;
+    BOOST_TEST(missingFor(misdeclared) == std::vector<Index>{0}, boost::test_tools::per_element());
+    BOOST_TEST(missingFor(algebraic).empty());
+    BOOST_TEST(missingFor(differential).empty());
+}
+
 BOOST_AUTO_TEST_CASE(solve_jac_eq_inverts_the_bordered_jacobian)
 {
     // The decisive test. Every entry of the bordered system is exactly known,
@@ -436,6 +477,8 @@ BOOST_AUTO_TEST_CASE(scalar_test_ld3_reports_its_own_scalar_derivatives_correctl
         alpha = 0.2
         beta = 1.0
         gamma = 1.0
+        gamma_d = -0.1
+        gamma_I = -0.5
         u0 = 0.1
     )"_toml;
 
@@ -464,6 +507,9 @@ BOOST_AUTO_TEST_CASE(scalar_test_ld3_reports_its_own_scalar_derivatives_correctl
         DGSoln dydt(problem.getNumVars(), grid, k, N_VGetArrayPointer(dYdt),
                     problem.getNumScalars(), problem.getNumAux());
 
+        // PIDTest's gains, so G_1's gamma_d dE/dt -- written as gamma_d dM/dt,
+        // a du/dt term -- and its gamma_I I are both differenced, and every row
+        // is one IDACalcIC can move.
         const double worst =
             checkScalarDerivative(problem, y, dydt, grid, k, 0.0, 1e-6);
         BOOST_TEST_MESSAGE("ScalarTestLD3 derivative k=" << k << " n=" << nCells
