@@ -799,7 +799,10 @@ PYBIND11_MODULE(_manta, m) {
       "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n"
       "Stalled: SteadyStateTest = Objective only. The Newton correction reached "
       "round-off with an objective's estimated error still above its tolerance; "
-      "the state is as converged as the solve can make it.\n\n"
+      "the state is as converged as the solve can make it.\n"
+      "Refined: a sliced solve under DegreeAdaptation converged a level and raised "
+      "the degree. Not a failure, and not the end: continue_steady() solves the "
+      "next level, starting from this one's answer.\n\n"
       "An IntEnum, so a traced outcome compares with the members under jit: "
       "jnp.equal(outcome, SteadyOutcome.Converged).")
       .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
@@ -817,6 +820,10 @@ PYBIND11_MODULE(_manta, m) {
              "with an objective's estimated error still above its tolerance. The state "
              "is as converged as the solve can make it; an objective near zero needs "
              "ObjectiveAbsoluteTolerance.")
+      .value("Refined", SystemSolver::SteadyOutcome::Refined,
+             "A sliced solve under DegreeAdaptation converged a level and raised the "
+             "degree. Not the end: continue_steady() solves the next level from this "
+             "one's answer.")
       .finalize();
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
