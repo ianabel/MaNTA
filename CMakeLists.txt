@@ -70,6 +70,7 @@ set(MANTA_CORE_SOURCES
   ErrorChecker.cpp
   FieldModel.cpp
   FieldModelEquilibrium.cpp
+  GeometrySource.cpp
   MaNTA.cpp
   Matrices.cpp
   MeshAdaptation.cpp

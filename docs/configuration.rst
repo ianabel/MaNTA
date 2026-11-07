@@ -106,18 +106,18 @@ Problem definition
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
    * - ``EquilibriumModel``
-     - ``""``, *file only*
-     - Name of a registered native equilibrium model to take the geometry from,
-       as registered by ``REGISTER_EQUILIBRIUM_MODEL_IMPL``, in place of a
+     - ``""``
+     - Name of a registered equilibrium model to take the geometry from, as
+       registered by ``REGISTER_EQUILIBRIUM_MODEL_IMPL`` or
+       ``manta.registerEquilibriumModel``, in place of a
        ``FieldModel``: the two are refused together. It has no unknowns, so
        ``FieldCoupling`` is ``consistent`` or ``reduced`` for it, ``coupled``
        being refused, and ``auto`` chooses as :ref:`native-coupling-mode`
        describes. An unrecognised name is an error listing what *is*
-       registered; ``ThetaPinchPressureBalance`` is the one in this tree. A
-       ``ProblemSelection`` key, like ``FieldModel``. See
-       :ref:`native-equilibrium`.
+       registered; ``ThetaPinchPressureBalance`` is the one in this tree. See
+       :ref:`native-equilibrium`, and :ref:`field-from-python` for the dict.
    * - ``FieldCoupling``
-     - ``"auto"``, *file only*
+     - ``"auto"``
      - How the ``FieldModel`` is attached. ``coupled`` puts its unknowns in the
        DAE and its derivatives in the Jacobian, and is refused for a case
        declaring no geometry derivatives. ``consistent`` runs it as a black
@@ -137,17 +137,16 @@ Problem definition
        :ref:`native-coupling-mode`. Anything but ``auto`` is refused without a
        ``FieldModel`` or an ``EquilibriumModel``.
    * - ``FieldModel``
-     - ``""``, *file only*
+     - ``""``
      - Name of a registered magnetic-field model to couple to, as registered by
        ``REGISTER_FIELD_MODEL_IMPL``. Absent — the default — means no coupling,
        and an uncoupled run's ``.nc`` is bit-for-bit what it was before the
        feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
        ``RestartData/nField`` is written on every run, and reads back as ``0``.
        An unrecognised name is an error listing what *is* registered;
-       ``ThetaPinchEquilibrium`` is the one in this tree. Like
-       ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
-       ``Runner.configure`` is an error rather than being ignored. See
-       :doc:`field_coupling`.
+       ``ThetaPinchEquilibrium`` is the one in this tree. A
+       ``Runner.configure`` dict names one the same way, with the model's
+       table nested under its name. See :doc:`field_coupling`.
    * - ``GradedGridBoundary``
      - ``false``
      - Grade the grid *geometrically* towards the ends of the domain instead of

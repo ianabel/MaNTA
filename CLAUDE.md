@@ -979,7 +979,7 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   the same slip used to cost one. `both_sources_produce_the_same_solver_config`
   compares `SolverConfig`s, not solvers, so it would not notice.
 * **`Category` and `Reader` are two different enums.** `Category` says what a key
-  *is* (`Solver`, `ProblemSelection`, `Cli`); `Reader` says who is asking
+  *is* (`Solver`, `ProblemSelection`, `FieldSelection`, `Cli`); `Reader` says who is asking
   (`Toml`, `Dict`). Requiredness differs by reader for exactly three keys:
   `t_final` and `TransportSystem` are required of a config file only,
   `OutputFilename` of a dict only — a file falls back to its own stem.
@@ -995,6 +995,16 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   not rejected; the solver never reads them. Conversely `TransportSystem` and
   `PhysicsPlugins` are `Category::ProblemSelection` and are an *error* in a dict,
   rather than being accepted and ignored.
+* **The geometry source is built in one place, `GeometrySource.cpp`.**
+  `FieldModel`, `EquilibriumModel` and `FieldCoupling` are
+  `Category::FieldSelection`: read by both surfaces, and turned into a model
+  and a coupling by `geometrySourceFromConfig` -- or `geometrySourceFor`, for a
+  Python `EquilibriumModel` object -- which runManta and `PyRunner::configure`
+  both call, then `attachTo` the solver before `applySolverConfig`. That is
+  `applySolverConfig`'s job for these keys, and for the same reason: two copies
+  of the coupling choice is how the surfaces would drift.
+  `test_a_dict_couples_a_field_exactly_as_a_config_file_does` compares the two
+  bit for bit at every tier.
 * **Configuration errors propagate.** `loadSolverConfig` throws
   `std::invalid_argument`, which pybind maps to `ValueError` for `manta.run()`;
   `main()` catches it and prints one line for the command line.
@@ -1384,8 +1394,8 @@ solver holds the last `Equilibrium` as a cache keyed byte for byte on the
 solution vector's cell prefix and the time (`equilibriumAt`), solves a new one
 only when that changes, warm-starts it from the last, and fills `State::geom`
 from it in `evaluateGeometry`. `FieldModelEquilibrium` runs any `FieldModel`
-that way -- Newton on its rows alone -- and is what runManta attaches for
-`"consistent"`. Four things are load-bearing. **The cache is dropped in
+that way -- Newton on its rows alone -- and is what `geometrySourceFromConfig`
+attaches for `"consistent"`. Four things are load-bearing. **The cache is dropped in
 `initialize()`'s unconditional part**, the `RF_cellwise` trap again: deleting
 that moves a reused theta-pinch run by 1.6e-8, and
 `a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit` is the
@@ -2653,12 +2663,12 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   A coupled restart is not in that class either — `psi` is copied out of the
   file and, being differential, held fixed by `IDACalcIC`, so it round-trips
   bit for bit at whatever tolerance the run itself survives.
-* **A field model cannot be reached from Python.** `FieldModel` has no pybind11
-  class and `FieldModel` is a `ProblemSelection` key, so it is an error in a
-  `Runner.configure` dict. `PyRunner::configure` therefore *refuses* a restart
-  file whose `nField` is nonzero, by name, rather than reading `psi` into a
-  vector with no field block — which would surface as an `nVars`/`nAux`/
-  `nScalars` length complaint naming three things that are all fine.
+* **A tier-2 field model cannot be written in Python.** `FieldModel` has no
+  pybind11 class, so a Python run couples a field's own unknowns only through a
+  C++ model named in the dict; `manta.EquilibriumModel` (`PyEquilibriumModel.hpp`)
+  is tiers 0 and 1 written in Python. The equilibrium object a Python `Solve`
+  returns is held in a `PyEquilibrium`, which takes the GIL to drop it, since
+  the last reference may go from a C++ frame.
 * ~~`python/Tests/test_reference_solutions.py::test_jax_aux_test` is a
   `strict=True` xfail.~~ Fixed. It was four faults in `manta.jax`, all reachable
   only with `nAux > 0`: `AuxGPrime` and `dAux_dp` take an extra argument ahead
