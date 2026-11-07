@@ -90,17 +90,36 @@ against a closed-form analytic solution, against a steady state, against a
 checked-in `<name>.ref.nc`, and -- for three cases -- against itself via a
 restart round trip. Tolerance is 5e-3, overridable with `--tolerance`.
 
-**It compares only `u`.** `test_ref_soln_l2` reads
-`groups[name].variables["u"]`, so the `q`, `sigma` and `u_star` that every run
-also writes are never checked against a reference. That is not hypothetical
-slack: making t0 output report the CalcIC-corrected state moved the t0 `sigma`
-of `AuxVarTest` by 2.3e-2 and the t0 `q` of `nonlin` by 1.2e-3, and the suite
-could not see either -- the change is invisible in `u` precisely because `u` is
-differential and `IDACalcIC` holds it fixed, so the fields that move are the
-ones nothing looks at. Closing it means regenerating the references, which hold
-the pre-CalcIC t0 values, and picking tolerances for three fields that are a
-derivative rougher than `u`; it is a piece of work rather than a line in the
-harness, which is why it is in `TODO` and recorded here rather than done.
+**A reference comparison covers every solution field a run writes**: `u`, `q`,
+`sigma` and `u_star` of each variable, the aux values and the scalar time series
+at the root of the file, and a field model's group. Not the diagnostic groups a
+case adds -- `AuxG` is the aux constraint's residual sampled between the nodes it
+is enforced at, interpolation noise about zero -- and a reference that lacks a
+field the run writes is an error, so a new output cannot go unchecked by default.
+
+Each field is compared per output time, relative to the reference's norm there or
+to the run's `AbsoluteTolerance`, whichever is larger: `||got - ref|| <= tol *
+max(||ref||, atol)`. The floor is for a field the run holds at noise level --
+PIDTest's mass error `E`, which its controller keeps near 1e-7 -- where a change
+of step sequence is an O(1) relative change and means nothing. `q` and `sigma`
+are held to twice the tolerance. The numbers behind both, measured on every
+reference case (the worst field of each kind, relative per time slice):
+
+| perturbation | `u`, `u_star` | `q`, `sigma` | aux values |
+|---|---|---|---|
+| g++-16 or clang++-19 against g++-15 | 4.2e-13 | 1.0e-11 | 1.6e-12 |
+| `AggressiveTimesteps = true` | 9.9e-4 | 2.6e-3 | 2.3e-6 |
+| `initialTimestep = 1e-6` | 2.2e-3 | 4.4e-3 | 1.1e-6 |
+
+The binding case is `MatTest`, whose `q` moves twice as far as its `u` under a
+different first step; elsewhere the ratio runs up to 30 (`LinearDiffusion`, where
+both are far inside). So a change that moves the step sequence -- a new
+factorisation, different error weights -- can be expected to pass, and a change
+to the answer cannot hide in a field nothing looks at. That is not hypothetical:
+making t0 output report the CalcIC-corrected state moved the t0 `sigma` of
+`AuxVarTest` by 2.3e-2, invisible in `u` because `IDACalcIC` holds the
+differential unknowns fixed, and the references written before it carried the
+uncorrected values until every one was regenerated with this comparison.
 
 The restart round trip runs to `t_final` in one go, then again in two halves via
 a `.restart.nc` file, and requires the final states to match. It is the only
