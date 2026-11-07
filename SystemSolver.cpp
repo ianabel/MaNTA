@@ -930,7 +930,7 @@ void SystemSolver::setInitialConditions(N_Vector &Y, N_Vector &dYdt)
         // Csigma sigma + Cq q + G_c u + H lambda = L(t) -- so applying it to a
         // restart throws away a converged trace and replaces it with something
         // that does not solve anything. Measured on a TestDiffusion round trip at
-        // Absolute_tolerance = 1e-8, that single call takes the weighted residual
+        // AbsoluteTolerance = 1e-8, that single call takes the weighted residual
         // of the stored state from 2.6e-3 to 556, and it is why a restart used to
         // need about ten times as many residual evaluations inside IDACalcIC as a
         // cold start (Tests/README.md).

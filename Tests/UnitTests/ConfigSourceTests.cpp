@@ -85,9 +85,9 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.PolynomialDegree == 2u);
     BOOST_TEST(c.GridSize == 8);
     BOOST_TEST(c.tau == 1.0);
-    BOOST_TEST(c.Relative_tolerance == 1e-3);
-    BOOST_REQUIRE(c.Absolute_tolerance.size() == 1u);
-    BOOST_TEST(c.Absolute_tolerance[0] == 1e-3);
+    BOOST_TEST(c.RelativeTolerance == 1e-3);
+    BOOST_REQUIRE(c.AbsoluteTolerance.size() == 1u);
+    BOOST_TEST(c.AbsoluteTolerance[0] == 1e-3);
     BOOST_TEST(c.MinStepSize == 1e-7);
     BOOST_TEST(c.OutputPoints == 301);
     BOOST_TEST(c.WriteOutput);
@@ -129,14 +129,25 @@ BOOST_AUTO_TEST_CASE(absolute_tolerance_defaults_to_1e_3)
     // tree set it explicitly, so the TOML default was unreachable in practice
     // and 1e-3 -- the Python value -- wins.
     auto c = load(minimal);
-    BOOST_REQUIRE(c.Absolute_tolerance.size() == 1u);
-    BOOST_TEST(c.Absolute_tolerance[0] == 1e-3);
+    BOOST_REQUIRE(c.AbsoluteTolerance.size() == 1u);
+    BOOST_TEST(c.AbsoluteTolerance[0] == 1e-3);
 }
 
 BOOST_AUTO_TEST_CASE(absolute_tolerance_accepts_a_scalar_or_an_array)
 {
-    BOOST_TEST(load(minimal + "Absolute_tolerance = 1e-5\n").Absolute_tolerance.size() == 1u);
-    BOOST_TEST(load(minimal + "Absolute_tolerance = [1e-5, 1e-6]\n").Absolute_tolerance.size() == 2u);
+    BOOST_TEST(load(minimal + "AbsoluteTolerance = 1e-5\n").AbsoluteTolerance == std::vector<double>{1e-5},
+               boost::test_tools::per_element());
+    BOOST_TEST(load(minimal + "AbsoluteTolerance = [1e-5, 1e-6]\n").AbsoluteTolerance ==
+                   (std::vector<double>{1e-5, 1e-6}),
+               boost::test_tools::per_element());
+    // The old spelling is an alias: every config written before the rename
+    // reads the same.
+    BOOST_TEST(load(minimal + "Absolute_tolerance = [1e-5, 1e-6]\n").AbsoluteTolerance ==
+                   (std::vector<double>{1e-5, 1e-6}),
+               boost::test_tools::per_element());
+    // RelativeTolerance was renamed with it, and keeps its old spelling too.
+    BOOST_TEST(load(minimal + "RelativeTolerance = 1e-5\n").RelativeTolerance == 1e-5);
+    BOOST_TEST(load(minimal + "Relative_tolerance = 1e-5\n").RelativeTolerance == 1e-5);
 }
 
 BOOST_AUTO_TEST_CASE(an_integer_is_accepted_where_a_number_is_wanted)
@@ -916,8 +927,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
 {
     const std::string body = minimal +
         "tau = 2.5\n"
-        "Relative_tolerance = 1e-6\n"
-        "Absolute_tolerance = [1e-7, 1e-8]\n"
+        "RelativeTolerance = 1e-6\n"
+        "AbsoluteTolerance = [1e-7, 1e-8]\n"
         "t_initial = 0.25\n"
         "OutputPoints = 51\n"
         "Superconvergent = true\n"
@@ -956,8 +967,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     map_src.values = {
         {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
         {"t_final", 1.0}, {"LowerBoundary", 0.0}, {"UpperBoundary", 1.0},
-        {"tau", 2.5}, {"Relative_tolerance", 1e-6},
-        {"Absolute_tolerance", std::vector<double>{1e-7, 1e-8}},
+        {"tau", 2.5}, {"RelativeTolerance", 1e-6},
+        {"AbsoluteTolerance", std::vector<double>{1e-7, 1e-8}},
         {"t_initial", 0.25}, {"OutputPoints", 51},
         {"Superconvergent", true}, {"AggressiveTimesteps", true},
         {"SuppressAlgebraicError", true}, {"ForceConsistentIC", true},
@@ -983,8 +994,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.delta_t == fromMap.delta_t);
     BOOST_TEST(fromToml.tau == fromMap.tau);
     BOOST_TEST(fromToml.t_initial == fromMap.t_initial);
-    BOOST_TEST(fromToml.Relative_tolerance == fromMap.Relative_tolerance);
-    BOOST_TEST(fromToml.Absolute_tolerance == fromMap.Absolute_tolerance,
+    BOOST_TEST(fromToml.RelativeTolerance == fromMap.RelativeTolerance);
+    BOOST_TEST(fromToml.AbsoluteTolerance == fromMap.AbsoluteTolerance,
                boost::test_tools::per_element());
     BOOST_TEST(fromToml.OutputPoints == fromMap.OutputPoints);
     BOOST_TEST(fromToml.OutputFilename == fromMap.OutputFilename);

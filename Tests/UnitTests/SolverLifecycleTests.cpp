@@ -3209,4 +3209,48 @@ BOOST_AUTO_TEST_CASE(a_resumed_steady_solve_does_not_re_climb_the_ser_ramp)
     removeOutput("lifecycle_resume");
 }
 
+// SteadyStateSolver = "TimeMarch" stops when dY/dt on the trace, over one output
+// interval, falls below one in weights 1 / (SteadyStateTolerance |lambda| +
+// AbsoluteTolerance). The floor was a hard-coded 1e-3, so for a trace of order
+// one the run stopped at the same slice whatever was configured; this requires
+// a looser AbsoluteTolerance to stop strictly earlier and a tighter one strictly
+// later, which the hard-coded floor fails. And the per-variable form is the
+// scalar one when there is one variable.
+BOOST_AUTO_TEST_CASE(a_time_march_stops_where_its_absolute_tolerance_says)
+{
+    auto stopAt = [](std::vector<double> atol)
+    {
+        const std::string stem = "lifecycle_timemarch_atol";
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setTolerances(atol, 1e-6);
+        sys.setOutputCadence(0.02);
+        sys.setSteadyMode(SystemSolver::SteadyMode::TimeMarch);
+        sys.setSteadyStateTolerance(1e-10);
+
+        std::string text;
+        {
+            CapturedOutput out;
+            sys.runSolver(10.0);
+            text = out.text();
+        }
+        removeOutput(stem);
+
+        const std::string marker = "Steady State achieved at time t = ";
+        const auto at = text.find(marker);
+        BOOST_TEST_REQUIRE(at != std::string::npos, "the run never reported a steady state");
+        return std::stod(text.substr(at + marker.size()));
+    };
+
+    const double loose = stopAt({1e-1}), standard = stopAt({1e-3}), tight = stopAt({1e-6});
+    BOOST_TEST_MESSAGE("TimeMarch stops at t = " << loose << ", " << standard << ", " << tight
+                                                 << " for AbsoluteTolerance 1e-1, 1e-3, 1e-6");
+    BOOST_TEST(loose < standard);
+    BOOST_TEST(standard < tight);
+    BOOST_TEST(tight < 10.0);
+    BOOST_TEST(stopAt({1e-3}) == standard); // deterministic, so the comparison above means something
+}
+
 BOOST_AUTO_TEST_SUITE_END()

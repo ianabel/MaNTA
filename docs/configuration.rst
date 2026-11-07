@@ -33,8 +33,8 @@ A minimal file
    t_final = 1.0
    delta_t = 0.1
 
-   Relative_tolerance = 1.0e-3
-   Absolute_tolerance = 1.0e-3
+   RelativeTolerance = 1.0e-3
+   AbsoluteTolerance = 1.0e-3
 
    [DiffusionProblem]
 
@@ -295,18 +295,23 @@ Time integration
        ``delta_t`` and asks IDA for the solution there; IDA chooses its own
        internal steps and takes as many as it needs. ``delta_t`` also seeds the
        initial step guess for ``IDACalcIC``.
-   * - ``Relative_tolerance``
+   * - ``RelativeTolerance``
      - ``1e-3``
-     - IDA's relative tolerance.
-   * - ``Absolute_tolerance``
+     - IDA's relative tolerance. ``Relative_tolerance`` is a deprecated
+       spelling of this and still works, with a warning.
+   * - ``AbsoluteTolerance``
      - ``1e-3``
-     - IDA's absolute tolerance. Either a single value or an array with one
-       entry per variable; any other length is refused.
+     - The absolute tolerance: either a single value or an array with one
+       entry per variable; any other length is refused. It is the floor of
+       IDA's error weights, and the floor of the test a
+       ``SteadyStateSolver = "TimeMarch"`` run stops on (see
+       :ref:`steady-merit-function`). ``Absolute_tolerance`` is a deprecated
+       spelling of this and still works, with a warning.
    * - ``ErrorWeights``
      - ``"AlgebraicMax"``
      - How that absolute tolerance is applied to each class of unknown in IDA's
        error weights: ``AlgebraicMax`` (``sigma``, ``q`` and the auxiliary
-       variables floored at ``Relative_tolerance`` times their largest
+       variables floored at ``RelativeTolerance`` times their largest
        magnitude on the grid), ``Pointwise``, ``AllMax``, ``Derivative``,
        ``DerivativeLocal``, ``Hybrid`` or ``HybridLocal``. See
        :ref:`error-weights`.
@@ -352,7 +357,7 @@ Time integration
        and a mesh-independent weighted norm of the steady residual under
        ``SteadyStateTest = "Residual"`` — see :ref:`steady-merit-function`. The
        default test, ``"NewtonStep"``, does not read it: it converges to
-       ``Relative_tolerance`` and ``Absolute_tolerance`` — see
+       ``RelativeTolerance`` and ``AbsoluteTolerance`` — see
        :ref:`steady-state-test`.
    * - ``ObjectiveDecreaseTolerance``
      - ``0.0`` — off
@@ -523,7 +528,7 @@ Adjoints and superconvergence
      - ``1e-6``
      - Target for ``DegreeAdaptation`` under the solution target: the estimated
        :math:`L^2` error relative to the solution's own :math:`L^2` norm, worst
-       variable, floored by ``Absolute_tolerance``. Refused under
+       variable, floored by ``AbsoluteTolerance``. Refused under
        ``AdaptationTarget = "Objective"``, whose target is ``ObjectiveTolerance``.
    * - ``MaxPolynomialDegree``
      - ``10``
