@@ -92,7 +92,7 @@ jobs:
           #                 the project to clang-18 -Werror compliance, and P2448R2
           #                 was only the first C++23 gap. It is verified, not
           #                 guarded -- expect it to rot.
-          # g++-14 is noble's archive compiler (14.2.0 on the image) and RHEL 10's
+          # g++-14 is the ubuntu-24.04 image's (14.3.0 there now) and RHEL 10's
           # system compiler for the life of that release, so it is worth knowing
           # whether this tree is safe to build with it. 14.2.0 miscompiled it at
           # -O3 -flto -march=native once SystemSolver's member layout changed: the

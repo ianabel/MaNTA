@@ -224,7 +224,7 @@ struct Errors
 {
     double N, Vp, C;
     // Time steps for a transient, Newton iterations for a steady solve.
-    long steps = 0, solves = 0, fallbacks = 0;
+    long steps = 0, solves = 0, fallbacks = 0, sweeps = 0;
     // Tiers 0 and 1: equilibrium solves, one per distinct transport state.
     long equilibria = 0;
     // N and V' at sampleRule's points, so two runs on one grid can be compared
@@ -309,6 +309,14 @@ void attachField(SystemSolver &sys, std::shared_ptr<ThetaPinchEquilibrium> const
         break;
     case Tier::ReducedDifferenced:
         sys.setEquilibriumModel(std::make_shared<FieldModelEquilibrium>(field, true), C::Reduced);
+        // A forward-differenced response converges the sweep more slowly on a
+        // fine mesh: at n = 64 the steady studies take 28 and 33 sweeps over
+        // their four field solves (k = 1, 2) where the exact response takes 20,
+        // so one solve runs to within a couple of the default cap of 20 -- and on
+        // CI's g++-14 build it went over, once, and fell back. The cap is raised
+        // so that "no fallbacks" still means the sweep converged rather than
+        // depending on the last bits of a difference.
+        sys.setFieldSolveMaxSweeps(40);
         break;
     case Tier::Native:
         sys.setEquilibriumModel(std::make_shared<ThetaPinchPressureBalance>(
@@ -388,7 +396,7 @@ Errors solveOnce(Run const &run)
         [&](double x, double t) { return exact.Vp(x, t); }, grid, tFinal);
     const auto stats = sys.getFieldSweepStats();
     Errors out{Nerr, Vperr, std::abs(C - exact.C(tFinal)), steps, stats.solves, stats.fallbacks,
-               sys.getEquilibriumSolves()};
+               stats.iterations, sys.getEquilibriumSolves()};
     const SampleRule rule(grid);
     out.Nat.resize(static_cast<Eigen::Index>(rule.x.size()));
     out.Vpat.resize(out.Nat.size());
@@ -413,10 +421,10 @@ std::string table(std::vector<Index> const &res, std::vector<Errors> const &e, c
     std::string s;
     for (size_t i = 0; i < res.size(); ++i)
     {
-        s += std::format("\n      {}={:<4} N {:.3e}  V' {:.3e}  C {:.3e}   ({} steps, {} field solves, {} fallbacks, "
-                         "{} equilibria)",
-                         name, res[i], e[i].N, e[i].Vp, e[i].C, e[i].steps, e[i].solves, e[i].fallbacks,
-                         e[i].equilibria);
+        s += std::format("\n      {}={:<4} N {:.3e}  V' {:.3e}  C {:.3e}   ({} steps, {} field solves, {} sweeps, "
+                         "{} fallbacks, {} equilibria)",
+                         name, res[i], e[i].N, e[i].Vp, e[i].C, e[i].steps, e[i].solves, e[i].sweeps,
+                         e[i].fallbacks, e[i].equilibria);
         if (i > 0)
             s += std::format("\n            local order: N {:.2f}  V' {:.2f}  C {:.2f}",
                              mms::localOrder(res[i - 1], res[i], e[i - 1].N, e[i].N),

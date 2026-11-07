@@ -2185,7 +2185,8 @@ formula, not the operator, if the data cannot tell them apart.
   release flags, and with the inert member below in place the reproduction test
   and three full unit-suite runs are clean. Whether 14.3 fixed it or the rebuilt
   test misses it is not known, which is why two CI legs carry gcc 14 again --
-  noble's 14.2.0 and RHEL 10's system compiler, on `almalinux:10`. RHEL 10 keeps
+  the ubuntu-24.04 image's, which is 14.3.0 there too, and RHEL 10's system
+  compiler, on `almalinux:10`. Nothing in CI builds 14.2.0. RHEL 10 keeps
   gcc 14 for the life of the release, so this is a platform question rather than
   a curiosity.
 
@@ -2244,7 +2245,7 @@ formula, not the operator, if the data cannot tell them apart.
   themselves.
 
   **g++-14 was dropped from CI for this and is back on two legs**, `Build + tests
-  (g++-14)` (noble's 14.2.0) and `Build + tests (almalinux:10, gcc 14)`. The
+  (g++-14)` (the runner image's, 14.3.0) and `Build + tests (almalinux:10, gcc 14)`. The
   coverage job stays on g++-15, and the Eigen 5.0.1 legs on g++-15 and
   clang++-19. A failure on either gcc 14 leg in a test that differences the
   residual, by the drift above, is this defect rather than the change under
