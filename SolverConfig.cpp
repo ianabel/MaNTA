@@ -1128,7 +1128,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         if (config.SteadyStateSolver == "TimeMarch")
             throw std::invalid_argument(
                 "SteadyStateTest = \"Objective\" applies to SteadyStateSolver = "
-                "\"PseudoTransient\" or \"Newton\"; a time march stops on dy/dt instead.");
+                "\"PseudoTransient\" or \"Newton\"; a time march stops on \"Residual\" or "
+                "\"NewtonStep\".");
         if (config.ObjectiveBudget.size() != 2)
             throw std::invalid_argument(std::format(
                 "ObjectiveBudget is the array [discretisation, algebraic]; got {} values.",
