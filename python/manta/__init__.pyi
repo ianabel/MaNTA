@@ -140,6 +140,19 @@ class TransportSystem(_TransportSystem):
     # read geometry at all.
     def dSigmaFn_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # The batched forms: one hook over every point at once, standing in for the
+    # pointwise ones it covers (docs/python.rst has the table). `states` is the
+    # GlobalState dict of (nPoints, n) arrays and `x` the points. The value hooks
+    # return one value per point, the derivative hooks a GlobalState dict where
+    # the bound base takes an out-parameter -- hence the ignores, for the reasons
+    # above.
+    def SigmaFn_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def Sources_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def AuxG_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def dSigma(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def dSources(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def AuxGPrime_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
     def aFn(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def LowerBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def UpperBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
