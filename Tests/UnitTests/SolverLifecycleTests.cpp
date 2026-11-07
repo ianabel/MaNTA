@@ -696,71 +696,64 @@ BOOST_AUTO_TEST_CASE(initialize_leaves_the_corrected_initial_condition_in_Y)
     removeOutput("lifecycle_consistent_ic");
 }
 
-BOOST_AUTO_TEST_CASE(at_t0_only_the_differential_part_of_dydt_exists)
+BOOST_AUTO_TEST_CASE(a_cold_start_begins_with_consistent_algebraic_derivatives)
 {
-    // A known gap, pinned so that it is visible rather than assumed away, and so
-    // that whoever closes it is told the gate depends on it.
-    //
-    // dG/dt is assembled as a full chain rule over u, q, sigma and phi, and
-    // AdjointProblemTests proves that assembly correct. But at t0 the only part of
-    // dydt that carries anything is the differential one: setInitialConditions
-    // zeroes dydt and writes just dydt.u and the differential scalars, and
-    // IDACalcIC does not fill in the rest. So at the point the gate runs, the q,
-    // sigma and phi terms contribute nothing -- an objective depending on those is
-    // differentiated only through its u dependence.
-    //
-    // The reason is structural rather than a bug: q, sigma and phi are algebraic in
-    // this formulation, and IDA's IDA_YA_YDP_INIT computes algebraic *values* and
-    // differential *derivatives* -- there is no y' for an algebraic component to
-    // fetch. Their true time derivatives follow from differentiating the algebraic
-    // constraints, which nothing here does.
-    //
-    // Worth being precise about, because there *was* also a wrong id vector telling
-    // IDA the whole system was algebraic, and it would have been reasonable to
-    // expect that to be the cause. It is not: the id vector is correct now (see
-    // the_id_vector_marks_u_differential_and_nothing_else) and these blocks are
-    // still exactly zero.
-    //
-    // This is still strictly better than origin/optimize-mode's gate, which
-    // evaluated the objective functional on the derivative vector and so was wrong
-    // about the u term too whenever g was nonlinear. But it is less than the full
-    // derivative, and the comment on SystemSolver::dGdt says so.
-    //
-    // No gate armed and no objective attached: IDAGetConsistentIC is unconditional,
-    // so this holds for every run rather than only for a gated one.
+    // IDA_YA_YDP_INIT makes algebraic *values* and differential *derivatives*
+    // consistent, and leaves the algebraic components of y' at zero. On a
+    // diffusing u, q and sigma are moving, so IDA's predictor carried an error
+    // of h |y'| in them -- first order where its error test expects second --
+    // and at a tight tolerance the first step had to fall below MinStepSize's
+    // default to pass. initialize() now solves G_z z' = -G_t - G_u u' after
+    // IDACalcIC on a cold start, as it does on a projected restart. So the
+    // algebraic rows' total derivative along (1, y') vanishes, which it does not
+    // with z' = 0. TestDiffusion's Dirichlet data move with time, so this also
+    // needs its dLowerBoundary_dt and dUpperBoundary_dt: without them the q rows
+    // of the cell at each end are out by exactly the omitted term.
     Grid grid(0.0, 1.0, nCells);
-
     TestDiffusion problem(lifecycle_config);
     SystemSolver sys(grid, k, &problem);
-    configure(sys, "lifecycle_gate_consistent");
-
+    configure(sys, "lifecycle_cold_algebraic");
     {
         CapturedOutput quiet;
         sys.initialize();
     }
+    BOOST_REQUIRE(sys.initialConditionWasCorrected());
+    BOOST_TEST(sys.consistentDerivativeDefect <= 1e-14);
 
-    double uNorm = 0.0, qNorm = 0.0, sigmaNorm = 0.0;
-    for (Index i = 0; i < nCells; ++i)
+    // d/dt of the algebraic rows along (1, y'), y' held fixed.
+    auto alongTrajectory = [&](N_Vector dY)
     {
-        uNorm += sys.dydt.u(0).getCoeff(i).second.norm();
-        qNorm += sys.dydt.q(0).getCoeff(i).second.norm();
-        sigmaNorm += sys.dydt.sigma(0).getCoeff(i).second.norm();
-    }
-
-    // The differential part is real, so the gate has something to work with.
-    BOOST_TEST(uNorm > 1e-8);
-
-    // The algebraic parts are not. If either of these ever becomes nonzero the gap
-    // above has closed, and the gate's coverage should be re-examined and this
-    // test rewritten rather than relaxed.
-    BOOST_TEST(qNorm == 0.0, boost::test_tools::tolerance(0.0));
-    BOOST_TEST(sigmaNorm == 0.0, boost::test_tools::tolerance(0.0));
+        const double e = 1e-6;
+        N_Vector Yp = N_VClone(sys.Y), Ym = N_VClone(sys.Y), Fp = N_VClone(sys.Y), Fm = N_VClone(sys.Y);
+        N_VLinearSum(1.0, sys.Y, e, dY, Yp);
+        N_VLinearSum(1.0, sys.Y, -e, dY, Ym);
+        sys.residual(e, Yp, dY, Fp);
+        sys.residual(-e, Ym, dY, Fm);
+        double const *pp = N_VGetArrayPointer(Fp), *m = N_VGetArrayPointer(Fm),
+                     *isDiff = N_VGetArrayPointer(sys.id);
+        double worst = 0.0;
+        for (sunindextype i = 0; i < N_VGetLength(Fp); ++i)
+            if (isDiff[i] == 0.0)
+                worst = std::max(worst, std::abs(pp[i] - m[i]) / (2.0 * e));
+        for (N_Vector v : {Yp, Ym, Fp, Fm})
+            N_VDestroy(v);
+        return worst;
+    };
+    const double consistent = alongTrajectory(sys.dYdt);
+    N_Vector differentialOnly = N_VClone(sys.dYdt);
+    N_VProd(sys.dYdt, sys.id, differentialOnly);
+    const double zeroed = alongTrajectory(differentialOnly);
+    N_VDestroy(differentialOnly);
+    BOOST_TEST_MESSAGE("d/dt of the algebraic rows along y': " << consistent << " solved, "
+                                                               << zeroed << " with z' = 0");
+    BOOST_TEST(zeroed > 1e-2);
+    BOOST_TEST(consistent < 1e-6 * zeroed);
 
     {
         CapturedOutput quiet;
         sys.destroySundials();
     }
-    removeOutput("lifecycle_gate_consistent");
+    removeOutput("lifecycle_cold_algebraic");
 }
 
 BOOST_AUTO_TEST_CASE(a_second_integration_on_one_solver_matches_a_fresh_one)
@@ -901,12 +894,14 @@ BOOST_AUTO_TEST_CASE(the_initial_condition_uses_boundary_data_at_t0)
 // IDA to solve: IDAInit clears the counter, and nothing else in initialize()
 // goes through IDA. So on a path that skips IDACalcIC this stays at zero, and
 // MaNTA's own nResidualEvals -- which the debug .dat blocks and the steady solve
-// also increment -- would not distinguish the two.
+// also increment -- would not distinguish the two. The IDAReInit that hands IDA
+// the consistent algebraic derivatives clears the counter again, so what it had
+// counted by then is added back.
 long idaResidualEvals(SystemSolver &sys)
 {
     long n = -1;
     BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &n) == IDA_SUCCESS);
-    return n;
+    return n + sys.idaResidualEvalsBeforeReinit;
 }
 
 BOOST_AUTO_TEST_CASE(the_reported_dirichlet_trace_follows_the_boundary_datum)
@@ -3081,8 +3076,7 @@ BOOST_AUTO_TEST_CASE(initialize_starts_at_a_nonzero_time)
 
         // Not vacuous: IDACalcIC has to have run and done something, or the case
         // would pass just as well if the call were removed.
-        long idaResEvals = -1;
-        BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &idaResEvals) == IDA_SUCCESS);
+        const long idaResEvals = idaResidualEvals(sys);
         BOOST_TEST(idaResEvals > 0,
                    "IDACalcIC evaluated no residuals at t0 = " << t0
                        << ", so it cannot have run");

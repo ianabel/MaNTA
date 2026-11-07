@@ -1793,11 +1793,6 @@ degenerate diffusivity, a critical-gradient model near its kink -- puts a large
 the offending component is algebraic. The signature is an ``IDA_ERR_FAIL`` (-3)
 whose ``dsm`` in the SUNDIALS log is *identical* as ``h`` shrinks, with the
 Newton converging each time. Setting this key is the direct fix.
-It also removes a first-step limit: a cold start leaves the algebraic ``y'`` at
-zero, the predictor's error in those rows grows like :math:`h|y'|`, and at a
-thousandth of their own tolerances 9 of the 17 regression configs need a first
-step below the default ``MinStepSize`` of 1e-7 and fail. With this on, all of
-them run.
 
 So it is the right key for a hard solve whose output is ``u``, and the wrong
 one, without a field, if you intend to restart from the result or want the
