@@ -15,6 +15,7 @@ expressed in plain numpy through the Python interface.
 
 import numpy as np
 import pytest
+import scipy.linalg
 
 import manta as MaNTA
 KAPPA = 1.0
@@ -152,11 +153,13 @@ def test_the_aux_constraint_is_satisfied_by_the_solution(tmp_path):
         )
         if np.max(np.abs(r)) < 1e-12:
             break
-        # Tridiagonal Jacobian of the interior equations.
+        # Tridiagonal Jacobian of the interior equations, solved as one: a dense
+        # 1999x1999 solve per iteration cost ~10 s here, and over a minute when
+        # the BLAS threads were contending with other work.
         main = 2 * KAPPA / h**2 - 2 * ur[1:-1]
-        off = -KAPPA / h**2 * np.ones(n - 3)
-        J = np.diag(main) + np.diag(off, 1) + np.diag(off, -1)
-        ur[1:-1] -= np.linalg.solve(J, r[1:-1])
+        off = -KAPPA / h**2 * np.ones(n - 2)
+        bands = np.vstack([off, main, off])
+        ur[1:-1] -= scipy.linalg.solve_banded((1, 1), bands, r[1:-1])
 
     reference = np.interp(xs, xr, ur)
     err = np.max(np.abs(u - reference))

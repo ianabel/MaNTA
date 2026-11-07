@@ -2493,8 +2493,21 @@ formula, not the operator, if the data cannot tell them apart.
   without it would have written `g_D(t0)` and looked like it worked. Any new
   reporting path needs the same call; `the_reported_dirichlet_trace_follows_the_
   boundary_datum` and the ladder equality test are what would notice one that
-  forgot. The two *seeds* still differ between a cold start and a restart, which
-  `TODO` records and which is now invisible to a reader.
+  forgot.
+
+  **The two *seeds* still differ, deliberately.** A cold start runs
+  `ApplyDirichletBCs` and then an unconditional `EvaluateLambda`, which sets every
+  trace entry to `{{u}}` and so overwrites the datum; a restart that keeps its
+  mesh skips `EvaluateLambda` and keeps it. So a cold steady solve of
+  `LinearDiffusion` at k = 3 on eight cells seeds 0.9999991 at a face whose datum
+  is 1, where a degree ladder seeds 1 -- identically at every tolerance, since
+  nothing moves that entry. Making the cold path match was tried and reverted:
+  `systemsolver_init_tests` holds the initial trace to the initial function at
+  the faces, and its `exp(-25x^2)` is 1 at an axis whose datum is 0, so pinning
+  the face would hand `IDACalcIC` a jump of 0.9 where `{{u}}` is smooth. Both
+  are defensible *guesses* for an initial condition that breaks its own boundary
+  condition, and since every reported state carries the datum, no reader sees
+  the difference.
 * **`sigma` is loaded on a copy-path restart, not recomputed, and that is a
   measurement too.** `DGSoln::copy` brings `sigma` across with everything else and
   `ApplyDirichletBCs` touches only `lambda`, so `assignSigmaFromFlux` would rebuild it
