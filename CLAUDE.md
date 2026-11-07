@@ -1019,14 +1019,16 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   `tau`) and the remaining stragglers with underscores. So a new key should be
   `MaxDegreeIncrement`, not `max_degree_increment` or `maxDegreeIncrement`.
 
-  **The rest is not being regularised wholesale.** `delta_t`, `t_initial`,
-  `t_final`, `Relative_tolerance` and `Absolute_tolerance` keep their spellings;
+  **The rest is not being regularised wholesale.** `delta_t`, `t_initial` and
+  `t_final` keep their spellings;
   churning every config file in the tree for no functional gain is a job for
   never. What is regularised is a group of keys that is being *changed anyway* —
   the grid keys went `Grid_size` → `GridSize`, `Lower_boundary` →
   `LowerBoundary`, `Polynomial_degree` → `PolynomialDegree` and so on alongside
   the graded-mesh work, since editing them for another reason is the one moment
-  the rename is free.
+  the rename is free, and `Absolute_tolerance` → `AbsoluteTolerance` when it
+  became the TimeMarch steady test's floor as well as IDA's, with
+  `Relative_tolerance` → `RelativeTolerance` beside it so the pair matches.
 
   **A rename is a deprecated alias, never a removal.** The schema's `aliases`
   field is what makes that a one-line change: `presentSpelling` warns when the
@@ -2422,7 +2424,7 @@ formula, not the operator, if the data cannot tell them apart.
   `Csigma sigma + Cq q + G_c u + H lambda = L(t)`, so applying the average to a
   file that already holds a converged trace replaces it with something that
   solves nothing: measured on a `TestDiffusion` round trip at
-  `Absolute_tolerance = 1e-8`, that one call takes the weighted residual from
+  `AbsoluteTolerance = 1e-8`, that one call takes the weighted residual from
   2.6e-3 to 556. It is why a restart needed roughly ten times as many residual
   evaluations inside `IDACalcIC` as a cold start. What changed is *not* the order
   of the two calls -- `ApplyDirichletBCs` still runs first, and the comment at the

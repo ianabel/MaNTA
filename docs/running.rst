@@ -505,7 +505,7 @@ a steady solve or a restart, and cannot remove it from the run that needs it.
    norm only guesses.
 
    For scale, on ``TestDiffusion`` round trips a cold start's residual measures
-   0.30 at ``Absolute_tolerance = 1e-3`` and 417 at ``1e-8``, while a warm start
+   0.30 at ``AbsoluteTolerance = 1e-3`` and 417 at ``1e-8``, while a warm start
    lands between 7.7e-4 and 1.9e-2.
 
 **What makes a warm start consistent at all is that the trace is now kept.**
@@ -515,7 +515,7 @@ traces, not the HDG trace equation
 :math:`C_\sigma \sigma + C_q q + G_c u + H\lambda = L(t)` that :math:`\lambda`
 actually solves. On a restart that discarded a converged trace and replaced it
 with something that solves nothing: measured on a ``TestDiffusion`` round trip at
-``Absolute_tolerance = 1e-8``, that one call took the weighted residual from
+``AbsoluteTolerance = 1e-8``, that one call took the weighted residual from
 2.6e-3 to 556. It is why a restart used to need about ten times as many residual
 evaluations inside ``IDACalcIC`` as a cold start; on ``AuxVarTest``'s round trip
 keeping the trace takes the resumed run from 1139 residual evaluations to 1033.
@@ -621,8 +621,8 @@ transient *is* the answer.
    rejected step drops it to a finite ``dt`` and it continues as continuation.
 
 ``TimeMarch``
-   The original behaviour: integrate with IDA until ``dY/dt`` falls below
-   ``SteadyStateTolerance``. Slower, and the only one of the three that selects
+   The original behaviour: integrate with IDA until ``dY/dt`` is negligible --
+   see below for the test. Slower, and the only one of the three that selects
    a solution *branch* by following the physics — which matters for a problem
    with more than one steady state, such as a transport model with a barrier
    bifurcation.
@@ -683,22 +683,33 @@ happen to agree — they match bit for bit in ``Newton`` mode, where the damping
 term is identically zero. Its ``u_scale`` stays unit: that one is about the
 solution's units, and it drives the step-length test and the Newton step clamp.
 
-``TimeMarch`` does not use any of this. It compares ``dY/dt`` against the same
-tolerance in the time loop, so a config that switches between the modes is
-changing what the number means.
+``TimeMarch`` does not use any of this. At each output time it measures the
+change in the trace over one output interval, :math:`\Delta t\,\dot\lambda`,
+in the weights IDA builds for a value,
+
+.. math::
+
+   \left\| \Delta t\,\dot\lambda \right\|, \qquad
+   w_{v,i} = \frac{1}{\texttt{SteadyStateTolerance}\,|\lambda_{v,i}| + \texttt{AbsoluteTolerance}_v},
+
+and stops when that falls below one. ``SteadyStateTolerance`` is the relative
+part and ``AbsoluteTolerance`` -- one value, or one per variable -- the floor, so
+for a trace of order one the floor governs at any ``SteadyStateTolerance``
+tighter than it. A config that switches between the modes is therefore changing
+what the number means.
 
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — flux and derivative evaluations per point — by
 the reuse-1 columns of ``python-examples/paper-figures/steady_modes.py`` with
 ``MANTA_STEADY_TOL=1e-11``, and again with ``MANTA_STEADY_TEST=Residual`` for
-the ``Residual`` entries (``Relative_tolerance = 1e-6``,
-``Absolute_tolerance = 1e-3``). The resolution
+the ``Residual`` entries (``RelativeTolerance = 1e-6``,
+``AbsoluteTolerance = 1e-3``). The resolution
 is stated because the counts depend on it: ``park-convergence`` at 4 cells, the
 other two at 10, all three at :math:`k = 3`. ``TimeMarch`` reads neither test.
 Every answer agrees with the converged one in every digit printed, except
 Shestakov under ``NewtonStep``, where ``Newton`` stops 6.5e-3 from the exact
 solution and ``PseudoTransient`` 5.6e-3, against the converged state's 7.2e-3 —
-within their ``Absolute_tolerance``.
+within their ``AbsoluteTolerance``.
 
 .. list-table::
    :header-rows: 1
@@ -796,7 +807,7 @@ geometric-mean rate and the last ratio of corrections, and :math:`s` is never
 below 1 — the distance left is taken to be at least the last correction, as in
 Deuflhard's error-oriented Newton termination.
 The correction is a distance to the solution per component, in units of the
-run's own ``Relative_tolerance`` and ``Absolute_tolerance``, so every channel is
+run's own ``RelativeTolerance`` and ``AbsoluteTolerance``, so every channel is
 judged on its own scale and ``SteadyStateTolerance``'s value is not read (its
 presence still arms the solve). ``"NewtonStep"`` is the default; ``"Residual"``
 is the merit-function test above, with KINSOL as the inner solver.
@@ -840,7 +851,7 @@ What changes with it:
 set by noise in the flux or by round-off in the linear solve. A badly
 conditioned discretisation — a graded mesh with cells ~5e-4 wide at a wall, say
 — puts the round-off floor of :math:`\|\delta\|` near IDA's threshold at
-``Absolute_tolerance = 1e-6``, and the solve then runs out of steps with
+``AbsoluteTolerance = 1e-6``, and the solve then runs out of steps with
 ``||F||`` already at 1e-9; ``python-examples/nc-toy-model`` did exactly that.
 Ask for a tolerance the discretisation can resolve, or set
 ``SteadyStateTest = "Residual"``.
@@ -1539,7 +1550,7 @@ Five things worth knowing:
   levels drops the BDF history.
 * **The tolerance is relative**, to each variable's own :math:`L^2` norm, so one
   number means the same thing for variables in different units. It is floored by
-  ``Absolute_tolerance``, which is what stops a solution that is *identically
+  ``AbsoluteTolerance``, which is what stops a solution that is *identically
   zero* — ``LinearDiffusion`` with zero Dirichlet data at both ends, say — from
   dividing one round-off by another and climbing to the ceiling for nothing.
 * **The ceiling warns rather than failing.** Reaching ``MaxPolynomialDegree``
@@ -1580,11 +1591,11 @@ is pointwise in every scheme; ``ErrorWeights`` chooses the absolute part
 :math:`\tau_i`, class by class:
 
 ``AlgebraicMax`` (the default)
-   ``u`` and ``lambda`` at ``Absolute_tolerance``; ``sigma``, ``q`` and the
-   auxiliary variables at the larger of that and ``Relative_tolerance`` times
+   ``u`` and ``lambda`` at ``AbsoluteTolerance``; ``sigma``, ``q`` and the
+   auxiliary variables at the larger of that and ``RelativeTolerance`` times
    the variable's largest magnitude on the grid.
 ``Pointwise``
-   ``Absolute_tolerance`` for everything.
+   ``AbsoluteTolerance`` for everything.
 ``AllMax``
    ``AlgebraicMax``, with ``u`` and ``lambda`` floored the same way.
 ``Derivative``
@@ -1605,7 +1616,7 @@ is pointwise in every scheme; ``ErrorWeights`` chooses the absolute part
 these.
 
 **Why the default is not** ``Pointwise``. A pointwise absolute tolerance holds
-``sigma`` and ``q``, wherever they pass near zero, to ``Absolute_tolerance`` in
+``sigma`` and ``q``, wherever they pass near zero, to ``AbsoluteTolerance`` in
 absolute terms. Next to a Dirichlet wall that goes wrong in a specific way: the
 Chebyshev nodes crowd against the wall, the diffusive mode there is stiff, and
 backward Euler puts a stiff component on its slow manifold with a lag of about

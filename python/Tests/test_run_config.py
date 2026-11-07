@@ -133,7 +133,7 @@ def test_absolute_tolerance_accepts_scalar_and_array_forms(tmp_path, atol):
 
 
 def test_a_wrong_length_absolute_tolerance_is_refused(tmp_path):
-    """Absolute_tolerance takes one value, or one per variable, and anything else
+    """AbsoluteTolerance takes one value, or one per variable, and anything else
     is refused by name.
 
     It used to be discarded: the error weights fell through to a hard-coded 1e-8
@@ -141,13 +141,13 @@ def test_a_wrong_length_absolute_tolerance_is_refused(tmp_path):
     for a one-variable problem got a far tighter solve than they asked for and no
     indication why. The scalar form is the control.
     """
-    ok = write_config(tmp_path, "loose", Absolute_tolerance="1.0e-1", MinStepSize="1e-7")
+    ok = write_config(tmp_path, "loose", AbsoluteTolerance="1.0e-1", MinStepSize="1e-7")
     assert MaNTA.run(ok) == 0
 
     mismatched = write_config(
-        tmp_path, "mismatched", Absolute_tolerance="[1.0e-1, 1.0e-1]", MinStepSize="1e-7"
+        tmp_path, "mismatched", AbsoluteTolerance="[1.0e-1, 1.0e-1]", MinStepSize="1e-7"
     )
-    with pytest.raises(ValueError, match="Absolute_tolerance has 2 entries"):
+    with pytest.raises(ValueError, match="AbsoluteTolerance has 2 entries"):
         MaNTA.run(mismatched)
 
 
