@@ -217,6 +217,63 @@ target_link_libraries(manta_deps INTERFACE
   SUNDIALS::core SUNDIALS::ida SUNDIALS::kinsol SUNDIALS::nvecserial
   SUNDIALS::sunnonlinsolnewton SUNDIALS::sunlinsolspgmr)
 
+# Where the installed binaries look for SUNDIALS at run time. Not left to
+# INSTALL_RPATH_USE_LINK_PATH alone: that adds only directories *outside the
+# project*, and ./build_sundials installs into ./sundials/install, inside it --
+# so the documented setup installed a solver that could not find libsundials_ida
+# at startup. Named from the libraries actually linked, less the linker's own
+# search directories.
+# SUNDIALS::ida and its siblings are interface targets over SUNDIALS::ida_shared
+# (or _static), which carries the location, so they are followed down to it.
+function(_manta_library_dirs out)
+  set(_dirs "")
+  foreach(_t IN LISTS ARGN)
+    if(NOT TARGET ${_t})
+      continue()
+    endif()
+    get_target_property(_aliased ${_t} ALIASED_TARGET)
+    if(_aliased)
+      set(_t ${_aliased})
+    endif()
+    get_target_property(_type ${_t} TYPE)
+    if(_type STREQUAL "SHARED_LIBRARY")
+      get_target_property(_cfgs ${_t} IMPORTED_CONFIGURATIONS)
+      set(_props IMPORTED_LOCATION)
+      if(_cfgs)
+        foreach(_c IN LISTS _cfgs)
+          list(APPEND _props IMPORTED_LOCATION_${_c})
+        endforeach()
+      endif()
+      foreach(_prop IN LISTS _props)
+        get_target_property(_loc ${_t} ${_prop})
+        if(_loc)
+          get_filename_component(_d "${_loc}" DIRECTORY)
+          list(APPEND _dirs "${_d}")
+        endif()
+      endforeach()
+    endif()
+    get_target_property(_links ${_t} INTERFACE_LINK_LIBRARIES)
+    if(_links)
+      _manta_library_dirs(_sub ${_links})
+      list(APPEND _dirs ${_sub})
+    endif()
+  endforeach()
+  set(${out} "${_dirs}" PARENT_SCOPE)
+endfunction()
+
+_manta_library_dirs(_sundials_dirs
+  SUNDIALS::core SUNDIALS::ida SUNDIALS::kinsol SUNDIALS::nvecserial
+  SUNDIALS::sunnonlinsolnewton SUNDIALS::sunlinsolspgmr)
+set(MANTA_DEPENDENCY_RPATH "")
+foreach(_d IN LISTS _sundials_dirs)
+  if(NOT _d IN_LIST CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
+     AND NOT _d IN_LIST CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES)
+    list(APPEND MANTA_DEPENDENCY_RPATH "${_d}")
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES MANTA_DEPENDENCY_RPATH)
+message(STATUS "Install RPATH for SUNDIALS: ${MANTA_DEPENDENCY_RPATH}")
+
 # --------------------------------------------------------------------- Eigen --
 #
 # Either 3.4.x or 5.0.x. The two differ enough to need guarding in the sources
