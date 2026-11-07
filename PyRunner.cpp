@@ -424,7 +424,10 @@ SystemSolver::SteadyOutcome PyRunner::runSlice(bool resume, bool estimate) {
         // A failure while reporting a failure. The original is the one worth
         // propagating, so this one is dropped rather than replacing it.
       }
-      abandonSlices();
+      // This solver only. Under DegreeAdaptation the caller decides whether the
+      // level is retried or the whole adaptive solve is abandoned.
+      slicing = false;
+      system->destroySundials();
       throw;
     }
   }
@@ -445,21 +448,97 @@ SystemSolver::SteadyOutcome PyRunner::start_steady(bool estimate) {
     throw std::runtime_error(
         "start_steady() called while a sliced solve is already running. Use "
         "continue_steady() to carry on, or finish_steady() to end it.");
-  if (cfg.DegreeAdaptation)
+  if (cfg.DegreeAdaptation && cfg.MeshAdaptation)
     throw std::runtime_error(
-        "DegreeAdaptation cannot be combined with a sliced steady solve: "
-        "adapting the degree replaces the solver, and a slice loop holds the "
-        "state of the one it started on. Run one or the other.");
+        "MeshAdaptation cannot be combined with a sliced steady solve: it replaces "
+        "the mesh as well as the solver between solves. DegreeAdaptation alone can be "
+        "sliced.");
   if (hasLadder())
     throw std::runtime_error(
         "DegreeLadder/GridLadder cannot be combined with a sliced steady "
         "solve, for the same reason: each rung replaces the solver, and a "
         "slice loop holds the state of the one it started on.");
 
+  if (cfg.DegreeAdaptation) {
+    // run_ss()'s reasoning: the tolerance has to reach every level, so it goes
+    // into the configuration the loop replays rather than onto `system`.
+    cfg.SteadyStateTolerance = steady_state_tolerance;
+    system.reset();
+    objectiveOnlyAdjoint = nullptr;
+    try {
+      slicePhysics = std::make_unique<PhysicsInstance>(pProblem, adjoint, *grid,
+                                                       rebuildFunction());
+      sliceAdaptation =
+          std::make_unique<DegreeAdaptationLoop>(cfg, *slicePhysics, *grid, k);
+      sliceAdaptation->openLevel(system);
+      system->initialize();
+    } catch (...) {
+      abandonAdaptation();
+      throw;
+    }
+    slicing = true;
+    return adaptiveSlice(false, estimate);
+  }
+
   system->setSteadyStateTolerance(steady_state_tolerance);
   system->initialize();
   slicing = true;
-  return runSlice(false, estimate);
+  return lastSliceOutcome = runSlice(false, estimate);
+}
+
+SystemSolver::SteadyOutcome PyRunner::adaptiveSlice(bool resume, bool estimate) {
+  using Outcome = SystemSolver::SteadyOutcome;
+  closedLevelStats.reset();
+  Outcome outcome;
+  try {
+    try {
+      outcome = runSlice(resume, estimate);
+    } catch (std::invalid_argument const &) {
+      throw;
+    } catch (std::exception const &e) {
+      // runAdaptiveDegree's fallback: a level that failed from a carried
+      // pseudo-time step starts again from the configured one, keeping its
+      // warm state.
+      if (!sliceAdaptation->retry(system, e))
+        throw;
+      system->initialize();
+      slicing = true;
+      outcome = runSlice(false, estimate);
+    }
+
+    // The budget is spent; the level resumes from here on the next call.
+    if (outcome == Outcome::OutOfSteps)
+      return lastSliceOutcome = outcome;
+
+    // The level is solved. Finish the run on it as runSolver does -- the
+    // output, the restart file and the adjoint solve -- which is what the
+    // unsliced loop measures and hands on, and then measure and decide.
+    slicing = false;
+    system->writeSteadyState();
+    system->finishRun();
+    system->destroySundials();
+    closedLevelStats = std::pair{system->lastSteadyStats(), system->getPseudoTransientStep()};
+
+    if (sliceAdaptation->closeLevel(system)) {
+      // The answer is in `system`, and its run is finished: finish_steady()
+      // has only the loop's own end left to make.
+      sliceAdaptation->finish();
+      sliceAdaptation.reset();
+      slicePhysics.reset();
+      sliceRunFinished = true;
+      slicing = true;
+      closedLevelStats.reset();
+      return lastSliceOutcome = outcome;
+    }
+
+    sliceAdaptation->openLevel(system);
+    system->initialize();
+    slicing = true;
+    return lastSliceOutcome = Outcome::Refined;
+  } catch (...) {
+    abandonSlices();
+    throw;
+  }
 }
 
 SystemSolver::SteadyOutcome PyRunner::continue_steady(bool estimate) {
@@ -467,7 +546,11 @@ SystemSolver::SteadyOutcome PyRunner::continue_steady(bool estimate) {
     throw std::runtime_error(
         "continue_steady() called with no sliced solve running. Call "
         "start_steady() first.");
-  return runSlice(true, estimate);
+  if (sliceRunFinished)
+    return lastSliceOutcome;
+  if (sliceAdaptation)
+    return adaptiveSlice(true, estimate);
+  return lastSliceOutcome = runSlice(true, estimate);
 }
 
 void PyRunner::finish_steady(void) {
@@ -475,25 +558,48 @@ void PyRunner::finish_steady(void) {
     throw std::runtime_error(
         "finish_steady() called with no sliced solve running.");
   slicing = false;
-  system->writeSteadyState();
-  system->finishRun();
-  system->destroySundials();
+  if (!sliceRunFinished) {
+    // Stopped before the solve finished, adaptive or not: the state reached
+    // is the answer, at whatever degree the loop had got to.
+    system->writeSteadyState();
+    system->finishRun();
+    system->destroySundials();
+  }
+  sliceRunFinished = false;
+  if (sliceAdaptation)
+    sliceAdaptation->finish();
+  abandonAdaptation();
   std::println("Done.");
 }
 
 void PyRunner::abandonSlices(void) {
-  if (!slicing)
-    return;
-  slicing = false;
-  if (system != nullptr)
+  if (slicing && !sliceRunFinished && system != nullptr)
     system->destroySundials();
+  slicing = false;
+  sliceRunFinished = false;
+  abandonAdaptation();
+}
+
+void PyRunner::abandonAdaptation(void) {
+  closedLevelStats.reset();
+  // finish() clears the restart state the transfers set, which would otherwise
+  // make the next run on this configuration resume from the last level handed
+  // on. No totals: the loop did not finish.
+  if (sliceAdaptation)
+    sliceAdaptation->finish(false);
+  sliceAdaptation.reset();
+  slicePhysics.reset();
 }
 
 py::dict PyRunner::steadyStats(void) const {
   using namespace pybind11::literals;
-  const auto s = system->lastSteadyStats();
+  // After Refined the solver is the next level's and has taken no step, so the
+  // level that converged is the one reported.
+  const auto s = closedLevelStats ? closedLevelStats->first : system->lastSteadyStats();
+  const double step = closedLevelStats ? closedLevelStats->second : system->getPseudoTransientStep();
   return py::dict(
-      "outcome"_a = system->lastSteadyOutcome(), "steps"_a = s.steps,
+      "outcome"_a = slicing ? lastSliceOutcome : system->lastSteadyOutcome(),
+      "degree"_a = system->getOrder(), "steps"_a = s.steps,
       "rejected"_a = s.rejected, "residual_norm"_a = s.residualNorm,
       "newton_iterations"_a = s.newtonIters, "residual_evaluations"_a = s.residualEvals,
       "jacobian_builds"_a = s.jacBuilds, "jacobian_solves"_a = s.jacSolves,
@@ -501,7 +607,7 @@ py::dict PyRunner::steadyStats(void) const {
       "adjoint_solves"_a = s.adjointSolves, "objective_test"_a = s.objectiveTest,
       "objective_error"_a = s.objectiveError,
       "objective_tolerance"_a = s.objectiveTolerance,
-      "pseudo_transient_step"_a = system->getPseudoTransientStep());
+      "pseudo_transient_step"_a = step);
 }
 
 
