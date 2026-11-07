@@ -17,6 +17,7 @@ class State(eqx.Module):
     VariableDot: Float[ArrayLike, "..."]
     Aux: Float[ArrayLike, "..."]
     Scalars: Float[ArrayLike, "..."]
+    Geometry: Float[ArrayLike, "..."]
 
     # VariableDot is d(variable)/dt, and it is empty unless some variable
     # declares `source_reads_time_derivatives`. Empty rather than zero so that
@@ -25,8 +26,21 @@ class State(eqx.Module):
     # and jax.grad of a source that never reads it has nothing to differentiate.
     # It is last in the signature so that State(v, d, f, a, s) still means what
     # it always did.
+    #
+    # Geometry is the attached field or equilibrium model's geometry slots,
+    # (nPoints, nGeometry) batched and (nGeometry,) pointwise -- read-only data
+    # the solver fills, empty when no model is attached, and dropped by the
+    # same partition for the same reason. A case that reads it differentiates
+    # through it like anything else: grad(sigma).Geometry is dSigmaFn_dGeometry.
     def __init__(
-        self, Variable_, Derivative_, Flux_, Aux_, Scalars_, VariableDot_=None
+        self,
+        Variable_,
+        Derivative_,
+        Flux_,
+        Aux_,
+        Scalars_,
+        VariableDot_=None,
+        Geometry_=None,
     ):
         self.Variable = Variable_
         self.Derivative = Derivative_
@@ -34,9 +48,12 @@ class State(eqx.Module):
         self.VariableDot = jnp.zeros((0, 0)) if VariableDot_ is None else VariableDot_
         self.Aux = Aux_
         self.Scalars = Scalars_
+        self.Geometry = jnp.zeros((0, 0)) if Geometry_ is None else Geometry_
 
     @classmethod
-    def make_zero(cls, nVars, nAux, nScalars, nPoints, readsTimeDerivatives=False):
+    def make_zero(
+        cls, nVars, nAux, nScalars, nPoints, readsTimeDerivatives=False, nGeometry=0
+    ):
         zero_ = jnp.zeros((nPoints, nVars))
         zero_aux = jnp.zeros((nPoints, nAux)) if nAux > 0 else None
         zero_scalars = jnp.zeros((nScalars,)) if nScalars > 0 else None
@@ -47,6 +64,7 @@ class State(eqx.Module):
             Aux_=zero_aux,
             Scalars_=zero_scalars,
             VariableDot_=zero_ if readsTimeDerivatives else None,
+            Geometry_=jnp.zeros((nPoints, nGeometry)) if nGeometry > 0 else None,
         )
 
     @classmethod
@@ -66,6 +84,7 @@ class State(eqx.Module):
                 # drops. That is the one asymmetry with the batched form below,
                 # and it is the view's, not this layer's.
                 VariableDot_=jnp.asarray(manta_state.udot),
+                Geometry_=jnp.asarray(np.array(manta_state.geom, copy=True)),
             )
 
         # Scalars stay (nScalars,) in both forms. They used to be broadcast to
@@ -85,6 +104,7 @@ class State(eqx.Module):
             Aux_=jnp.array(manta_state["Aux"]),
             Scalars_=jnp.array(manta_state["Scalars"]),
             VariableDot_=jnp.array(manta_state.get("VariableDot", jnp.zeros((0, 0)))),
+            Geometry_=jnp.array(manta_state.get("Geometry", jnp.zeros((0, 0)))),
         )
 
     def to_manta(self):
@@ -96,7 +116,7 @@ class State(eqx.Module):
             # special-casing size == 0 here would leak a 2-D (1, 0) array out to
             # the pointwise State caster, which expects a 1-D Vector.
             Scalars_out = jnp.atleast_2d(self.Scalars)[0, :]
-        return {
+        out = {
             "Variable": np.asarray(self.Variable),
             "Derivative": np.asarray(self.Derivative),
             "Flux": np.asarray(self.Flux),
@@ -104,13 +124,18 @@ class State(eqx.Module):
             "Scalars": np.asarray(Scalars_out),
             "VariableDot": np.asarray(self.VariableDot),
         }
+        # Only when there is some: the caster reads an absent key as no
+        # geometry, where an empty array would be a (0, 0) block to check.
+        if self.Geometry is not None and np.size(self.Geometry) > 0:
+            out["Geometry"] = np.asarray(self.Geometry)
+        return out
 
     @staticmethod
     def vmap_axes():
         # 0 for VariableDot as for every other per-point field. When it is empty
         # the partition ahead of the vmap has already replaced it with None,
         # which is not a leaf, so the axis here is simply not consulted.
-        return State(0, 0, 0, 0, None, 0)
+        return State(0, 0, 0, 0, None, 0, 0)
 
 
 """
