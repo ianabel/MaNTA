@@ -285,15 +285,6 @@ landed; these are the pieces that were deliberately not done, with the reason.
     vectorised and JAX paths actually want. Worth revisiting only if the key
     strings start causing the same trouble the pointwise ones did.
 
-  - The out-of-tree paths are verified by hand, not by CI. Both were exercised
-    end to end -- a one-file C++ case compiled against the installed headers,
-    dlopened via PhysicsPlugins and run; and `pip install .` into a fresh venv
-    with a Python case run from the user's own directory through the `manta`
-    command -- but neither is an automated test. The C++ one needs
-    `cmake --install build --prefix` to a temp directory and a compiler
-    invocation; the Python one needs a venv. Both are slow enough to want their
-    own CI job rather than a place in `ctest`.
-
 
 Found since, and left undone deliberately rather than overlooked. Each says what
 would have to exist before the fix could be checked, which in every case is the
@@ -438,30 +429,6 @@ reason it was not made:
     time-marching path, beside IDA's own totals, so a steady-state run
     (SteadyStateSolver, which does not go through IDASolve) reports nothing.
 
-  - **No Python surface can reach the geometry, in either of the two layers, and
-    both gaps are latent rather than visible.** Nothing exercises them because
-    nothing can: a field model is selected by the config's FieldModel key from a
-    C++ registry, Runner.configure rejects that key as ProblemSelection, and
-    there is no pybind11 class for a FieldModel to hand over instead. So a
-    Python or JAX case can be *written* against geometry today and will read
-    zeros. Two separate pieces:
-
-      * manta.jax.State has no Geometry field, while the GlobalState caster
-        (Python.cpp) puts a "Geometry" key in the dict unconditionally. State
-        .from_manta drops it, so a JAX case cannot read geometry at all. Adding
-        the field is small; what makes it more than a one-liner is that State is
-        an equinox Module with a vmap_axes() pytree and a make_zero, and an
-        nGeom == 0 run has to keep giving the same pytree structure it does now
-        -- the Aux and Scalars fields already carry that None-for-empty pattern.
-      * manta.State.geom is indexable by position only (PyState.hpp). The slot
-        names live in the field model's FieldModelSpec and this view takes its
-        names from the TransportSystem's SystemSpec, so there is nothing to look
-        a name up in. Every other field on the view -- u, q, sigma, phi, scalars
-        -- accepts a declared name, so the asymmetry will be noticed. Fixing it
-        means giving PyState a route to the attached model's spec, which the
-        solver does not currently offer a State.
-
-    Both want a Python-attachable field model first, or they are untestable.
   - The objective estimate has one in-loop consumer, and not the one this entry
     was about.
 
@@ -501,31 +468,6 @@ reason it was not made:
     Python `while` needs and is why a slice loop belongs in eager code or inside
     an io_callback rather than under jit.
 
-  - Degree adaptation and a sliced steady solve are refused together, and the
-    combination that would be worth having is not the one that was refused.
-
-    start_steady() throws when DegreeAdaptation is set. The mechanical reason is
-    that adapting the degree *replaces* the SystemSolver, once per degree
-    (PyRunner::adaptDegree), while a slice loop holds the state of the one it
-    started on -- so the loop would be resuming into a solver that no longer
-    exists. Refusing is right for now: it is one line, and it fails where the
-    mistake was made rather than several slices later.
-
-    What is actually wanted is the other order. Slice to a converged state at the
-    degree you have, raise the degree, and carry on from the answer you already
-    reached -- which is a *restart* rather than a continuation, because the
-    coefficients move to a different space. setInitialConditions already does
-    that transfer for a restart file, and knows the difference: a degree change
-    is projected, so sigma is rebuilt and the state it hands the solver is a
-    guess like any other. The trace survives verbatim, since lambda has no
-    polynomial degree.
-
-    So the pieces exist and the sequencing is the work: after a converged slice,
-    project the state onto the new degree, rebuild the solver, and re-enter the
-    continuation. Note the pseudo-time step should *not* transfer with it -- the
-    projected state is off the manifold in a way the old dt was not chosen for,
-    which is the same reason a projected restart runs IDACalcIC where a copied
-    one does not.
 
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
@@ -535,19 +477,6 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     DGSoln::Map, every block in Matrices.cpp, AdjointVectors.cpp, the pybind11
     casters and the restart format all rest on. tau ~ 1/h also changes every
     existing run.
-
-  - No manufactured case has more than one aux variable, more than one scalar, or
-    both at once. The order studies cover nAux = 1 and nScalars = 1 separately, so
-    a block-indexing error that only appears at the second of either would not
-    show up in them. SystemSolverMatrixTests.cpp covers the layout with two
-    scalars and one aux, and ScalarJacobianTests.cpp with three scalars, but
-    neither measures a rate.
-
-
-The regression suite compares only `u`, never the `q`, `sigma` and `u_star` that
-every run also writes. Closing it means regenerating the references and picking
-tolerances for three fields a derivative rougher than `u`. Tests/README.md's
-"Regression tests" section has the detail and the evidence that it is real slack.
 
 
 From the origin/optimize-mode review, still unmerged and worth taking:

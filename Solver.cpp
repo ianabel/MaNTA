@@ -109,10 +109,16 @@ void SystemSolver::initialize()
 	// Here rather than in setFieldModel or the constructor: the discretisation
 	// estimate builds a second solver on the same case that never initialises.
 	if (fieldModel || equilibriumModel)
-		problem->setGeometryProvider(nGeom, [this](VectorRef out, DGSoln const &Y, Position x, Time t)
+	{
+		std::vector<std::string> slots;
+		for (FieldSlot const &g : equilibriumModel ? equilibriumModel->getSpec().geometry
+		                                           : fieldModel->getSpec().geometry)
+			slots.push_back(g.name);
+		problem->setGeometryProvider(std::move(slots), [this](VectorRef out, DGSoln const &Y, Position x, Time t)
 		                             { geometryAt(out, Y, x, t); });
+	}
 	else
-		problem->setGeometryProvider(0, {});
+		problem->setGeometryProvider({}, {});
 
 	// Nor does the kappa a held nodal tau took from the last run's final
 	// Jacobian build.

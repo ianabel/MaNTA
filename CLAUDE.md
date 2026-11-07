@@ -157,7 +157,7 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**Eleven of the twelve contexts `ci.yml` publishes are required**, each pinned to app
+**Twelve of the thirteen contexts `ci.yml` publishes are required**, each pinned to app
 15368 (GitHub Actions), so a status of that name from anything else does not
 count:
 
@@ -167,7 +167,7 @@ Build + tests (g++-16)                    Build + tests (clang++-20)
 Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
 Build + tests (clang++-19, Eigen 5.0.1)   Build + tests (fedora:latest)
 Build + tests (g++-15, OpenMP)            Build + tests (fedora:latest, OpenMP)
-Docs
+Docs                                      Out of tree
 ```
 
 **`Coverage` is the one that is deliberately *not* required**, and it is the only
@@ -979,7 +979,7 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   the same slip used to cost one. `both_sources_produce_the_same_solver_config`
   compares `SolverConfig`s, not solvers, so it would not notice.
 * **`Category` and `Reader` are two different enums.** `Category` says what a key
-  *is* (`Solver`, `ProblemSelection`, `Cli`); `Reader` says who is asking
+  *is* (`Solver`, `ProblemSelection`, `FieldSelection`, `Cli`); `Reader` says who is asking
   (`Toml`, `Dict`). Requiredness differs by reader for exactly three keys:
   `t_final` and `TransportSystem` are required of a config file only,
   `OutputFilename` of a dict only — a file falls back to its own stem.
@@ -995,6 +995,16 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   not rejected; the solver never reads them. Conversely `TransportSystem` and
   `PhysicsPlugins` are `Category::ProblemSelection` and are an *error* in a dict,
   rather than being accepted and ignored.
+* **The geometry source is built in one place, `GeometrySource.cpp`.**
+  `FieldModel`, `EquilibriumModel` and `FieldCoupling` are
+  `Category::FieldSelection`: read by both surfaces, and turned into a model
+  and a coupling by `geometrySourceFromConfig` -- or `geometrySourceFor`, for a
+  Python `EquilibriumModel` object -- which runManta and `PyRunner::configure`
+  both call, then `attachTo` the solver before `applySolverConfig`. That is
+  `applySolverConfig`'s job for these keys, and for the same reason: two copies
+  of the coupling choice is how the surfaces would drift.
+  `test_a_dict_couples_a_field_exactly_as_a_config_file_does` compares the two
+  bit for bit at every tier.
 * **Configuration errors propagate.** `loadSolverConfig` throws
   `std::invalid_argument`, which pybind maps to `ValueError` for `manta.run()`;
   `main()` catches it and prints one line for the command line.
@@ -1385,8 +1395,8 @@ solver holds the last `Equilibrium` as a cache keyed byte for byte on the
 solution vector's cell prefix and the time (`equilibriumAt`), solves a new one
 only when that changes, warm-starts it from the last, and fills `State::geom`
 from it in `evaluateGeometry`. `FieldModelEquilibrium` runs any `FieldModel`
-that way -- Newton on its rows alone -- and is what runManta attaches for
-`"consistent"`. Four things are load-bearing. **The cache is dropped in
+that way -- Newton on its rows alone -- and is what `geometrySourceFromConfig`
+attaches for `"consistent"`. Four things are load-bearing. **The cache is dropped in
 `initialize()`'s unconditional part**, the `RF_cellwise` trap again: deleting
 that moves a reused theta-pinch run by 1.6e-8, and
 `a_reused_tier_zero_theta_pinch_solver_matches_a_fresh_one_bit_for_bit` is the
@@ -1674,8 +1684,17 @@ gives. Four pieces to know:
   SUNDIALS objects that **nothing else frees** — `~SystemSolver` does not call
   `destroySundials` — so `configure()`, `~PyRunner` and any exception out of the
   loop all abandon it explicitly; that is why the context manager is the form to
-  prefer. `DegreeAdaptation` is refused, since adapting the degree replaces the
-  solver the loop is holding.
+  prefer. Under `DegreeAdaptation` the loop is `runAdaptiveDegree`'s own,
+  `DegreeAdaptationLoop`, a level at a time: the slice that converges a level
+  finishes the run on it exactly as `runSolver` would, closes the level, and if
+  the degree goes up builds and initialises the next and returns `Refined` (the
+  enum's last value, so the FFI's int32s keep their meaning). One loop is what
+  makes a sliced run land on `run_ss()`'s state bit for bit
+  (`test_a_sliced_degree_adaptation_reaches_the_answer_run_ss_does`); a second
+  copy of the sequencing would drift. Every exit clears the restart state the
+  level transfers set -- `abandonAdaptation` -- or the next run on the
+  configuration resumes from the last level handed on. `MeshAdaptation` and the
+  ladders are still refused: they replace the mesh too.
   The same four names are FFI ops (`ffi.hpp`, CPU only like `run`/`run_ss`), so
   `manta.SteadySolve(ffi_runner)` works — `steadyStats()` and
   `objectiveEstimate()` need none, being host-side reads that touch no device
@@ -1842,12 +1861,25 @@ Three things to know:
 *install* time, not configure time**, so `--prefix` is recorded correctly and
 `DESTDIR` is honoured; a plain `configure_file` bakes in whatever the prefix was
 when cmake last ran, and the first symptom of that is a plugin compiling against
-the wrong headers. There is deliberately **no installed CMake package**: an
+the wrong headers. It also carries the include directories of what the installed
+headers include: the vendored toml11, installed under `include/manta/extern`, and
+SUNDIALS, Eigen, Boost and netCDF wherever this configure found them (`manta_deps`'s
+usage requirements, evaluated at generate time), less the compiler's own search
+directories -- without them the documented plugin build did not compile anywhere
+SUNDIALS was not in a system directory. The installed binaries likewise carry an
+RPATH to SUNDIALS's library directory, named from the linked targets rather than
+left to `INSTALL_RPATH_USE_LINK_PATH`, which skips anything inside the project --
+and `./build_sundials` installs into `./sundials/install`, so the documented setup
+installed a solver that could not find `libsundials_ida` at startup. There is
+deliberately **no installed CMake package**: an
 exported target would invite `target_link_libraries(mycase manta)`, and linking
 `libmanta` is exactly the mistake below. A physics case built as a shared object and named
 in the config's `PhysicsPlugins` array is dlopened by `runManta` before
 `InstantiateProblem`; its static initialiser registers it into the same
-process-global map. Two traps, neither of which is a link error:
+process-global map. CI's `Out of tree` job runs both routes the way a user does --
+this install, a plugin built with pkg-config's flags, and `pip install .` into a
+fresh venv driving a Python case through `manta` -- from `Tests/OutOfTree/`,
+whose files `docs/out_of_tree.rst` includes. Two traps, neither of which is a link error:
 
 * **A plugin must be compiled with the flags `pkg-config --cflags manta`
   reports.** Eigen aligns its types to the widest vector unit the compiler knows
@@ -2641,12 +2673,12 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   A coupled restart is not in that class either — `psi` is copied out of the
   file and, being differential, held fixed by `IDACalcIC`, so it round-trips
   bit for bit at whatever tolerance the run itself survives.
-* **A field model cannot be reached from Python.** `FieldModel` has no pybind11
-  class and `FieldModel` is a `ProblemSelection` key, so it is an error in a
-  `Runner.configure` dict. `PyRunner::configure` therefore *refuses* a restart
-  file whose `nField` is nonzero, by name, rather than reading `psi` into a
-  vector with no field block — which would surface as an `nVars`/`nAux`/
-  `nScalars` length complaint naming three things that are all fine.
+* **A tier-2 field model cannot be written in Python.** `FieldModel` has no
+  pybind11 class, so a Python run couples a field's own unknowns only through a
+  C++ model named in the dict; `manta.EquilibriumModel` (`PyEquilibriumModel.hpp`)
+  is tiers 0 and 1 written in Python. The equilibrium object a Python `Solve`
+  returns is held in a `PyEquilibrium`, which takes the GIL to drop it, since
+  the last reference may go from a C++ frame.
 * ~~`python/Tests/test_reference_solutions.py::test_jax_aux_test` is a
   `strict=True` xfail.~~ Fixed. It was four faults in `manta.jax`, all reachable
   only with `nAux > 0`: `AuxGPrime` and `dAux_dp` take an extra argument ahead
