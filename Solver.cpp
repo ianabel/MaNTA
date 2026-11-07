@@ -1063,6 +1063,12 @@ void SystemSolver::integrate(double tFinal)
 		if (TerminateOnSteadyState && timeMarchIsSteady(tret))
 		{
 			std::println("Steady State achieved at time t = {:g}", tret);
+			// The objective estimate, as a steady solve makes it on finishing:
+			// a march that passed its steady test is as near the fixed point the
+			// correction extrapolates to (docs/adjoints.rst has the measurement).
+			// Made after the loop's last use of IDA's factorisation.
+			if (estimateObjectiveOnFinish && adjointProblem != nullptr)
+				objectiveEstimate = estimateObjective(tret);
 			break;
 		}
 

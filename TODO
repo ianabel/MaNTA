@@ -527,20 +527,6 @@ reason it was not made:
     which is the same reason a projected restart runs IDACalcIC where a copied
     one does not.
 
-  - Two things about the estimate are unmeasured and would change its sizing.
-
-      * The norm. The bound pairs unweighted 2-norms. Pairing the WRMS norm with
-        its dual should be tighter, and is the norm IDA's own error test would
-        recognise.
-      * Whether it transfers to a time-marching run. Only steady solves were
-        measured, and there G is a property of the fixed point rather than of a
-        path, which is what makes J^-1 F the right correction.
-
-    The stellarator's cost profile is the other open question -- a solve that
-    spends many steps at low residual would change the arithmetic above -- and
-    needs a machine that can hold the real resolution: the full case wants ~88 GB
-    for the drift-kinetic solve, and the reduced one does not converge.
-
 Superconvergence follow-ons (see Tests/README.md for what is already verified):
 
   - Paper II's HDG(ABC) / HDG+ family: W_h = P_{k+1} with tau ~ 1/h makes u_h
