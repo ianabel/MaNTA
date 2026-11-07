@@ -27,11 +27,13 @@ set(MANTA_PC_MARCH "@MANTA_PC_MARCH@")
 #     <cstdlib>'s #include_next <stdlib.h> then fails in every translation unit
 #     (CLAUDE.md has the trap). CMake filters them from its own flags; this file
 #     is not CMake's, so it does it itself.
-#   * the vendored directories under the source tree, which an installed .pc
-#     must not point into. toml11 is installed instead; autodiff is not needed.
+#   * the vendored submodules under extern/, which an installed .pc must not
+#     point into. toml11 is installed instead; autodiff is not needed. Only
+#     extern/: a dependency may be installed inside the checkout, as CI's
+#     SUNDIALS is (sundials/install), and dropping that took its headers away.
 file(READ "@PROJECT_BINARY_DIR@/manta-pc-includes.txt" _dirs)
 set(_implicit "@CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES@")
-set(_source_dir "@PROJECT_SOURCE_DIR@")
+set(_vendored_dir "@PROJECT_SOURCE_DIR@/extern")
 set(MANTA_PC_DEPENDENCY_CFLAGS "")
 foreach(_d IN LISTS _dirs)
   if(_d STREQUAL "")
@@ -47,7 +49,7 @@ foreach(_d IN LISTS _dirs)
       set(_skip TRUE)
     endif()
   endforeach()
-  cmake_path(IS_PREFIX _source_dir "${_d}" NORMALIZE _inside)
+  cmake_path(IS_PREFIX _vendored_dir "${_d}" NORMALIZE _inside)
   if(NOT _skip AND NOT _inside AND NOT " ${MANTA_PC_DEPENDENCY_CFLAGS} " MATCHES " -isystem${_d} ")
     string(APPEND MANTA_PC_DEPENDENCY_CFLAGS " -isystem${_d}")
   endif()
