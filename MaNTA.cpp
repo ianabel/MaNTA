@@ -8,7 +8,7 @@
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
 #include "FieldModel.hpp"
-#include "FieldModelEquilibrium.hpp"
+#include "GeometrySource.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
 #include "PhysicsInstance.hpp"
@@ -158,69 +158,25 @@ int runManta(std::string const &fname)
 	if (config.solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
-	// A field model is selected by name from the same process-global registry
-	// pattern the physics cases use, and is handed the parsed config file so it
-	// can read its own table. After the plugin dlopens above, since a model may
-	// come from one; and *before* the restart block below, because the field
-	// block is part of the solution vector and its length is what the restart
-	// file has to be checked against and the restart DGSoln shaped by. It is
-	// attached to the solver further down -- setFieldModel needs a solver, and a
-	// solver cannot exist until the restart values are in the problem.
-	std::shared_ptr<FieldModel> fieldModel;
-	if (!config.FieldModel.empty())
+	// The geometry source -- a FieldModel or an EquilibriumModel, each from its
+	// own registry and handed the parsed config file so it reads its own table,
+	// with FieldCoupling resolved -- is built by the function PyRunner uses too.
+	// After the plugin dlopens above, since a model may come from one; and
+	// *before* the restart block below, because a coupled field's unknowns are
+	// part of the solution vector and their count is what the restart file has
+	// to be checked against. It is attached to the solver further down: a solver
+	// cannot exist until the restart values are in the problem.
+	GeometrySource geometry;
+	try
 	{
-		try
-		{
-			fieldModel = FieldModels::InstantiateFieldModel(config.FieldModel, configFile, *grid);
-		}
-		catch (std::invalid_argument const &e)
-		{
-			logmsg<LOG_LEVEL::ERROR>("Could not instantiate a field model for FieldModel = {}\n  {}",
-									 config.FieldModel, e.what());
-			return 1;
-		}
+		geometry = geometrySourceFromConfig(config, configFile, *grid, pProblem->spec());
 	}
-	else if (config.FieldCoupling != "auto" && config.EquilibriumModel.empty())
-		throw std::invalid_argument("FieldCoupling = \"" + config.FieldCoupling +
-									"\" was given without a FieldModel or EquilibriumModel to couple.");
-
-	// The consistent mode runs the same model as a black-box equilibrium: no
-	// unknowns in the state vector, so the restart check below sees none, and
-	// the wrapper refuses a model whose field has dynamics here, before anything
-	// else is built. Which mode is chooseFieldCoupling's, from FieldCoupling and
-	// what the case and the model supply.
-	std::shared_ptr<EquilibriumModel> equilibrium;
-	auto equilibriumCoupling = SystemSolver::EquilibriumCoupling::Consistent;
-	if (fieldModel)
+	catch (std::invalid_argument const &e)
 	{
-		bool dynamics = false;
-		for (Index i = 0; i < fieldModel->nFieldDOF(); ++i)
-			dynamics = dynamics || fieldModel->isFieldDOFDifferential(i);
-		const FieldCouplingMode mode = chooseFieldCoupling(config, pProblem->spec(), dynamics);
-		if (mode != FieldCouplingMode::Coupled)
-			equilibrium = std::make_shared<FieldModelEquilibrium>(fieldModel);
-		if (mode == FieldCouplingMode::Reduced)
-			equilibriumCoupling = SystemSolver::EquilibriumCoupling::Reduced;
+		logmsg<LOG_LEVEL::ERROR>("{}", e.what());
+		return 1;
 	}
-	// A native equilibrium model, from its own registry, the same way; loadSolverConfig
-	// has already refused one beside a FieldModel. No unknowns, so nField stays 0.
-	if (!config.EquilibriumModel.empty())
-	{
-		try
-		{
-			equilibrium = EquilibriumModels::InstantiateEquilibriumModel(config.EquilibriumModel, configFile, *grid);
-		}
-		catch (std::invalid_argument const &e)
-		{
-			logmsg<LOG_LEVEL::ERROR>("Could not instantiate an equilibrium model for EquilibriumModel = {}\n  {}",
-									 config.EquilibriumModel, e.what());
-			return 1;
-		}
-		const bool differencedResponse = equilibrium->getSpec().response == EquilibriumResponse::Differenced;
-		if (chooseEquilibriumCoupling(config, pProblem->spec(), differencedResponse) == FieldCouplingMode::Reduced)
-			equilibriumCoupling = SystemSolver::EquilibriumCoupling::Reduced;
-	}
-	const Index nField = fieldModel && !equilibrium ? fieldModel->nFieldDOF() : 0;
+	const Index nField = geometry.nField();
 
 	if (config.restart)
 	{
@@ -259,18 +215,9 @@ int runManta(std::string const &fname)
 		pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder, nField);
 	}
 
-	// Degree adaptation builds and runs a solver per level itself, and
-	// runAdaptiveDegree has no way to take a field model -- so a field model
-	// would silently never be attached, leaving the run solving the fixed-field
-	// problem while the restart check above has already sized the state for
-	// nField unknowns. Refused rather than ignored, the way a sliced steady
-	// solve refuses it.
-	if ((config.DegreeAdaptation || config.MeshAdaptation || !config.DegreeLadder.empty() ||
-		 !config.GridLadder.empty()) &&
-		(fieldModel || equilibrium))
-		throw std::invalid_argument(
-			"DegreeAdaptation and MeshAdaptation cannot be combined with a FieldModel or an "
-			"EquilibriumModel: the adaptive drivers build a solver per level and cannot carry the model.");
+	// The adaptive drivers build and run a solver per level themselves and
+	// have no way to take the model, so it would silently never be attached.
+	refuseAdaptationWithGeometry(config, geometry);
 
 	// The adaptation drivers solve on several discretisations. Under
 	// RebuildPhysicsOnRegrid a case that cannot follow a new one in place is
@@ -323,10 +270,7 @@ int runManta(std::string const &fname)
 
 		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
 		// reshapes the solution vector and refuses once the solver is initialised.
-		if (equilibrium)
-			system->setEquilibriumModel(equilibrium, equilibriumCoupling);
-		else if (fieldModel)
-			system->setFieldModel(fieldModel);
+		geometry.attachTo(*system);
 
 		applySolverConfig(config, *system);
 		if (config.solveAdjoint)

@@ -23,6 +23,7 @@ class VectorizedTransportSystem(ScalarConstraints, MaNTA.TransportSystem):
         self._check_scalar_hooks()
 
         self.dSourcedstate = jax.jit(jax.grad(self.source, argnums=1))
+        self.dSigmadstate = jax.jit(jax.grad(self.sigma, argnums=1))
 
         self.dAuxdvars = jax.jit(jax.grad(self.aux, argnums=1))
 
@@ -169,6 +170,31 @@ class VectorizedTransportSystem(ScalarConstraints, MaNTA.TransportSystem):
             j = int(np.argmin(np.abs(points - float(x))))
             params = jax.tree_util.tree_map(lambda a: a[j], params)
         return self.dSourcedstate(index, state, x, t, params).Scalars
+
+    def _node_params(self, x):
+        """The parameters at physics node x: by position in the plan's residual
+        points with spatial parameters, the shared ones otherwise."""
+        params = self.params
+        if self.vmap_axes[2] == 0:
+            points = np.asarray(self.evaluationPlan.points(MaNTA.EvaluationKind.Residual))
+            j = int(np.argmin(np.abs(points - float(x))))
+            params = jax.tree_util.tree_map(lambda a: a[j], params)
+        return params
+
+    # d(flux, source, aux)/d(geometry), pointwise: the batched derivatives carry
+    # no geometry component, so the coupled Jacobian asks for these per node,
+    # for a case declaring geometryDerivatives = Analytic.
+    @MaNTA_Decorator
+    def dSigmaFn_dGeometry(self, index, state, x, t):
+        return self.dSigmadstate(index, state, x, t, self._node_params(x)).Geometry
+
+    @MaNTA_Decorator
+    def dSources_dGeometry(self, index, state, x, t):
+        return self.dSourcedstate(index, state, x, t, self._node_params(x)).Geometry
+
+    @MaNTA_Decorator
+    def dAuxG_dGeometry(self, index, state, x, t):
+        return self.dAuxdvars(index, state, x, t, self._node_params(x)).Geometry
 
     """
     Sigma and source, and auxiliary functions to be overloaded in derived classes

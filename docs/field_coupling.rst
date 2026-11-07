@@ -942,8 +942,8 @@ model built outside the tree. A run selects one in place of a field model:
    EquilibriumModel = "ThetaPinchPressureBalance"
 
 The two keys are exclusive, refused together at load: a run has one source of
-geometry. Both are ``ProblemSelection`` keys, so neither is accepted by
-``Runner.configure``.
+geometry. Both are accepted by ``Runner.configure`` as well, with the model's
+table nested under its name; see :ref:`field-from-python`.
 
 A native model has no unknowns, so ``FieldCoupling`` chooses between
 ``consistent`` (:ref:`field-tier-0`) and ``reduced`` (:ref:`field-tier-1`), and
@@ -1147,6 +1147,86 @@ and stays ``reduced``: which side of that trade wins depends on what one
 equilibrium solve costs against one sweep of the physics, which ``auto`` cannot
 know, and a case that knows can say ``FieldCoupling = "consistent"``.
 
+.. _field-from-python:
+
+From Python
+-----------
+
+Every tier is reachable from a ``manta.Runner``, and through the same function
+the config file goes through, so ``FieldCoupling`` resolves identically on both
+surfaces: a dict and a ``.conf`` describing the same run give netCDF output
+equal bit for bit, at every tier (``python/Tests/test_field_coupling.py``).
+
+**A registered model, by name.** ``FieldModel``, ``EquilibriumModel`` and
+``FieldCoupling`` go in the dict beside the solver's keys, and the model's own
+table is a nested dict under the name it reads, as a C++ case's is:
+
+.. code-block:: python
+
+   runner = manta.Runner("ThetaPinchDiffusion")
+   runner.configure({
+       "PolynomialDegree": 3, "GridSize": 6,
+       "LowerBoundary": 0.0, "UpperBoundary": 1.0,
+       "t_final": 1.0, "delta_t": 0.1,
+       "FieldModel": "ThetaPinchEquilibrium",
+       "FieldCoupling": "reduced",
+       "ThetaPinchEquilibrium": {"PressureAux": 0},
+       "ThetaPinchDiffusion": {"Temperature": 0.3},
+   })
+
+A restart file written by a coupled run carries the field's unknowns, and a
+``Runner`` reads them back as the binary does, after checking their count
+against the configured model's.
+
+**An equilibrium model written in Python** is a ``manta.EquilibriumModel``: tiers
+0 and 1, the black box and the black box coupled through its response. It
+declares its geometry slots as data and implements ``Solve`` and ``Geometry``:
+
+.. code-block:: python
+
+   class Balance(manta.EquilibriumModel):
+       geometry = [manta.GeometrySlot("Vprime"), manta.GeometrySlot("dVprime_dx"),
+                   manta.GeometrySlot("gradx2"), manta.GeometrySlot("B")]
+       label = "Phi/Phi_wall"   # the coordinate the slots are a function of
+       name = "ThetaPinch"      # the netCDF group they are written into
+
+       def Solve(self, states, points, weights, t, warm):
+           p = states["Aux"][:, 0]          # (nPoints, nAux), at the basis nodes
+           ...
+           return equilibrium               # any object; the solver hands it back
+
+       def Geometry(self, equilibrium, points):
+           ...
+           return g                         # (len(geometry), len(points))
+
+   runner.set_equilibrium_model(Balance())
+
+The contract is the C++ one (:ref:`field-tier-0`): ``Solve`` is called whenever
+the transport state changes and only then, ``warm`` is the model's previous
+answer in the run or ``None``, and an exception is a recoverable step failure.
+The equilibrium object is opaque and must be a self-contained snapshot, since
+the solver may ask for ``Geometry`` of one after a later ``Solve``. At tier 1
+the response is the base class's forward difference of ``Solve`` unless the
+model declares ``response = manta.EquilibriumResponse.Model`` and implements
+``applyResponse(equilibrium, states, dp, inputPoints, weights, t,
+geometryPoints)``, returning ``dg``, and ``applyResponseTranspose``, returning
+a dict of ``dp`` rows; ``responseStep``, ``setTolerances`` and ``resetForRun``
+are optional as in C++. ``manta.registerEquilibriumModel(name, factory)`` names
+one, so ``EquilibriumModel = "name"`` reaches it from a dict or, through the
+``manta`` command, from a config file; ``factory(config, grid)`` builds it.
+``python/Tests/theta_pinch_balance.py`` is ``ThetaPinchPressureBalance``
+written that way, and runs the C++ model's numbers to 7e-11.
+
+**A transport case reading the geometry** declares it as class attributes,
+``readsGeometry = True`` and ``geometryDerivatives`` (``manta.GeometryDerivatives``
+``Analytic``, ``Differenced`` or ``None_``), and reads ``state.geom`` by the
+model's slot names — ``state.geom["B"]`` — or by position. ``Analytic`` means
+its ``dSigmaFn_dGeometry``, ``dSources_dGeometry`` and ``dAuxG_dGeometry``,
+which return one entry per slot. A ``manta.jax`` case reads ``state.Geometry``
+and has all three derived by ``jax.grad``, as its other derivatives are; and an
+objective reading ``state.Geometry`` sends its ``dg/d(geometry)`` rows to the
+solver, which contracts them into the field's share of the gradient.
+
 Current restrictions
 --------------------
 
@@ -1157,9 +1237,12 @@ Current restrictions
   superconvergent twin reads states that already carry them — so a case reading
   geometry there would work with ``Superconvergent = true`` and read out of
   bounds with it off.
-* **A field model cannot be written in Python.** ``FieldModel`` has no pybind11
-  class, and ``FieldModel`` is a ``ProblemSelection`` key, so it is an error in
-  a ``Runner.configure`` dict. A coupled run is a config-file run.
+* **A tier-2 field model cannot be written in Python.** ``FieldModel`` has no
+  pybind11 class, so a Python run couples a field's own unknowns only through a
+  C++ model named in the dict. A Python ``EquilibriumModel`` covers tiers 0
+  and 1.
+* **Degree and mesh adaptation are refused beside a field**, on both surfaces:
+  the adaptive drivers build a solver per level and cannot carry the model.
 
 Two dimensions, and beyond
 --------------------------
