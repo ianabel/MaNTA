@@ -157,27 +157,37 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**Twelve of the thirteen contexts `ci.yml` publishes are required**, each pinned to app
+**Thirteen of the fifteen contexts `ci.yml` publishes are required**, each pinned to app
 15368 (GitHub Actions), so a status of that name from anything else does not
 count:
 
 ```
-Build + tests (g++-15)                    Build + tests (clang++-19)
-Build + tests (g++-16)                    Build + tests (clang++-20)
-Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
-Build + tests (clang++-19, Eigen 5.0.1)   Build + tests (fedora:latest)
-Build + tests (g++-15, OpenMP)            Build + tests (fedora:latest, OpenMP)
-Docs                                      Out of tree
+Build + tests (g++-14)                    Build + tests (clang++-19)
+Build + tests (g++-15)                    Build + tests (clang++-20)
+Build + tests (g++-16)                    Build + tests (clang++-21)
+Build + tests (g++-15, Eigen 5.0.1)       Build + tests (fedora:latest)
+Build + tests (clang++-19, Eigen 5.0.1)   Build + tests (fedora:latest, OpenMP)
+Build + tests (g++-15, OpenMP)            Docs
+Out of tree
 ```
 
-**`Coverage` is the one that is deliberately *not* required**, and it is the only
-context here that publishes without gating anything. It runs `make coverage`'s
+**`Build + tests (almalinux:10, gcc 14)` is not required, and that is a choice
+about its failure mode rather than its value.** It installs its dependencies from
+the AlmaLinux and EPEL mirrors on every run, and a mirror serving a corrupt
+`repomd.xml` fails it with nothing wrong in the change. What it alone covers is
+RHEL's packaging: EPEL's Eigen and netCDF, CRB's BLAS, `/usr/lib64`. gcc 14
+itself is gated by `Build + tests (g++-14)`. So a red AlmaLinux leg beside a
+green g++-14 one is either a mirror or a packaging problem, and the log says
+which within its first minute.
+
+**`Coverage` is the other context that is deliberately *not* required**, and it
+publishes without gating anything for a different reason. It runs `make coverage`'s
 successor — all three suites under an instrumented build — so what it would gate
-is what ten other legs already gate, at the cost of the slowest leg's wall-clock
+is what the required build legs already gate, at the cost of the slowest leg's wall-clock
 on every PR. It has no percentage threshold and never did, so it was never
 measuring coverage in the sense of holding a number: it was a duplicate build.
-Removed from the rule 2026-08-26. It still runs, and a red `Coverage` beside ten
-green legs is worth reading — an instrumented `-O0` build failing where the
+Removed from the rule 2026-08-26. It still runs, and a red `Coverage` beside green
+build legs is worth reading — an instrumented `-O0` build failing where the
 optimised ones pass is a real signal — but it does not block a merge.
 
 **A new leg's context can only be required once the leg is on `main`**, and that

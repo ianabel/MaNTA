@@ -716,11 +716,11 @@ AdaptiveMeshResult runAdaptiveMesh(SolverConfig const &config,
             }
             catch (std::exception const &e)
             {
-                // The rejected-step path. Section 9 measured this as the real
-                // ceiling on grading -- IDA's corrector failing at
-                // |h| = MinStepSize once the narrowest cell is around 1e-6 of the
-                // span -- and it is not monotone in anything, so a softer mesh is
-                // worth trying rather than assuming the whole idea has failed.
+                // The rejected-step path. Time marching fails on hard gradings
+                // -- IDA's corrector at |h| = MinStepSize once the narrowest cell
+                // is around 1e-6 of the span, and sometimes far above it -- and
+                // not monotonically in anything, so a softer mesh is worth trying
+                // rather than assuming the whole idea has failed.
                 logmsg<LOG_LEVEL::WARNING>(
                     "Graded mesh attempt {} failed to solve ({}). Softening the "
                     "grading ratio and retrying.", attempt, e.what());
