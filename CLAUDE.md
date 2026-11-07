@@ -2189,7 +2189,7 @@ formula, not the operator, if the data cannot tell them apart.
 
 * **g++-14.2.0 miscompiled this tree at `-O3 -flto -march=native`, and the
   symptom is a wrong number rather than a crash.** Measured 2026-08-23 on
-  g++-14.2.0, znver2; the README's floor for gcc moved to 15 because of it.
+  g++-14.2.0, znver2; the README's floor for gcc is 14.3 because of it.
   **g++-14.3.0 does not reproduce it** (2026-11-06): all three suites pass at the
   release flags, and with the inert member below in place the reproduction test
   and three full unit-suite runs are clean. Whether 14.3 fixed it or the rebuilt
@@ -2258,8 +2258,10 @@ formula, not the operator, if the data cannot tell them apart.
   coverage job stays on g++-15, and the Eigen 5.0.1 legs on g++-15 and
   clang++-19. A failure on either gcc 14 leg in a test that differences the
   residual, by the drift above, is this defect rather than the change under
-  review. The release build warns when it sees g++-14; `TODO` has the full
-  reproduction.
+  review. Both pass every suite (2026-11-07): the runner's g++ 14.3.0 and
+  AlmaLinux 10's gcc 14.3.1, Red Hat's build of the compiler RHEL 10 keeps for
+  the life of the release. The release build warns below 14.3; `TODO` has the
+  full reproduction.
 
 * **gcc and clang do not diagnose the same things, so build with clang
   occasionally** — that is what CI's clang matrix legs are for. (CI is nine

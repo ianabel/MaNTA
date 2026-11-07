@@ -263,25 +263,29 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   endif()
 endif()
 
-# g++-14 miscompiles this tree at exactly the release flags -- all three of
-# g++-14, -flto and -march=native are required, and the trigger is SystemSolver's
+# g++ 14.2 miscompiled this tree at exactly the release flags -- all three of
+# g++-14, -flto and -march=native were required, and the trigger was SystemSolver's
 # member layout, so whether a given tree is affected is luck rather than something
-# a build can test for. See CLAUDE.md, "g++-14 miscompiles this tree".
+# a build can test for. See CLAUDE.md, "g++-14.2.0 miscompiled this tree".
 #
 # Warn rather than refuse: it is the compiler Ubuntu noble ships as its archive
 # default, this is the one place a person reliably meets the fact, and a hard
 # error would stop work that is very often unaffected. Asked of the compiler
 # version rather than matched against its name, because a distribution whose
 # plain `g++` *is* 14 is the case nobody would think to check.
+#
+# 14.3 and later are not warned about: CI builds and runs every suite on 14.3.0
+# (ubuntu-24.04) and 14.3.1 (AlmaLinux 10, RHEL 10's system compiler), and the
+# reproduction passes on 14.3.0. What was measured failing is 14.2.0.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
-   AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15
+   AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14.3
    AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14
    AND CMAKE_BUILD_TYPE STREQUAL "Release"
    AND MANTA_NATIVE_ARCH)
   message(WARNING
-    "g++-14 miscompiles this tree at -O3 -flto -march=native. Numbers from this "
+    "g++ 14.2 miscompiled this tree at -O3 -flto -march=native. Numbers from this "
     "build are not trustworthy if SystemSolver's members have changed. See "
-    "CLAUDE.md. Prefer g++-15 or clang: cmake -DCMAKE_CXX_COMPILER=g++-15 ...")
+    "CLAUDE.md. Use g++ 14.3 or later, or clang.")
 endif()
 
 # gcov must match the compiler that wrote the .gcno files, or gcovr exits 3 with
