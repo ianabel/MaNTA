@@ -483,32 +483,6 @@ reason it was not made:
     Python `while` needs and is why a slice loop belongs in eager code or inside
     an io_callback rather than under jit.
 
-  - Degree adaptation and a sliced steady solve are refused together, and the
-    combination that would be worth having is not the one that was refused.
-
-    start_steady() throws when DegreeAdaptation is set. The mechanical reason is
-    that adapting the degree *replaces* the SystemSolver, once per degree
-    (PyRunner::adaptDegree), while a slice loop holds the state of the one it
-    started on -- so the loop would be resuming into a solver that no longer
-    exists. Refusing is right for now: it is one line, and it fails where the
-    mistake was made rather than several slices later.
-
-    What is actually wanted is the other order. Slice to a converged state at the
-    degree you have, raise the degree, and carry on from the answer you already
-    reached -- which is a *restart* rather than a continuation, because the
-    coefficients move to a different space. setInitialConditions already does
-    that transfer for a restart file, and knows the difference: a degree change
-    is projected, so sigma is rebuilt and the state it hands the solver is a
-    guess like any other. The trace survives verbatim, since lambda has no
-    polynomial degree.
-
-    So the pieces exist and the sequencing is the work: after a converged slice,
-    project the state onto the new degree, rebuild the solver, and re-enter the
-    continuation. Note the pseudo-time step should *not* transfer with it -- the
-    projected state is off the manifold in a way the old dt was not chosen for,
-    which is the same reason a projected restart runs IDACalcIC where a copied
-    one does not.
-
   - Two things about the estimate are unmeasured and would change its sizing.
 
       * The norm. The bound pairs unweighted 2-norms. Pairing the WRMS norm with

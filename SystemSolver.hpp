@@ -428,6 +428,11 @@ class SystemSolver
             OutOfSteps,
             SolverFailed,
             Stalled,
+            // Returned only by a driver that changes the level between slices:
+            // PyRunner's sliced solve under DegreeAdaptation, when a level has
+            // converged and the next degree is built and ready to continue.
+            // Last, so the values above keep the numbers the FFI ops return.
+            Refined,
         };
 
         // The discretisation error of each objective at a state: an estimate of

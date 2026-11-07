@@ -253,18 +253,81 @@ def test_the_slice_methods_refuse_to_be_used_out_of_order(tmp_path):
     runner.abandon_steady()
 
 
-def test_degree_adaptation_is_refused(tmp_path):
-    """Adapting the degree replaces the solver; a slice loop holds the old one."""
-    runner = MaNTA.Runner(SineSource())
-    runner.configure(
-        slice_config(
-            tmp_path,
-            DegreeAdaptation=True,
-            DegreeTolerance=1e-9,
-            MaxPolynomialDegree=6,
-        )
+ADAPTIVE = dict(DegreeAdaptation=True, DegreeTolerance=1e-9, MaxPolynomialDegree=6)
+
+
+def test_a_sliced_degree_adaptation_reaches_the_answer_run_ss_does(tmp_path):
+    """The sliced solve runs runAdaptiveDegree's own loop, a level at a time.
+
+    So it makes the same levels from the same states, and lands where run_ss()
+    lands bit for bit -- with every level cut into slices of three steps, and
+    each level change reported as Refined rather than ending the loop.
+    """
+    whole = MaNTA.Runner(SineSource())
+    whole.configure(slice_config(tmp_path / "whole", MaxContinuationSteps=200, **ADAPTIVE))
+    whole.run_ss()
+    whole_u = whole.getSolution(0, POINTS)
+
+    sliced = MaNTA.Runner(SineSource())
+    sliced.configure(slice_config(tmp_path / "sliced", **ADAPTIVE))
+    outcomes, degrees = [], []
+    with MaNTA.SteadySolve(sliced, estimate=False) as solve:
+        for outcome, stats in solve:
+            outcomes.append(outcome)
+            degrees.append(stats["degree"])
+    sliced_u = sliced.getSolution(0, POINTS)
+
+    assert outcomes[-1] == MaNTA.SteadyOutcome.Converged
+    refined = outcomes.count(MaNTA.SteadyOutcome.Refined)
+    assert refined >= 1, f"no level change in {outcomes}"
+    assert outcomes.count(MaNTA.SteadyOutcome.OutOfSteps) > refined, (
+        "the levels were not themselves sliced"
     )
-    with pytest.raises(RuntimeError, match="DegreeAdaptation cannot be combined"):
+    # Each Refined reports the level it closed, and the slice after it the next.
+    assert degrees == sorted(degrees) and degrees[0] == 2 and degrees[-1] > 2, degrees
+    assert np.array_equal(sliced_u, whole_u), np.max(np.abs(sliced_u - whole_u))
+
+
+def test_abandoning_a_sliced_adaptation_clears_its_restart_state(tmp_path):
+    """Each level change hands the state on through the restart mechanism, which
+    is sticky. Abandoned after one, the next run on the configuration has to
+    build its own initial condition, not resume from the level handed on."""
+    fresh = MaNTA.Runner(SineSource())
+    fresh.configure(slice_config(tmp_path / "fresh", MaxContinuationSteps=200, **ADAPTIVE))
+    fresh.run_ss()
+
+    runner = MaNTA.Runner(SineSource())
+    runner.configure(slice_config(tmp_path / "abandoned", **ADAPTIVE))
+    outcome = runner.start_steady(False)
+    while outcome != MaNTA.SteadyOutcome.Refined:
+        assert outcome == MaNTA.SteadyOutcome.OutOfSteps
+        outcome = runner.continue_steady(False)
+    runner.abandon_steady()
+
+    runner.configure(slice_config(tmp_path / "again", MaxContinuationSteps=200, **ADAPTIVE))
+    runner.run_ss()
+    assert np.array_equal(runner.getSolution(0, POINTS), fresh.getSolution(0, POINTS))
+
+
+def test_stopping_part_way_keeps_the_level_reached(tmp_path):
+    """stop() between levels writes the state reached at the degree reached."""
+    runner = MaNTA.Runner(SineSource())
+    runner.configure(slice_config(tmp_path, **ADAPTIVE))
+    with MaNTA.SteadySolve(runner, estimate=False) as solve:
+        for outcome, stats in solve:
+            if outcome == MaNTA.SteadyOutcome.Refined:
+                solve.stop()
+    assert runner.steadyStats()["degree"] > 2
+    exact = SineSource.exact(np.array(POINTS))
+    # The next level's initial condition: the converged coarse answer, projected.
+    assert np.max(np.abs(runner.getSolution(0, POINTS) - exact)) < 1e-3
+
+
+def test_mesh_adaptation_is_refused(tmp_path):
+    """MeshAdaptation replaces the mesh as well as the solver between solves."""
+    runner = MaNTA.Runner(SineSource())
+    runner.configure(slice_config(tmp_path, MeshAdaptation=True, PolynomialDegree=3, **ADAPTIVE))
+    with pytest.raises(RuntimeError, match="MeshAdaptation cannot be combined"):
         runner.start_steady(False)
 
 
