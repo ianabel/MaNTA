@@ -33,7 +33,7 @@ A minimal file
    t_final = 1.0
    delta_t = 0.1
 
-   Relative_tolerance = 1.0e-3
+   RelativeTolerance = 1.0e-3
    AbsoluteTolerance = 1.0e-3
 
    [DiffusionProblem]
@@ -296,9 +296,10 @@ Time integration
        ``delta_t`` and asks IDA for the solution there; IDA chooses its own
        internal steps and takes as many as it needs. ``delta_t`` also seeds the
        initial step guess for ``IDACalcIC``.
-   * - ``Relative_tolerance``
+   * - ``RelativeTolerance``
      - ``1e-3``
-     - IDA's relative tolerance.
+     - IDA's relative tolerance. ``Relative_tolerance`` is a deprecated
+       spelling of this and still works, with a warning.
    * - ``AbsoluteTolerance``
      - ``1e-3``
      - The absolute tolerance: either a single value or an array with one
@@ -311,7 +312,7 @@ Time integration
      - ``"AlgebraicMax"``
      - How that absolute tolerance is applied to each class of unknown in IDA's
        error weights: ``AlgebraicMax`` (``sigma``, ``q`` and the auxiliary
-       variables floored at ``Relative_tolerance`` times their largest
+       variables floored at ``RelativeTolerance`` times their largest
        magnitude on the grid), ``Pointwise``, ``AllMax``, ``Derivative``,
        ``DerivativeLocal``, ``Hybrid`` or ``HybridLocal``. See
        :ref:`error-weights`.
@@ -357,7 +358,7 @@ Time integration
        and a mesh-independent weighted norm of the steady residual under
        ``SteadyStateTest = "Residual"`` — see :ref:`steady-merit-function`. The
        default test, ``"NewtonStep"``, does not read it: it converges to
-       ``Relative_tolerance`` and ``AbsoluteTolerance`` — see
+       ``RelativeTolerance`` and ``AbsoluteTolerance`` — see
        :ref:`steady-state-test`.
    * - ``ObjectiveDecreaseTolerance``
      - ``0.0`` — off

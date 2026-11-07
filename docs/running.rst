@@ -702,7 +702,7 @@ Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — flux and derivative evaluations per point — by
 the reuse-1 columns of ``python-examples/paper-figures/steady_modes.py`` with
 ``MANTA_STEADY_TOL=1e-11``, and again with ``MANTA_STEADY_TEST=Residual`` for
-the ``Residual`` entries (``Relative_tolerance = 1e-6``,
+the ``Residual`` entries (``RelativeTolerance = 1e-6``,
 ``AbsoluteTolerance = 1e-3``). The resolution
 is stated because the counts depend on it: ``park-convergence`` at 4 cells, the
 other two at 10, all three at :math:`k = 3`. ``TimeMarch`` reads neither test.
@@ -807,7 +807,7 @@ geometric-mean rate and the last ratio of corrections, and :math:`s` is never
 below 1 — the distance left is taken to be at least the last correction, as in
 Deuflhard's error-oriented Newton termination.
 The correction is a distance to the solution per component, in units of the
-run's own ``Relative_tolerance`` and ``AbsoluteTolerance``, so every channel is
+run's own ``RelativeTolerance`` and ``AbsoluteTolerance``, so every channel is
 judged on its own scale and ``SteadyStateTolerance``'s value is not read (its
 presence still arms the solve). ``"NewtonStep"`` is the default; ``"Residual"``
 is the merit-function test above, with KINSOL as the inner solver.
@@ -1584,7 +1584,7 @@ is pointwise in every scheme; ``ErrorWeights`` chooses the absolute part
 
 ``AlgebraicMax`` (the default)
    ``u`` and ``lambda`` at ``AbsoluteTolerance``; ``sigma``, ``q`` and the
-   auxiliary variables at the larger of that and ``Relative_tolerance`` times
+   auxiliary variables at the larger of that and ``RelativeTolerance`` times
    the variable's largest magnitude on the grid.
 ``Pointwise``
    ``AbsoluteTolerance`` for everything.

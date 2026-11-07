@@ -148,7 +148,7 @@ other block unchanged. The fix declares the derivative rather than removing the
 term from `SigmaFn`, so the physics -- and the solution -- are untouched.
 
 Both times the trigger was the same and was not the fix: at
-`Relative_tolerance = AbsoluteTolerance = 1e-2` **the case's own answer is 4.1%
+`RelativeTolerance = AbsoluteTolerance = 1e-2` **the case's own answer is 4.1%
 from the converged one**, against a comparison tolerance of 5e-3. Measured
 against a rtol = 1e-10 run of the same discretisation:
 

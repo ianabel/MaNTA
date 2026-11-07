@@ -77,7 +77,7 @@ const std::vector<Entry> &table()
          "Time the integration starts from."},
         {"t_final", {}, Type::Double, Category::Solver, true, false, 0.0,
          "Time the integration ends at; Runner.run(tFinal) overrides it."},
-        {"Relative_tolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
+        {"RelativeTolerance", {"Relative_tolerance"}, Type::Double, Category::Solver, false, false, 1e-3,
          "IDA relative error tolerance."},
         {"AbsoluteTolerance", {"Absolute_tolerance"}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{1e-3},

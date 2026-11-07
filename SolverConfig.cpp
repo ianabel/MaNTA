@@ -301,7 +301,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(TauKappa, std::string);
     READ(delta_t, double);
     READ(t_initial, double);
-    READ(Relative_tolerance, double);
+    READ(RelativeTolerance, double);
     READ(ErrorWeights, std::string);
     READ(AbsoluteTolerance, std::vector<double>);
     READ(MinStepSize, double);
@@ -986,7 +986,7 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     // -- but it also means a block dropped from here un-configures *both*
     // surfaces at once, where the same slip used to affect one.
     system.setOutputCadence(config.delta_t);
-    system.setTolerances(config.AbsoluteTolerance, config.Relative_tolerance);
+    system.setTolerances(config.AbsoluteTolerance, config.RelativeTolerance);
     {
         using W = SystemSolver::ErrorWeights;
         static const std::map<std::string, W> schemes{

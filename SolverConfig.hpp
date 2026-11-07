@@ -56,7 +56,7 @@ struct SolverConfig
     std::string              TauKappa;
     double                   delta_t;
     double                   t_initial;
-    double                   Relative_tolerance;
+    double                   RelativeTolerance;
     std::string              ErrorWeights;
     std::vector<double>      AbsoluteTolerance;
     double                   MinStepSize;

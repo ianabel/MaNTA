@@ -1003,15 +1003,16 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   `tau`) and the remaining stragglers with underscores. So a new key should be
   `MaxDegreeIncrement`, not `max_degree_increment` or `maxDegreeIncrement`.
 
-  **The rest is not being regularised wholesale.** `delta_t`, `t_initial`,
-  `t_final` and `Relative_tolerance` keep their spellings;
+  **The rest is not being regularised wholesale.** `delta_t`, `t_initial` and
+  `t_final` keep their spellings;
   churning every config file in the tree for no functional gain is a job for
   never. What is regularised is a group of keys that is being *changed anyway* —
   the grid keys went `Grid_size` → `GridSize`, `Lower_boundary` →
   `LowerBoundary`, `Polynomial_degree` → `PolynomialDegree` and so on alongside
   the graded-mesh work, since editing them for another reason is the one moment
   the rename is free, and `Absolute_tolerance` → `AbsoluteTolerance` when it
-  became the TimeMarch steady test's floor as well as IDA's.
+  became the TimeMarch steady test's floor as well as IDA's, with
+  `Relative_tolerance` → `RelativeTolerance` beside it so the pair matches.
 
   **A rename is a deprecated alias, never a removal.** The schema's `aliases`
   field is what makes that a one-line change: `presentSpelling` warns when the
