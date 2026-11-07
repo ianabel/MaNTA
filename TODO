@@ -327,16 +327,6 @@ reason it was not made:
     an io_callback rather than under jit.
 
 
-Superconvergence follow-ons (see Tests/README.md for what is already verified):
-
-  - Paper II's HDG(ABC) / HDG+ family: W_h = P_{k+1} with tau ~ 1/h makes u_h
-    itself superconverge, with no postprocessing, and reaches k+2 at k = 0 too.
-    Needs mixed polynomial degrees across fields, which the single-k assumption in
-    DGSoln::Map, every block in Matrices.cpp, AdjointVectors.cpp, the pybind11
-    casters and the restart format all rest on. tau ~ 1/h also changes every
-    existing run.
-
-
 Open observations from the theta-pinch field work, recorded rather than
 investigated. Each is a measurement that did not fit, with what was not tried.
 
