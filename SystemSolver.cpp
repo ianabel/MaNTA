@@ -5297,6 +5297,11 @@ void SystemSolver::solveReducedAdjoint()
 
 SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
 {
+    return estimateObjective(t0);
+}
+
+SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective(Time tEst)
+{
     ObjectiveEstimate out;
     if (adjointProblem == nullptr)
         return out;   // valid stays false: there is no objective to estimate
@@ -5320,10 +5325,12 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     // right one whatever the solve was damped with: the fixed point being
     // extrapolated to is a steady state, not the end of a pseudo-time step.
     setAlpha(0.0);
+    setJacTime(tEst);
     setJacEvalY(Y, zeroDeriv);
     updateMatricesForJacSolve();
-    residual(t0, Y, zeroDeriv, F);
+    residual(tEst, Y, zeroDeriv, F);
     solveJacEq(F, delta);
+
 
     double const *deltaData = N_VGetArrayPointer(delta);
     // The scalars' part of the correction, which an objective reading them sees
@@ -5391,7 +5398,7 @@ SystemSolver::ObjectiveEstimate SystemSolver::estimateObjective()
     if (estimateDiscretisation)
     {
         DGSoln deltaH(nVars, grid, k, N_VGetArrayPointer(delta), nScalars, nAux, nField);
-        out.discretisation = estimateDiscretisationError(*adjointProblem, y, deltaH, t0);
+        out.discretisation = estimateDiscretisationError(*adjointProblem, y, deltaH, tEst);
     }
 
     N_VDestroy(zeroDeriv);

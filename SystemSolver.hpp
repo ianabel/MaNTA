@@ -592,9 +592,12 @@ class SystemSolver
         // The estimate at the state the solver is in now. One residual, one
         // Jacobian build and one solve, plus a dot product per objective; the
         // Jacobian work is at alpha = 0, the steady operator, whatever the solve
-        // was damped with. Leaves alpha and the factorised blocks as it found
-        // them, so it is safe to call from inside a continuation loop.
+        // was damped with. Leaves alpha as it found it, but not the factorised
+        // blocks, which are this alpha = 0 build: a caller that solves again
+        // afterwards needs a build of its own first. At t0, a steady solve's
+        // frozen time, unless given another -- a TimeMarch run's stop.
         ObjectiveEstimate estimateObjective();
+        ObjectiveEstimate estimateObjective(Time t);
 
         // What estimateObjective() last reported, filled at the end of a steady
         // solve. Invalid when the run had no AdjointProblem.
