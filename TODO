@@ -306,15 +306,6 @@ landed; these are the pieces that were deliberately not done, with the reason.
     vectorised and JAX paths actually want. Worth revisiting only if the key
     strings start causing the same trouble the pointwise ones did.
 
-  - The out-of-tree paths are verified by hand, not by CI. Both were exercised
-    end to end -- a one-file C++ case compiled against the installed headers,
-    dlopened via PhysicsPlugins and run; and `pip install .` into a fresh venv
-    with a Python case run from the user's own directory through the `manta`
-    command -- but neither is an automated test. The C++ one needs
-    `cmake --install build --prefix` to a temp directory and a compiler
-    invocation; the Python one needs a venv. Both are slow enough to want their
-    own CI job rather than a place in `ctest`.
-
 
 Found since, and left undone deliberately rather than overlooked. Each says what
 would have to exist before the fix could be checked, which in every case is the

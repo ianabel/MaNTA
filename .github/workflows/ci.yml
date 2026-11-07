@@ -763,3 +763,86 @@ jobs:
             echo "$stray"
             exit 1
           fi
+
+  # The two routes docs/out_of_tree.rst describes for working outside this
+  # repository, run the way a user runs them, from directories outside the
+  # checkout: a C++ case compiled against an *installed* MaNTA with
+  # `pkg-config --cflags manta` and loaded through PhysicsPlugins, and a Python
+  # case in a package of its own run by the `manta` command after `pip install .`
+  # into a fresh virtualenv. The ctest suites never leave the build tree, so
+  # neither route was checked by anything but hand: the install rules, manta.pc,
+  # the plugin ABI flags and setup.py could all break with every leg green.
+  #
+  # Tests/OutOfTree/run-out-of-tree.sh does the work, so a local run is the same
+  # command; docs/out_of_tree.rst includes the example files it runs, so the
+  # documented examples are the tested ones.
+  out-of-tree:
+    name: Out of tree
+    runs-on: ubuntu-latest
+    env:
+      MKL_NUM_THREADS: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Add the toolchain PPA
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends software-properties-common
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-15 cmake wget pkg-config \
+            libboost-dev \
+            libeigen3-dev \
+            libnetcdf-dev libnetcdf-c++4-dev \
+            libblas-dev liblapack-dev
+
+      - name: Cache SUNDIALS
+        id: cache-sundials
+        uses: actions/cache@v4
+        with:
+          path: sundials/install
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-cc-default-${{ hashFiles('build_sundials') }}
+
+      - name: Build SUNDIALS
+        if: steps.cache-sundials.outputs.cache-hit != 'true'
+        run: ./build_sundials
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Configure
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-15 \
+            -DSUNDIALS_ROOT="$PWD/sundials/install" \
+            -DPython3_EXECUTABLE="$(which python)" \
+            -DMANTA_TESTS=OFF
+
+      # Everything the install installs, which is not the unit tests.
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Install, build a plugin, pip install, and run both
+        run: CXX=g++-15 PYTHON="$(which python)" Tests/OutOfTree/run-out-of-tree.sh build "$RUNNER_TEMP/out-of-tree"
+
+      - name: Nothing was written outside the build tree
+        run: |
+          status=$(git status --porcelain --ignored)
+          stray=$(printf '%s\n' "$status" | grep -vE '^(!!|\?\?) (build/|sundials/)' | grep -v '^$' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the out-of-tree run wrote into the source tree"
+            echo "$stray"
+            exit 1
+          fi
