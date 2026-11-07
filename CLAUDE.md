@@ -2579,13 +2579,30 @@ formula, not the operator, if the data cannot tell them apart.
   forced the first step below `MinStepSize`'s default at a tight tolerance, and
   10 of the 17 regression configs failed at 1000x their tolerances (all 17 run
   now, and 4 at 10x). `consistentAlgebraicDerivatives`
-  (`Solver.cpp`) solves the differentiated constraints `G_z z' = -G_t - G_u u'`
-  with one Jacobian build: `J(alpha) w = [alpha M u' ; -G_t]` pins the
-  differential rows only up to `F_d,y w`, but the defect `u' - w_d` is known
-  exactly and a correction solve `J(alpha) c = [alpha M delta ; 0]` shrinks it
-  while keeping the algebraic rows satisfied, so it is iterated to round-off --
-  two corrections, defect 3e-16, on the fixture. **`alpha` sets the convergence
-  rate, not the answer.** `G_t` is the case's own explicit time derivative
+  (`Solver.cpp`) solves for them from the requirement that every row of the
+  residual stays zero along the trajectory, `F_y y' + F_y' u'' + F_t = 0`, with
+  `u'` given and `u''` and `z'` the unknowns. Where no algebraic row reads `y'`
+  that is `G_z z' = -G_t - G_u u'` and `u''` is a by-product; where one does --
+  `ScalarTestLD3`'s controller reads `dM/dt` -- its row reads `u''`, which only
+  the differentiated differential rows pin down, and setting `u'' = 0` there
+  gives a `y'` contradicting its own constraint. `J(alpha) = F_y + alpha F_y'`
+  solves the whole system to O(1/alpha) with `x_d = u' + u''/alpha`:
+  `J x = alpha F_y' u' - F_t + F_y P_d (x_d - u')`, the last term iterated by
+  a residual difference -- four or five passes and one Jacobian build on the
+  fixture. **`alpha` sets the convergence rate, not the answer, and the solve
+  finds its own.** Each pass contracts by about `s / alpha`, `s` the fastest
+  rate in the differential rows, so `alpha` has to beat the stiffness. It
+  starts at 1e8 and, when a pass contracts slower than 1e-3, is multiplied by
+  the shortfall against 1e-6 and the Jacobian rebuilt, up to a cap: 1e10 where
+  an algebraic row reads `y'`, since that row's `alpha F_y' x_d` and
+  `alpha F_y' u'` cancel to its answer with an error of about
+  `alpha eps |F_y' u'|`, and 1e14 otherwise. It must not be tied to `delta_t`:
+  that was `1e8 / delta_t`, which on Shestakov's `delta_t = 1e3` stalled and
+  handed IDA an algebraic `y'` 4-18% out on every mesh.
+  `the_algebraic_derivative_solve_raises_alpha_until_it_converges` starts it at
+  1 and requires the default start's `y'`;
+  `algebraic_derivatives_do_not_depend_on_alpha_where_an_algebraic_row_reads_du_dt`
+  requires `ScalarTestLD3`'s three starts to agree. `G_t` is the case's own explicit time derivative
   (`dSigmaFn_dt`, `dAuxG_dt`, `dLowerBoundary_dt`, ... -- zero by default) through
   `explicitTimeDerivative`, which assembles `dF/dt` at fixed state with the
   residual's own code on a zero state. **A missing hook is checked for, not
@@ -2595,7 +2612,7 @@ formula, not the operator, if the data cannot tell them apart.
   and declares nothing otherwise starts from a `y'` contradicting its own
   boundary, which is *worse* than zero in the cells at that boundary --
   `MatrixDiffusionTest`, missing `dLowerBoundary_dt`, ran at 1000x with zeros and
-  failed its first step without the check. Two residuals per correction. The
+  failed its first step without the check. One residual per pass, and three more. The
   restart's counts also survive the `IDAReInit` that hands IDA the derivatives
   (`idaResidualEvalsBeforeReinit`), which clears IDA's counters.
   `a_cold_start_begins_with_consistent_algebraic_derivatives` is the guard.

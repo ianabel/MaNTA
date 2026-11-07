@@ -212,10 +212,15 @@ BOOST_AUTO_TEST_CASE(a_projected_restart_starts_from_consistent_algebraic_deriva
         sys.initialize();
     }
     BOOST_REQUIRE(sys.initialConditionWasCorrected());
-    BOOST_TEST_MESSAGE("refinements " << sys.consistentDerivativeRefinements << ", final defect "
-                                      << sys.consistentDerivativeDefect);
-    BOOST_TEST(sys.consistentDerivativeRefinements <= 2);
-    BOOST_TEST(sys.consistentDerivativeDefect <= 1e-14);
+    BOOST_TEST_MESSAGE("passes " << sys.consistentDerivativePasses << ", builds "
+                                      << sys.consistentDerivativeBuilds << ", alpha "
+                                      << sys.consistentDerivativeAlphaUsed << ", last change "
+                                      << sys.consistentDerivativeChange);
+    // Five passes from alpha = 1e8, each contracting by better than 1e-3, so no
+    // rebuild; the last only confirms the one before it.
+    BOOST_TEST(sys.consistentDerivativePasses <= 5);
+    BOOST_TEST(sys.consistentDerivativeBuilds == 1);
+    BOOST_TEST(sys.consistentDerivativeChange <= 1e-14);
 
     // d/dt of the algebraic rows along (1, y'): [F(t + e, Y + e Y') - F(t - e, Y - e Y')] / 2e,
     // with Y' held fixed (the algebraic rows do not read it).
