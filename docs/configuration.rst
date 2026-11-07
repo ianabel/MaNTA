@@ -255,15 +255,16 @@ Three things to expect:
   law above breaks once :math:`h_0` is small — an 11× reduction bought 1.19× —
   because the cells that are *not* the innermost stop resolving the singularity
   well enough to stay negligible.
-* **The time integrator is the ceiling, not the discretisation.** Past roughly
-  :math:`h_0 / \mathrm{span} = 10^{-6}` IDA's corrector starts failing at
-  ``|h| = MinStepSize``, whose default is ``1e-7``; lowering it to ``1e-12`` bought
-  one further level. Below about :math:`10^{-7}` nothing got through — neither
-  ``MinStepSize``, nor ``SuppressAlgebraicError``, nor the tolerances, nor either
-  continuation mode — and below :math:`10^{-8}` ``IDACalcIC`` cannot build a
-  consistent initial condition at all. A warning is logged past
-  :math:`10^{-6}` saying so, because the failure that follows points at IDA rather
-  than at the mesh.
+* **A time-marching run's ceiling is the time integrator, not the
+  discretisation.** Past roughly :math:`h_0 / \mathrm{span} = 10^{-6}` IDA's
+  corrector fails at ``|h| = MinStepSize``. Lowering ``MinStepSize`` does not
+  help, and neither do ``SuppressAlgebraicError`` or the tolerances. Below about
+  :math:`3 \times 10^{-8}`, ``IDACalcIC`` cannot build a consistent initial
+  condition at all. A ``Newton`` or ``PseudoTransient`` steady solve does not
+  have this limit: it has been run to :math:`10^{-15}`, given a steady test tight
+  enough to resolve the error (:ref:`adaptivity-h0` has the measurements). A
+  warning is logged past :math:`10^{-6}`, because the failure that follows points
+  at IDA rather than at the mesh.
 * **Grading into the upper end is slightly less exact than into the lower**, and
   irreducibly so: the boundary next to ``UpperBoundary`` is a number near it, so
   the narrowest cell's *width* is a difference of nearly equal numbers and carries

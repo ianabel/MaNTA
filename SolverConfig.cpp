@@ -836,14 +836,13 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
             config.GradingRatio, end);
 
         // The narrowest cell, relative to the domain, and the reason to say so.
-        // MESH-REFINEMENT.md §9 measured the solver -- not the method -- as the
-        // ceiling on how hard this can be graded: on Shestakov's problem IDA's
-        // corrector failed at h = 1e-7, which is MinStepSize's own default, once
-        // the narrowest cell was around 1e-6 of the span, and below about 1e-7 no
-        // setting of any key got through. The law that makes grading worth doing
-        // was still holding at the last mesh that converged, so a run that dies
-        // here has not run out of accuracy to gain, and the failure will point at
-        // IDA rather than at the mesh.
+        // On Shestakov's problem (docs/adaptivity.rst, "What grading buys") a
+        // time-marching run fails once the narrowest cell is around 1e-6 of the
+        // span -- IDA's corrector at |h| = MinStepSize, and no setting of
+        // MinStepSize, SuppressAlgebraicError or the tolerances gets past it --
+        // while Newton and PseudoTransient solve the same meshes down to 1e-15. So
+        // the failure that follows points at IDA, not at the mesh, and the run has
+        // not run out of accuracy to gain.
         //
         // Taken as a min over every cell rather than from whichever end is graded,
         // so it stays right for Both and cannot be wrong for one end.
@@ -855,10 +854,11 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
         if (span > 0.0 && narrowest / span < 1.0e-6)
             logmsg<LOG_LEVEL::WARNING>(
                 "The graded mesh's narrowest cell is {:.2e} of the domain. Past "
-                "roughly 1e-6 the time integrator, not the discretisation, is the "
-                "limit: expect IDA corrector failures at |h| = MinStepSize, and try "
-                "lowering MinStepSize (1e-12 bought one more level where this was "
-                "measured) before suspecting the mesh.", narrowest / span);
+                "roughly 1e-6 a time-marching run is limited by the time integrator, "
+                "not the discretisation: expect IDA corrector failures at "
+                "|h| = MinStepSize, which lowering MinStepSize does not cure. A "
+                "Newton or PseudoTransient steady solve is not limited this way.",
+                narrowest / span);
 
         return std::make_unique<Grid>(points);
     }

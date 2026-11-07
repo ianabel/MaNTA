@@ -317,19 +317,33 @@ mesh needs about 148000 cells.
 
 .. warning::
 
-   **The ceiling is the time integrator, not the discretisation, and it arrives
-   early.** Past roughly :math:`h_0 / \text{span} = 10^{-6}`, IDA's corrector starts
-   failing at :math:`\lvert h \rvert =` ``MinStepSize``, whose default is ``1e-7``;
-   lowering it to ``1e-12`` bought exactly one further level. Below about
-   :math:`10^{-7}` nothing got through — not ``MinStepSize``, not
-   ``SuppressAlgebraicError``, not the tolerances, not either continuation mode —
-   and below :math:`10^{-8}` ``IDACalcIC`` cannot build a consistent initial
-   condition at all. Of 52 hand-built gradings, 15 failed, non-monotonically in
-   everything: two meshes differing only in how many cells sat outside the layer
-   gave one success and one failure.
+   **A time-marching run's ceiling is the time integrator, not the
+   discretisation, and it arrives early.** On the 10-cell ``k = 5`` family above,
+   ``SteadyStateSolver = "TimeMarch"`` solves down to :math:`h_0 / \text{span} =
+   6.6 \times 10^{-6}` and no further: at :math:`1.5 \times 10^{-6}` IDA's corrector
+   fails at :math:`\lvert h \rvert =` ``MinStepSize``, whose default is ``1e-7``.
+   Lowering it to ``1e-12`` or ``1e-16`` does not help — the run crawls for
+   220 s and fails the same way — and neither do ``SuppressAlgebraicError``,
+   either tolerance, or anything else tried. At :math:`2.6 \times 10^{-8}`
+   ``IDACalcIC`` cannot build a consistent initial condition at all. Across 112
+   hand-built gradings — eight mesh shapes, ``k`` from 2 to 8, ratios 0.3 and
+   0.15 — time marching failed 61, non-monotonically in everything: 17 of 56 at
+   ratio 0.3 and 44 of 56 at 0.15, some with an innermost cell as wide as
+   :math:`3.4 \times 10^{-4}`, and two meshes differing only in how many cells
+   sat outside the layer gave one success and one failure.
 
-   The law that makes grading worth doing was still holding at the last mesh that
-   converged, so a run that dies here has **not** run out of accuracy to gain.
+   **A steady solve has no such ceiling.** ``Newton`` and ``PseudoTransient``
+   solve all 112, and the family above down to :math:`h_0 / \text{span} = 2.6
+   \times 10^{-15}`. What limits them is the discretisation: the error bottoms out
+   at 1.39e-07 at :math:`h_0 = 1.5 \times 10^{-6}`, where the law stops holding
+   because the cells outside the innermost are no longer negligible, and rises
+   slowly below that. They need a steady test that resolves the error, though.
+   The default ``NewtonStep`` test stops at the run's own tolerances — at
+   ``AbsoluteTolerance = 1e-3`` that is an error of 1.9e-3 here, whatever the
+   mesh — so set ``SteadyStateTest = "Residual"`` or a ``SteadyStateStepTolerance``
+   of ``1e-6`` or below.
+
+   So a time-marching run that dies here has **not** run out of accuracy to gain.
    ``MeshAdaptation`` treats a failed grading as a rejected step for that reason.
 
 .. _adaptivity-driver:
