@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import re
 import scipy
+import tomllib
 
 # SOLVER names the solver binary; CTest sets it to the built executable. Unset,
 # the MaNTA on PATH is used -- an installed one, say.
@@ -56,6 +57,59 @@ def run_manta( config_file ):
         print("Failed to run test simulation with configuration in " + config_file)
         sys.exit(code)
 
+# The fields a reference comparison covers, and how far each may move.
+#
+# u and u_star are held to the suite's tolerance. q and sigma get twice it: a
+# derivative rougher than u, and measured moving about twice as far as u when the
+# step sequence changes -- MatTest, the binding case, moves u by 2.2e-3 and q by
+# 4.4e-3 under initialTimestep = 1e-6, at the same tolerance. Between compilers
+# (g++-15, g++-16, clang++-19) nothing moves by more than 1e-11. The aux values
+# and the scalar time series at the root of the file move like u (Tests/README.md
+# has the table).
+DERIVATIVE_FIELDS = ( "q", "sigma" )
+
+
+def comparison_floor( config_path ):
+    """The run's absolute tolerance: the level below which IDA treats a value as
+    noise. A field whose reference is that small -- PIDTest's mass error E, which
+    its controller holds near 1e-7 -- is compared against the floor rather than
+    against itself, or any change to the step sequence would read as an O(1)
+    error in it."""
+    with open( config_path, "rb" ) as f:
+        cfg = tomllib.load( f ).get( "configuration", {} )
+    atol = cfg.get( "AbsoluteTolerance", cfg.get( "Absolute_tolerance", 1.0e-3 ) )
+    return min( atol ) if isinstance( atol, list ) else float( atol )
+
+
+def solution_fields( nc_root ):
+    """Every solution field a run writes, as name -> (nt, nx) or (nt, 1) array:
+    u, q, sigma and u_star of each variable group, the aux values and the scalar
+    time series at the root. Not the diagnostic groups a case adds (AuxG is the
+    aux constraint's residual, interpolation noise about zero), and not the
+    field-model groups, which are compared on their own below."""
+    out = {}
+    for g in variable_groups( nc_root ):
+        for v, var in nc_root.groups[g].variables.items():
+            if var.dimensions == ( "t", "x" ):
+                out[ g + "/" + v ] = np.array( var[:], dtype = float )
+    for v, var in nc_root.variables.items():
+        if v in ( "t", "x", "nVariables" ):
+            continue
+        if var.dimensions == ( "t", "x" ):
+            out[ v ] = np.array( var[:], dtype = float )
+        elif var.dimensions == ( "t", ):
+            out[ v ] = np.array( var[:], dtype = float )[ :, None ]
+    return out
+
+
+def slice_norms( x, a ):
+    """The L_2 norm over x of each time slice, by the trapezoid rule -- or the
+    absolute value, for a time series."""
+    if a.shape[ 1 ] == 1:
+        return np.abs( a[ :, 0 ] )
+    return np.sqrt( np.trapezoid( a * a, x, axis = 1 ) )
+
+
 def test_ref_soln_l2( filename, ref_filename, tolerance ):
     print("Comparing " + filename + " with reference output in " + ref_filename)
     nc_root = Dataset(filename, "r", format="NETCDF4")
@@ -69,46 +123,42 @@ def test_ref_soln_l2( filename, ref_filename, tolerance ):
             f"{filename}: found {len(var_groups)} variable groups {var_groups}, "
             f"expected {n_vars}"
         )
-
-    t_var   = nc_root.variables["t"]
-    x_var   = nc_root.variables["x"]
-
-    t_var_ref   = nc_root_ref.variables["t"]
-    x_var_ref   = nc_root_ref.variables["x"]
-
-    # Loop over variables
     for name in var_groups:
         if name not in nc_root_ref.groups:
             raise Exception(
                 f"{ref_filename} has no group '{name}'; the reference predates a "
                 f"rename of this case's variables and needs regenerating"
             )
-        Var     = nc_root.groups[name].variables["u"]
-        Var_ref = nc_root_ref.groups[name].variables["u"]
 
-        # At each time t, calculate || u - u_ref ||_2 and check it's within tolerance
-        for t_idx in range(len(t_var)):
-            diff2 = 0.0
-            norm2ref = 0.0
-            for x_idx in range( len( x_var ) - 1 ):
-                Val_x_idx_0 = Var[t_idx,x_idx] - Var_ref[t_idx,x_idx]
-                Val_0 = Val_x_idx_0 ** 2;
-                Val_x_idx_1 = Var[t_idx,x_idx + 1] - Var_ref[t_idx,x_idx + 1]
-                Val_1 = Val_x_idx_1 ** 2;
-                diff2 += ( Val_0 + Val_1 )*( x_var[x_idx + 1] - x_var[x_idx] )/2.0 
-                norm2ref += ( Var_ref[t_idx,x_idx] ** 2 + Var[t_idx,x_idx + 1] ** 2) * (x_var[x_idx+1] - x_var[x_idx] ) / 2.0
+    floor = comparison_floor( data( os.path.basename( ref_filename ).replace( ".ref.nc", ".conf" ) ) )
+    x = np.array( nc_root.variables["x"][:], dtype = float )
+    got = solution_fields( nc_root )
+    ref = solution_fields( nc_root_ref )
 
-            l2norm_diff = np.sqrt( diff2 )
-            l2norm_ref  = np.sqrt( norm2ref )
-            diff  = abs( l2norm_diff/l2norm_ref ) if l2norm_ref > 1e-12 else abs(l2norm_diff)
-            if( diff > tolerance ):
-                print("Error: L_2 norm ", diff, " ( ref is ", l2norm_ref, " ) at t = ",t_var[t_idx]," is greater than ",tolerance)
-                sys.exit( 1 )
-    
+    # Each time slice, relative to the reference's norm there or to the floor,
+    # whichever is larger.
+    for name, r in ref.items():
+        if name not in got:
+            raise Exception( f"{filename} has no '{name}', which {ref_filename} has" )
+        if got[ name ].shape != r.shape:
+            raise Exception( f"'{name}' is {got[ name ].shape} in {filename} and "
+                             f"{r.shape} in {ref_filename}" )
+        allowed = tolerance * ( 2.0 if name.rsplit( "/", 1 )[ -1 ] in DERIVATIVE_FIELDS else 1.0 )
+        diff = slice_norms( x, got[ name ] - r ) / np.maximum( slice_norms( x, r ), floor )
+        worst = int( np.argmax( diff ) )
+        if diff[ worst ] > allowed:
+            t = nc_root.variables["t"][ worst ]
+            print( "Error:", name, "differs from the reference by", diff[ worst ],
+                   "relative at t =", t, ", which is greater than", allowed )
+            sys.exit( 1 )
+    missing = sorted( set( got ) - set( ref ) )
+    if missing:
+        raise Exception( f"{ref_filename} has no {missing}; regenerate it" )
+
     # A coupled run's field group: psi as one time series per DOF, and each
     # geometry slot on the output grid. Compared whole, relative to the
-    # reference's magnitude, because the transport's L_2 check above sees the
-    # field only through what it does to u.
+    # reference's magnitude, because the comparison above sees the field only
+    # through what it does to the transport.
     for name in field_groups( nc_root_ref ):
         if name not in nc_root.groups:
             raise Exception( f"{filename} has no field group '{name}', which {ref_filename} has" )
