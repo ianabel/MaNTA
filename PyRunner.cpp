@@ -147,25 +147,42 @@ void PyRunner::configure(const py::dict &config) {
   if (cfg.solveAdjoint)
     adjoint = pProblem->createAdjointProblem();
 
+  // The geometry source, before the restart block: a coupled field's unknowns
+  // are part of the solution vector, and their count is what the restart file
+  // is checked against. Built from the dict's names by the function runManta
+  // uses -- its nested tables are the models' own, as they are a named case's
+  // -- or from the model object set_equilibrium_model handed over.
+  geometry = GeometrySource{};
+  try {
+    if (equilibriumObject) {
+      if (!cfg.FieldModel.empty() || !cfg.EquilibriumModel.empty())
+        throw std::invalid_argument(
+            "This Runner was handed an equilibrium model object, and the dict also names one (" +
+            (cfg.FieldModel.empty() ? "EquilibriumModel = \"" + cfg.EquilibriumModel
+                                    : "FieldModel = \"" + cfg.FieldModel) +
+            "\"). A run takes its geometry from one source.");
+      geometry = geometrySourceFor(cfg, pProblem->spec(), nullptr, equilibriumObject);
+    } else {
+      toml::value const table = caseName.empty() ? physicsConfigFromDict(config) : physicsTable;
+      geometry = geometrySourceFromConfig(cfg, table, *grid, pProblem->spec());
+    }
+    refuseAdaptationWithGeometry(cfg, geometry);
+  } catch (std::invalid_argument const &e) {
+    throw std::runtime_error(e.what());
+  }
+
   if (cfg.restart) {
     std::vector<double> Y, dYdt;
     Index nField_file = 0;
     Index nDOF_file = LoadFromFile(restart_file, Y, dYdt, nField_file);
 
-    // This surface cannot attach a field model at all: FieldModel is
-    // Category::ProblemSelection and so is an *error* in a dict, and there is no
-    // pybind11 class for a FieldModel to hand over instead. So a coupled restart
-    // file is refused rather than silently read with psi landing in the last
-    // nField entries of a vector that has no field block -- which is a length
-    // mismatch reported as an nVars/nAux/nScalars disagreement, three names none
-    // of which is the problem.
-    if (nField_file != 0)
-      throw std::runtime_error(
-          "This restart file was written by a run with a field model (" +
-          std::to_string(nField_file) +
-          " field unknowns), and Runner cannot attach one: FieldModel names a "
-          "registered model and is a config-file key. Resume it with the MaNTA "
-          "binary.");
+    // Two checks, not one, as in runManta: a file with one extra field
+    // unknown and one fewer scalar has the right total length.
+    if (nField_file != geometry.nField())
+      throw std::invalid_argument(
+          "Restart file carries " + std::to_string(nField_file) +
+          " field unknowns but the configured geometry source declares " +
+          std::to_string(geometry.nField()) + ".");
 
     // Make sure degrees of freedom are consistent with restart file. The file's
     // mesh and degree, not the run's: this is a statement about how the vector
@@ -174,7 +191,8 @@ void PyRunner::configure(const py::dict &config) {
     const Index nDOF = pProblem->getNumVars() * 3 * nCells * (fileOrder + 1) +
                        pProblem->getNumVars() * (nCells + 1) +
                        pProblem->getNumScalars() +
-                       pProblem->getNumAux() * nCells * (fileOrder + 1);
+                       pProblem->getNumAux() * nCells * (fileOrder + 1) +
+                       geometry.nField();
 
     if (nDOF_file != nDOF)
       throw std::invalid_argument(
@@ -182,7 +200,7 @@ void PyRunner::configure(const py::dict &config) {
 
     // The file's own mesh and degree, which is what its DOF are laid out at.
     // The run's, which may differ in either, were chosen above.
-    pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder);
+    pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder, geometry.nField());
   }
 
   // A case object handed to Runner cannot be rebuilt -- nothing here knows its
@@ -212,6 +230,8 @@ void PyRunner::configure(const py::dict &config) {
 
   system = std::make_unique<SystemSolver>(*grid, k, pProblem.get());
 
+  // Before applySolverConfig: setFieldModel reshapes the solution vector.
+  geometry.attachTo(*system);
   applySolverConfig(cfg, *system);
   if (cfg.solveAdjoint)
     system->setAdjointProblem(adjoint.get());

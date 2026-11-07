@@ -166,7 +166,14 @@ public:
       // time); return;
     }
 
-    out = _override(gIndex, states, abscissae).cast<GlobalState>();
+    GlobalState result = _override(gIndex, states, abscissae).cast<GlobalState>();
+    // On a coupled run `out` carries one geometry row per slot, zeroed. An
+    // objective that reads no geometry returns none -- the caster leaves the
+    // block empty -- and assigning that over `out` would drop the rows rather
+    // than leave them zero. A dict with "Geometry" is dg/d(geometry) per node.
+    if (result.GeometryMatrix().rows() == 0)
+      result.GeometryMatrix() = out.GeometryMatrix();
+    out = result;
   };
 
   void ComputePhysicsDerivatives(

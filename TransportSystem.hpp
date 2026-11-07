@@ -807,12 +807,21 @@ public:
   /// attached, or cleared when there is none -- so a case can fill State::geom
   /// outside the residual path, where the solver fills it. Diagnostics are the
   /// one such place.
+  ///
+  /// `slots` names the geometry the source supplies, in State::geom's order --
+  /// the field or equilibrium model's spec, which is the only thing that knows
+  /// them. A Python case's state view indexes geom by these names.
   using GeometryProvider = std::function<void(VectorRef out, DGSoln const &y, Position x, Time t)>;
-  void setGeometryProvider(Index nGeometry, GeometryProvider provider)
+  void setGeometryProvider(std::vector<std::string> slots, GeometryProvider provider)
   {
-    nGeometryProvided = provider ? nGeometry : 0;
+    geometryNames = provider ? std::move(slots) : std::vector<std::string>{};
+    nGeometryProvided = static_cast<Index>(geometryNames.size());
     geometryProvider = std::move(provider);
   }
+
+  /// The names of the geometry slots this case is being handed, or none when
+  /// no field or equilibrium model is attached.
+  std::vector<std::string> const &geometrySlotNames() const { return geometryNames; }
 
 protected:
   /// Fill s.geom() at x for the state y, as the residual would. Leaves it empty
@@ -842,6 +851,7 @@ public:
 
 private:
   GeometryProvider geometryProvider;
+  std::vector<std::string> geometryNames;
   Index nGeometryProvided = 0;
 
   // Shared by the two boundary defaults above. Not .at(): out_of_range names a

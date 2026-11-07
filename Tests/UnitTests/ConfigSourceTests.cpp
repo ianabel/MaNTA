@@ -260,11 +260,10 @@ BOOST_AUTO_TEST_CASE(a_problem_selection_key_is_fine_for_the_toml_reader)
     BOOST_TEST(load(minimal).TransportSystem == "LinearDiffusion");
 }
 
-BOOST_AUTO_TEST_CASE(the_field_model_key_is_problem_selection_too)
+BOOST_AUTO_TEST_CASE(the_field_model_key_is_read_by_both_surfaces)
 {
-    // Same treatment as TransportSystem: a config file names a registered model
-    // and runManta instantiates it; a dict has no equivalent and must be told
-    // so rather than have the key quietly ignored.
+    // Both surfaces name a registered model: runManta instantiates it from the
+    // config file, PyRunner from the dict, through geometrySourceFromConfig.
     BOOST_TEST(load(minimal).FieldModel == "");
     BOOST_TEST(load(minimal + "FieldModel = \"SomeModel\"\n").FieldModel == "SomeModel");
 
@@ -275,8 +274,7 @@ BOOST_AUTO_TEST_CASE(the_field_model_key_is_problem_selection_too)
         {"OutputFilename", std::string("out")},
         {"FieldModel", std::string("SomeModel")},
     };
-    BOOST_CHECK_THROW(loadSolverConfig(src, ConfigSchema::Reader::Dict),
-                      std::invalid_argument);
+    BOOST_TEST(loadSolverConfig(src, ConfigSchema::Reader::Dict).FieldModel == "SomeModel");
 }
 
 // FieldCoupling, resolved against what the case and the model supply. The table
@@ -378,9 +376,9 @@ BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
     BOOST_CHECK_THROW(load(minimal + "FieldCoupling = \"couple\"\n"), std::invalid_argument);
 }
 
-// A native EquilibriumModel: ProblemSelection like FieldModel, exclusive with it,
-// and never "coupled", all refused at load.
-BOOST_AUTO_TEST_CASE(the_equilibrium_model_key_is_problem_selection_and_exclusive)
+// A native EquilibriumModel: named on either surface like FieldModel, exclusive
+// with it, and never "coupled", all refused at load.
+BOOST_AUTO_TEST_CASE(the_equilibrium_model_key_is_exclusive_with_a_field_model)
 {
     BOOST_TEST(load(minimal).EquilibriumModel == "");
     BOOST_TEST(load(minimal + "EquilibriumModel = \"SomeModel\"\n").EquilibriumModel == "SomeModel");
@@ -392,7 +390,7 @@ BOOST_AUTO_TEST_CASE(the_equilibrium_model_key_is_problem_selection_and_exclusiv
         {"OutputFilename", std::string("out")},
         {"EquilibriumModel", std::string("SomeModel")},
     };
-    BOOST_CHECK_THROW(loadSolverConfig(src, ConfigSchema::Reader::Dict), std::invalid_argument);
+    BOOST_TEST(loadSolverConfig(src, ConfigSchema::Reader::Dict).EquilibriumModel == "SomeModel");
 
     auto refusal = [&](std::string const &extra)
     {
@@ -1026,9 +1024,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.FieldSolveMaxAdjointSweeps == fromMap.FieldSolveMaxAdjointSweeps);
     BOOST_TEST(fromToml.FieldSolveAdjointTolerance == fromMap.FieldSolveAdjointTolerance);
     BOOST_TEST(fromToml.FieldSolveAdjointTolerance == 1e-9);
-    // FieldModel is ProblemSelection, so it is an error in a dict and cannot be
-    // compared across the two -- the same asymmetry TransportSystem has.
-    BOOST_TEST(fromToml.FieldModel == "");
+    BOOST_TEST(fromToml.FieldModel == fromMap.FieldModel);
     BOOST_REQUIRE(fromToml.SteadyStateTolerance.has_value());
     BOOST_REQUIRE(fromMap.SteadyStateTolerance.has_value());
     BOOST_TEST(*fromToml.SteadyStateTolerance == *fromMap.SteadyStateTolerance);

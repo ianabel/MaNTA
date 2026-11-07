@@ -28,8 +28,10 @@ enum class Type { Bool, Int, UInt, Double, String, DoubleList, UIntList, StringL
 // selects the physics case and has no dict equivalent, and the PythonModule
 // keys are read by manta.cli rather than by the solver at all. Recording that
 // here is what lets unknown-key rejection be strict without firing on keys
-// that are legitimately present in a config file.
-enum class Category { Solver, ProblemSelection, Cli };
+// that are legitimately present in a config file. FieldSelection names the
+// geometry source, which both surfaces build (GeometrySource.hpp) rather than
+// the solver reading it as an option.
+enum class Category { Solver, ProblemSelection, FieldSelection, Cli };
 
 // Who is asking. Distinct from Category -- one says what a key is, the other
 // says which reader is loading it. Only requiredness differs between them, and

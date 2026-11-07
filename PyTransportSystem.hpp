@@ -191,7 +191,7 @@ public:
   /// what an out-parameter is filled through; nothing writes to a field of a
   /// state passed as input.
   StateView view(const State &s) const {
-    return StateView(const_cast<State &>(s), spec());
+    return StateView(const_cast<State &>(s), spec(), &geometrySlotNames());
   }
 
   /// The override, or nullptr if the subclass did not provide one.
