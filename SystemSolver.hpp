@@ -944,8 +944,8 @@ class SystemSolver
 
         // The algebraic components of dYdt at a consistent state (Yc, dYdt) at
         // time tc, solving G_y y' = -G_t exactly; the differential components are
-        // left as they are. See Solver.cpp. Used after IDACalcIC on a projected
-        // restart.
+        // left as they are. See Solver.cpp. Used after IDACalcIC on a cold start
+        // and on a projected restart.
         void consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, Time tc);
         // alpha in that solve is consistentDerivativeAlpha / delta_t. It sets how
         // fast the refinement converges, not what it converges to.
@@ -3002,6 +3002,12 @@ class SystemSolver
         bool restartWasProjected = false;
         double initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
         bool calcICRan = false;
+        // What IDA had counted when initialize() handed it the consistent
+        // algebraic derivatives: IDAReInit clears IDA's counters, so without
+        // these the run's totals -- and anything asking whether IDACalcIC did
+        // any work -- would leave out the IDACalcIC that ran before it.
+        long idaResidualEvalsBeforeReinit = 0;
+        long idaJacobianSetupsBeforeReinit = 0;
         double steady_state_tol = 1e-3;
 
 #ifdef PHYSICS_DEBUG

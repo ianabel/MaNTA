@@ -39,6 +39,11 @@ class TestDiffusion : public TransportSystem {
 		// You must provide implementations of both, these are your boundary condition functions
 		Value LowerBoundary( Index, Time t ) const override { return ExactSolution( 0.0, t );};
 		Value UpperBoundary( Index, Time t ) const override { return ExactSolution( 1.0, t );};
+		// The data move with the exact solution, so the explicit time derivatives
+		// a consistent algebraic y' is solved from (initialize, after IDACalcIC)
+		// have to say so.
+		Value dLowerBoundary_dt( Index, Time t ) const override { return -M_PI_2 * M_PI_2 * ExactSolution( 0.0, t ); };
+		Value dUpperBoundary_dt( Index, Time t ) const override { return -M_PI_2 * M_PI_2 * ExactSolution( 1.0, t ); };
 
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations

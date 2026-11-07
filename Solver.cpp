@@ -596,6 +596,8 @@ void SystemSolver::initialize()
 	// was as consistent as a restart is supposed to be.
 	initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
 	calcICRan = false;
+	idaResidualEvalsBeforeReinit = 0;
+	idaJacobianSetupsBeforeReinit = 0;
 
 	// A restart skips only on the *copy* path. The claim behind the default is
 	// that a restart resumes from a state the previous run had already driven onto
@@ -704,10 +706,8 @@ void SystemSolver::initialize()
 		//
 		// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma
 		// and phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
-		// differential derivatives, not the other way round. That is structural, not
-		// the old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists
-		// -- and it stays that way, because dYdt is the state IDA takes its first
-		// step from.
+		// differential derivatives, not the other way round. They are solved for
+		// below, on every path that ran IDACalcIC except a copied restart.
 		//
 		// Checked, unlike every other use of it in this file's history: it fails
 		// with IDA_ILL_INPUT if IDA has already taken a step, and on failure it
@@ -719,15 +719,21 @@ void SystemSolver::initialize()
 		if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
 			throw std::runtime_error("Could not retrieve the corrected initial condition");
 
-		// A projected restart resumes mid-run, where the algebraic components are
-		// moving and its first step is the output cadence, so the zero algebraic
-		// y' above costs a run of error-test failures -- ten of them, i.e. the
-		// run, at a cadence of a fifth of the time already elapsed. A copied
-		// restart takes y' from the file instead (setInitialConditions), and a
-		// cold start lets IDA choose a first step small enough not to notice.
-		if (restarting && restartWasProjected)
+		// The zero algebraic y' above is wrong wherever the algebraic components
+		// move, and IDA's predictor then carries an error of h |y'| in sigma, q,
+		// lambda and phi -- first order, where the error test expects second. A
+		// projected restart resumes mid-run with its first step at the output
+		// cadence, and paid ten error-test failures, i.e. the run. A cold start
+		// paid in step size instead: at a tight tolerance the first step had to
+		// fall below MinStepSize's default before dsm, falling in proportion to h,
+		// passed -- 9 of the 17 regression configs at 1000x their own tolerance.
+		// So both get the exact algebraic derivatives. A copied restart takes
+		// y' from the file instead (setInitialConditions).
+		if (!restarting || restartWasProjected)
 		{
 			consistentAlgebraicDerivatives(Y, dYdt, t0);
+			IDAGetNumResEvals(IDA_mem, &idaResidualEvalsBeforeReinit);
+			IDAGetNumLinSolvSetups(IDA_mem, &idaJacobianSetupsBeforeReinit);
 			retval = IDAReInit(IDA_mem, t0, Y, dYdt);
 			if (ErrorChecker::check_retval(&retval, "IDAReInit", 1))
 				throw std::runtime_error("Could not hand IDA the consistent algebraic derivatives");
@@ -884,6 +890,50 @@ void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, T
 		DGSoln dYh(nVars, grid, k, N_VGetArrayPointer(ud), nScalars, nAux, nField);
 		DGSoln Gt(nVars, grid, k, N_VGetArrayPointer(minusGt), nScalars, nAux, nField);
 		explicitTimeDerivative(Yh, dYh, tc, Gt);
+	}
+
+	// ...checked against the residual itself. A case may make its data depend on
+	// t without declaring the d/dt hooks -- their defaults are zero -- and then
+	// G_t says the data stand still and y' contradicts them: MatrixDiffusionTest
+	// did, and at 1000x its tolerances a cold start that ran with z' = 0 failed
+	// its first step with this one. A forward difference in t at fixed (Y, u')
+	// is G_t to about 1e-8 for any case, so where the hooks disagree with it by
+	// more than that could explain, the difference is used and the case is
+	// named. Forward, so nothing is evaluated before t0. Two residuals.
+	{
+		const double e = 1e-7 * std::max(1.0, std::abs(tc));
+		N_Vector Fa = N_VClone(Yc), Fb = N_VClone(Yc);
+		residual(tc, Yc, ud, Fa);
+		residual(tc + e, Yc, ud, Fb);
+		double *h = N_VGetArrayPointer(minusGt);
+		double const *fa = N_VGetArrayPointer(Fa), *fb = N_VGetArrayPointer(Fb);
+		double gap = 0.0, scale = 0.0, size = 0.0;
+		for (sunindextype i = 0; i < n; ++i)
+		{
+			size = std::max(size, std::abs(fa[i]));
+			if (isDiff[i] != 0.0)
+				continue;
+			const double fd = (fb[i] - fa[i]) / e;
+			gap = std::max(gap, std::abs(fd - h[i]));
+			scale = std::max({scale, std::abs(fd), std::abs(h[i])});
+		}
+		// What the difference alone could get wrong: round-off in F over e, and
+		// its O(e) truncation, which the 1e-3 relative bound covers.
+		const double noise = 1e3 * std::numeric_limits<double>::epsilon() * std::max(size, 1.0) / e;
+		if (gap > 1e-3 * scale && gap > noise)
+		{
+			logmsg<LOG_LEVEL::WARNING>(
+				"The case's explicit time derivatives (dLowerBoundary_dt, dSigmaFn_dt, dAuxG_dt, ...) "
+				"disagree with its residual by {:g} against {:g}: its data move with t and a hook says "
+				"they do not. The consistent y' at t = {:g} uses a difference of the residual instead; "
+				"declaring the hooks makes it exact.",
+				gap, scale, tc);
+			for (sunindextype i = 0; i < n; ++i)
+				if (isDiff[i] == 0.0)
+					h[i] = (fb[i] - fa[i]) / e;
+		}
+		N_VDestroy(Fa);
+		N_VDestroy(Fb);
 	}
 	N_VScale(-1.0, minusGt, minusGt);
 
@@ -1079,6 +1129,8 @@ void SystemSolver::integrate(double tFinal)
 	IDAGetNumSteps(IDA_mem, &nsteps);
 	IDAGetNumResEvals(IDA_mem, &nresevals);
 	IDAGetNumLinSolvSetups(IDA_mem, &njacevals);
+	nresevals += idaResidualEvalsBeforeReinit;
+	njacevals += idaJacobianSetupsBeforeReinit;
 
 	std::println("Total Number of Timesteps             :{}", nsteps);
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);

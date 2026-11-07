@@ -1,22 +1,3 @@
-A cold start at a tight tolerance fails its first step on MinStepSize.
-Found 2026-11-06, measuring SuppressAlgebraicError's accuracy cost.
-
-  With the algebraic rows in IDA's error test, 9 of the 17 regression configs
-  fail with IDA_ERR_FAIL at tolerances 1000x their own, and Nonlin2 and
-  nonlin_ss already at 10x: each first step needs h below the default
-  MinStepSize of 1e-7 (about 7e-8 for Nonlin2). The SUNDIALS log shows dsm
-  falling in proportion to h, which is not the inconsistent-state signature: on
-  a cold start IDA_YA_YDP_INIT leaves the algebraic y' at zero, so the
-  predictor's error in sigma, q, lambda and phi is h |y'|, first order where
-  the test expects second. Suppressing the algebraic error, as a run with a
-  field now does by default, runs every one of them; so does MinStepSize = 1e-12.
-
-  To decide: lower MinStepSize's default, or give the algebraic unknowns a
-  starting y' on a cold start as a projected restart already does
-  (consistentAlgebraicDerivatives, after IDACalcIC), which would also let IDA
-  take the first step its tolerance allows rather than one the zeros force.
-
-
 Move the built documentation out of this repository.
 Raised 2026-09-30, when the build stopped writing into the source tree.
 
