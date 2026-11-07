@@ -88,120 +88,6 @@ plasma transport run would actually use.
   cost of changing what every existing TimeMarch run stops at.
 
 
-The Dirichlet trace is seeded differently by a cold start and by a restart.
-Found 2026-09-23, by a ladder test asserting that a ladder reaches the same
-answer as a direct solve and finding it did not, in exactly two entries.
-
-  **The observable half of this is fixed** (2026-09-23) and only the seed is
-  left. What remains is a question about the guess handed to IDACalcIC, not
-  about any number a reader sees, so this is a note rather than a defect.
-
-  A Dirichlet trace row *and column* are identically zero in K_global,
-  imposeDirichletTraceRows pins the correction to zero and residual() never
-  writes the row, so nothing in a solve can move those entries: each keeps
-  whatever was last written into it. The two initial-condition paths write
-  different things. The cold branch runs ApplyDirichletBCs and then an
-  unconditional EvaluateLambda, which sets *every* entry to {{u}} and so
-  overwrites the datum a few lines after applying it. The restart branch runs
-  ApplyDirichletBCs first as well, but its EvaluateLambda is guarded by
-  `!sameDiscretisation && !sameGrid`, so on the copy path and on a degree
-  projection over the same mesh there is no overwrite at all and the datum
-  survives -- a restart onto a *different* mesh behaves exactly like a cold
-  start. So a cold steady solve of LinearDiffusion at k = 3 on eight cells
-  seeds lambda = 0.9999991 at a face whose boundary condition is 1, where the
-  same problem reached by a degree ladder seeds 1. Neither value is converging
-  to anything, so the gap is identical from a steady tolerance of 1e-8 to 1e-14.
-
-  What a reader gets no longer depends on that. ApplyDirichletBCs now takes the
-  time explicitly -- it used to read the member `t`, which is set to t0 and
-  never moves -- and is called at each point the state is settled and about to
-  be reported: after IDASolve returns, at the top of writeSteadyState(), and on
-  the steady-solve failure path. `y` aliases the N_Vector IDASolve writes its
-  output into, and the netCDF slice, the .dat files, the restart file's DOF
-  vector and yJac all read that memory, so one call covers every reader. It
-  reaches no equation: IDASolve treats Y as an output and continues from its own
-  internal state, so a write between calls is discarded, and the cell rows take
-  the datum from RF_cellwise as they always have. Verified on MatTest -- the
-  .nc byte identical, the restart DOF vector bit identical on all 388 entries
-  that are not one of the four trace DOFs, dYdt unchanged, 25 residuals and 11
-  Jacobian builds before and after.
-
-  That fix was the substantive one, and it was a separate defect wearing the
-  same coat. The entry was not merely inconsistent between paths, it was *stale*
-  whenever g_D depends on t: MatTest's decays like exp(-t pi^2 / 4) and at
-  t = 0.5 the restart file held 0.99999993 -- the t = 0 value -- against a datum
-  of 0.29121 and a first interior trace node of 0.28962, discontinuous from its
-  own neighbour by a factor of three.
-
-  **Reordering the cold path to match the restart was tried and reverted, and
-  the reason is worth keeping.** It fails systemsolver_init_tests, which asserts
-  the initial lambda matches the initial function at the faces to 0.025; that
-  fixture's initial condition is exp(-25x^2), which is 1 at the axis where the
-  boundary condition is 0, so pinning the face to the datum moves that entry by
-  0.9. And the test's expectation is defensible: on a *cold* start there is no
-  converged trace to protect, and forcing the face to g_D while the interior
-  sits at u(0,0) = 1 hands IDACalcIC a discontinuity where {{u}} gives it a
-  smooth guess. The restart's conditional EvaluateLambda was about not
-  discarding a converged trace, which is a different situation.
-
-  So the open question is narrow: which value should setInitialConditions hand
-  IDACalcIC for an initial condition that does not satisfy its own boundary
-  condition? Both current answers are defensible as *guesses*, which is the
-  argument for leaving them as they are, and the only thing that made the
-  difference visible has been closed. Left here because "the two paths write
-  different things into the same slot" is worth knowing before touching either.
-
-
-K_global is factorised densely, and it is 73-91% of a low-k run.
-Found 2026-08-25. FIXED the same day -- util/BandedMatrix.hpp, and the entry is
-kept because the measurements are what justify the shape of the fix and the
-numbers are worth not re-deriving.
-
-  solveHDGJac condensed onto lambda and then handed the result to a *dense*
-  Eigen::FullPivLU of side nVars * (nCells + 1), on every Newton iteration. That
-  is O(nCells^3) in the one quantity static condensation exists to make
-  O(nCells). Phase breakdown before the fix, by direct chrono instrumentation:
-
-    400 cells, k=3:  K_global 3.534 s of a 3.9 s run   -- 91%
-    200 cells, k=4:  K_global 14.165 s of a 19.4 s run -- 73%
-     50 cells, k=8:  K_global 0.248 s of 2.1 s         -- 12%
-     20 cells, k=10: K_global 0.023 s of 1.0 s         --  2%
-
-  What it is now: a banded LU with partial pivoting, dgbtrf/dgbtrs when a LAPACK
-  was found and an equivalent built-in when not. Measured, MKL pinned, best of 3:
-
-    400 cells, k=3:  5233 ms -> 555 ms   (9.4x)
-    200 cells, k=4: ~16400 ms -> 2147 ms (7.6x)
-     50 cells, k=8:  1902 ms -> 1226 ms  (1.55x)
-     20 cells, k=10:  976 ms -> 755 ms   (1.29x)
-
-  The k=10 case is the interesting one: the trace solve was 2% of it, so the 1.29x
-  is not the factorisation at all. It is the dense (nCells+1)^2 allocate-and-zero
-  and the FullPivLU's own per-call buffers, 627 times over.
-
-  Two things this turned up that are worth keeping:
-
-  * **K_global is singular, by exactly the number of Dirichlet boundaries**, and
-    the dense FullPivLU was absorbing that silently. A Dirichlet end sets Hvar's
-    diagonal to zero and nothing else writes that trace DOF, so the row and the
-    column are identically zero; FullPivLU returns the particular solution with
-    the free components zeroed, which is the right answer for the wrong reason.
-    imposeDirichletTraceRows writes the constraint down instead. Verified rather
-    than argued: measured rank 3/5 and 4/6 on the fixture solves, and the banded
-    answer agrees with the dense one to 2.7e-15.
-
-  * **It is not bit-identical, and should not be.** Unlike the OpenMP change --
-    same operations, same order, byte-identical output -- this is a different
-    factorisation, so the last bits move and IDA's step sequence moves with them.
-    Measured worst relative difference in the netCDF output: 4.2e-13 (400 cells,
-    k=3) and 2.7e-11 (20 cells, k=10), against run tolerances of 1e-8 and 1e-6.
-
-  Not done, and the obvious next thing if the trace solve ever matters again: the
-  band is 2*nVars - 1 either side only because the trace DOFs are ordered
-  (node, var). Nothing needs the *matrix* ordering to match the solution vector's,
-  which is why the permutation is local to the solve -- but a solution vector that
-  interleaved lambda the same way would remove the gather and scatter entirely.
-
 g++-14 miscompiles this tree at -O3 -flto -march=native. Root cause not found.
 Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
 
@@ -303,12 +189,6 @@ landed; these are the pieces that were deliberately not done, with the reason.
     wrong -- which is exactly why it should not be made blind. Write a physics
     case with a genuinely sigma-dependent source first, check it against a
     closed form, then flip.
-
-  - GlobalState still crosses to Python as a dict of (nPoints, nVars) arrays
-    keyed "Variable"/"Derivative"/"Flux"/"Aux"/"Scalars". State became a named
-    view; GlobalState did not, because a dict of whole-batch arrays is what the
-    vectorised and JAX paths actually want. Worth revisiting only if the key
-    strings start causing the same trouble the pointwise ones did.
 
   - The out-of-tree paths are verified by hand, not by CI. Both were exercised
     end to end -- a one-file C++ case compiled against the installed headers,
@@ -552,33 +432,20 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     existing run.
 
 
-From the origin/optimize-mode review, still unmerged and worth taking:
-  - the branch's Objective2.py changes. Two of them: grad_solver_config gains
-    "solveAdjoint" = True, and the primal path stops going through
-    StellaratorFun and builds the case directly for G and the pressure. Small,
-    but objective2.py also does `from stellarator2 import StellaratorTransport`
-    hardwired, which is the reason scan_eq_ambipolar.py is not yet coherent:
-    it constructs stellarator_multichannel directly *and* calls make_objective,
-    which builds the single-channel case. Making the class injectable -- a
-    keyword defaulting to the present one -- would fix that without touching the
-    four consumers configured the old way, but it is a design change on code
-    nothing here can run, so it wants a decision rather than a guess.
-  - promoting stellarator_multichannel.py over stellarator2.py, if that is
-    wanted. It is a rename plus the st_config of objective2.py,
-    desc_optimize.py, scan_eq.py, desc_optimize_bfgs.py and the notebook:
-    SourceCenter/SourceHeight/SourceWidth -> HeatSourceCenter/Height/Width.
-    Mechanical, but unverifiable here, so it was not done on spec.
-  - ANSWERED, and it was a real finding, so there is no need to ask: why the
-    branch removed both `#pragma omp parallel for` from TransportSystem.hpp's
-    batched defaults. Rediscovered independently 2026-08-25 by turning
-    MANTA_OPENMP on in CI. Those pragmas wrap the *pointwise fallbacks*, so for a
-    Python case every iteration acquires and releases the GIL: the Python suite
-    went from ~110 s to over 1500 s, which is ctest's timeout, so it never
-    finished at all. The batched defaults are plain serial loops now and
-    util/ParallelFor.hpp holds the only `#pragma omp` in the tree. CLAUDE.md's
-    "Parallelism" section has the numbers and the argument that a case wanting
-    its batch split is the right place to split it.
+Open observations from the theta-pinch field work, recorded rather than
+investigated. Each is a measurement that did not fit, with what was not tried.
 
-  The drivers, stellarator_state.py and the multi-channel rewrite itself are in
-  python-physics/stellarator/ now; that README says which of them run against
-  what. shard_inputs came with the rewrite.
+  - ThetaPinch.conf converges at only about order 1.6 at k = 4 under mesh
+    refinement, with the field model alone. The manufactured studies at every
+    coupling tier do not show it, so it is a property of the registered model
+    or of its configuration rather than of the coupling: a study of the theta
+    pinch against a converged reference, by k, would say which.
+  - A field grid much finer than the transport mesh stalls IDA, under
+    FieldSolve = exact as well as iterative. CLAUDE.md records why the knots
+    follow the mesh (p_h jumps at every face, and a finer spline resolves the
+    jumps into spikes in dV'/dx); what is not known is whether the stall is that
+    and nothing more.
+  - The discretisation estimate refuses any field or equilibrium model, at
+    every tier (DiscretisationEstimate.cpp): the enriched residual has no field
+    rows, so the estimate would leave out the geometry's share. Needed before
+    AdaptationTarget = "Objective" can run on a coupled case.
