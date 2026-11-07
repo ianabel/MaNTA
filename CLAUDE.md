@@ -1016,9 +1016,8 @@ the surfaces: `TomlConfigSource` (in `SolverConfig.cpp`) and `DictConfigSource`
   the grid keys went `Grid_size` → `GridSize`, `Lower_boundary` →
   `LowerBoundary`, `Polynomial_degree` → `PolynomialDegree` and so on alongside
   the graded-mesh work, since editing them for another reason is the one moment
-  the rename is free, and `Absolute_tolerance` → `AbsoluteTolerance` when it
-  became the TimeMarch steady test's floor as well as IDA's, with
-  `Relative_tolerance` → `RelativeTolerance` beside it so the pair matches.
+  the rename is free, and `Absolute_tolerance` and `Relative_tolerance` →
+  `AbsoluteTolerance` and `RelativeTolerance`, as a pair.
 
   **A rename is a deprecated alias, never a removal.** The schema's `aliases`
   field is what makes that a one-line change: `presentSpelling` warns when the

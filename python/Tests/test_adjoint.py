@@ -298,10 +298,10 @@ def test_a_steady_solve_gives_the_adjoint_a_better_state_than_time_marching(tmp_
     solve() above reaches its state by integrating to T_FINAL = 15, which its
     own comment explains is chosen so that "the diffusive transient is
     thoroughly dead: the adjoint state method assumes F(y, p) = 0, which only
-    holds once du/dt has decayed". run_ss() with TimeMarch stops on a dY/dt
-    threshold instead, which is a proxy for the same thing and a looser one --
-    it lands the gradient about 2e-5 from the finite-difference reference where
-    the long integration reaches 2e-8.
+    holds once du/dt has decayed". run_ss() with TimeMarch stops at the first
+    output time that passes the steady test, which is a looser criterion than
+    iterating until it is met -- it lands the gradient about 4.7e-6 from the
+    finite-difference reference where the long integration reaches 2e-8.
 
     The pseudo-transient and Newton solvers drive the residual to zero directly,
     so they recover the full 2e-8 while doing a fraction of the work. That makes

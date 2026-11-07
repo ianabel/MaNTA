@@ -933,18 +933,6 @@ void SystemSolver::integrate(double tFinal)
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
 
-	// The TimeMarch steady-state test: dY/dt on the trace, over one output
-	// interval, in weights built the way IDA builds its own --
-	// 1 / (rtol |lambda| + atol) -- with SteadyStateTolerance as the relative
-	// part and AbsoluteTolerance, per variable, as the floor. The floor was a
-	// hard-coded 1e-3, which for a trace of order one governed at any
-	// SteadyStateTolerance tighter than 1e-3: the key moved nothing across
-	// nine orders. 1e-3 is AbsoluteTolerance's default, so a config that does
-	// not set it stops where it always did.
-	const sunrealtype dydt_rel_tol = steady_state_tol;
-	auto dydt_abs_tol = [this](Index v)
-	{ return atol.size() == static_cast<size_t>(nVars) ? atol[v] : atol[0]; };
-
 	if (t0 > tFinal)
 	{
     logmsg<LOG_LEVEL::ERROR>("Initial time t = {} is after the end of the simulation at t = {}", t0, tFinal);
@@ -1070,25 +1058,12 @@ void SystemSolver::integrate(double tFinal)
 		if (writeOutput)
 			WriteTimeslice(tret);
 
-		// Check if steady-state is achieved (test the lambda points)
-		if (TerminateOnSteadyState)
+		// The steady solvers' own SteadyStateTest, at the state IDA returned;
+		// see timeMarchIsSteady.
+		if (TerminateOnSteadyState && timeMarchIsSteady(tret))
 		{
-			sunrealtype dydt_norm = 0.0;
-			for (Index i = 0; i < nCells; i++)
-				for (Index v = 0; v < nVars; v++)
-				{
-					sunrealtype xi = dydt.lambda(v)[i] * dt;
-					sunrealtype wi = 1.0 / (std::abs(y.lambda(v)[i]) * dydt_rel_tol + dydt_abs_tol(v));
-					dydt_norm += xi * xi * wi * wi;
-				}
-			dydt_norm = sqrt(dydt_norm);
-			if (physics_debug)
-				std::println(" dy/dt norm inferred from lambdas is {:g}", dydt_norm);
-			if (dydt_norm < 1.0)
-			{
-				std::println("Steady State achieved at time t = {:g}", tret);
-				break;
-			}
+			std::println("Steady State achieved at time t = {:g}", tret);
+			break;
 		}
 
 		// Diagnostics go here

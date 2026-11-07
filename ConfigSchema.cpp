@@ -82,7 +82,7 @@ const std::vector<Entry> &table()
         {"AbsoluteTolerance", {"Absolute_tolerance"}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{1e-3},
          "Absolute tolerance, one value or one per variable: the floor of IDA's error weights, "
-         "and of the steady-state test a TimeMarch run stops on."},
+         "and so of the NewtonStep steady test."},
         {"ErrorWeights", {}, Type::String, Category::Solver, false, false, std::string{"AlgebraicMax"},
          "How IDA's error weights hold each class of unknown: AlgebraicMax (sigma, q and aux "
          "floored at rtol times their largest magnitude), Pointwise, AllMax, Derivative, "
@@ -101,9 +101,9 @@ const std::vector<Entry> &table()
          "Write G, dG/dp and each objective's adjoint state z into the netCDF output at the "
          "end of the run; needs solveAdjoint. See docs/adjoints.rst."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
-         "Arms steady-state termination by its presence. Its value is compared against dy/dt "
-         "under TimeMarch, and against a mesh-independent weighted norm of the steady residual "
-         "under SteadyStateTest = Residual; the default NewtonStep test does not read it."},
+         "Arms steady-state termination by its presence. Under SteadyStateTest = Residual its "
+         "value bounds a mesh-independent weighted norm of the steady residual, whichever "
+         "SteadyStateSolver reaches the state; the default NewtonStep test does not read it."},
         {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
          "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
          "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},

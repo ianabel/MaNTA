@@ -304,9 +304,9 @@ Time integration
      - ``1e-3``
      - The absolute tolerance: either a single value or an array with one
        entry per variable; any other length is refused. It is the floor of
-       IDA's error weights, and the floor of the test a
-       ``SteadyStateSolver = "TimeMarch"`` run stops on (see
-       :ref:`steady-merit-function`). ``Absolute_tolerance`` is a deprecated
+       IDA's error weights, and so of the ``"NewtonStep"`` steady test, which
+       is made in them (see :ref:`steady-state-test`).
+       ``Absolute_tolerance`` is a deprecated
        spelling of this and still works, with a warning.
    * - ``ErrorWeights``
      - ``"AlgebraicMax"``
@@ -353,11 +353,12 @@ Time integration
        ``SteadyStateSolve`` simply sets the tolerance. ``Runner.run_ss()`` arms it
        whether or not either key was given, and falls back to ``1e-3``.
 
-       What its value is compared against depends on the method:
-       :math:`\mathrm{d}y/\mathrm{d}t` under ``SteadyStateSolver = TimeMarch``,
-       and a mesh-independent weighted norm of the steady residual under
-       ``SteadyStateTest = "Residual"`` — see :ref:`steady-merit-function`. The
-       default test, ``"NewtonStep"``, does not read it: it converges to
+       What its value is compared against depends on ``SteadyStateTest``, and
+       on nothing else: under ``"Residual"`` it bounds a mesh-independent
+       weighted norm of the steady residual, whichever ``SteadyStateSolver``
+       reaches the state — ``TimeMarch`` makes the same test at each output
+       time; see :ref:`steady-merit-function`. The default test,
+       ``"NewtonStep"``, does not read it: it converges to
        ``RelativeTolerance`` and ``AbsoluteTolerance`` — see
        :ref:`steady-state-test`.
    * - ``ObjectiveDecreaseTolerance``

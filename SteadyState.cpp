@@ -1,9 +1,8 @@
 // Pseudo-transient continuation to a steady state.
 //
-// The solver's usual route to a steady state is to integrate until dY/dt is
-// small: TerminateOnSteadyState is a stopping test on the time loop in
-// Solver.cpp, and IDA sizes every step from a local error estimate on a
-// transient nobody wants. Measured on the three benchmarks under
+// The solver's original route to a steady state is to integrate until an
+// output time passes the steady test (timeMarchIsSteady, below), and IDA sizes
+// every step from a local error estimate on a transient nobody wants. Measured on the three benchmarks under
 // python-examples/, that costs 113-375 evaluations of the physics per point,
 // where the schemes in refs/ reach the same state in 10-15.
 //
@@ -583,6 +582,11 @@ int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
 
 double SystemSolver::steadyCorrectionNorm()
 {
+    return steadyCorrectionNorm(t0);
+}
+
+double SystemSolver::steadyCorrectionNorm(Time t)
+{
     allocateNewtonStepScratch();
 
     // Restored on the way out, as estimateObjective does: alpha belongs to
@@ -592,12 +596,12 @@ double SystemSolver::steadyCorrectionNorm()
     N_Vector zeroDeriv = N_VClone(Y);
     N_VConst(0.0, zeroDeriv);
 
-    setJacTime(t0);
+    setJacTime(t);
     setAlpha(0.0);
     setJacEvalY(Y, zeroDeriv);
-    updateBoundaryConditions(t0);
+    updateBoundaryConditions(t);
     updateMatricesForJacSolve();
-    residual(t0, Y, zeroDeriv, nlsTmp);
+    residual(t, Y, zeroDeriv, nlsTmp);
     solveJacEq(nlsTmp, nlsU);
     getErrorWeights(Y, nlsEwt);
     const double norm = errorWeightedNorm(nlsU, nlsEwt);
@@ -605,6 +609,36 @@ double SystemSolver::steadyCorrectionNorm()
     N_VDestroy(zeroDeriv);
     setAlpha(alphaOnEntry);
     return norm;
+}
+
+bool SystemSolver::timeMarchIsSteady(Time t)
+{
+    if (steadyTest == SteadyTest::Residual)
+    {
+        const double norm = steadyResidualNorm(t);
+        if (physics_debug)
+            std::println(" steady residual norm at t = {:g} is {:g}", t, norm);
+        return norm <= steady_state_tol;
+    }
+
+    // The build IDA last made, to put back afterwards. yJac and dydtJac own
+    // their memory, so this is the whole of what updateMatricesForJacSolve reads
+    // that the check below changes.
+    const size_t dof = yJac.getDoF();
+    const std::vector<double> yIDA(yJacMem, yJacMem + dof), dydtIDA(dydtJacMem, dydtJacMem + dof);
+    const double jtIDA = jt, alphaIDA = alpha;
+
+    const double norm = steadyCorrectionNorm(t);
+
+    std::copy(yIDA.begin(), yIDA.end(), yJacMem);
+    std::copy(dydtIDA.begin(), dydtIDA.end(), dydtJacMem);
+    setJacTime(jtIDA);
+    setAlpha(alphaIDA);
+    updateMatricesForJacSolve();
+
+    if (physics_debug)
+        std::println(" steady Newton correction at t = {:g} is {:g}", t, norm);
+    return norm <= steadyStepTol;
 }
 
 int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
@@ -804,6 +838,11 @@ void SystemSolver::residualWeights()
 
 double SystemSolver::steadyResidualNorm()
 {
+    return steadyResidualNorm(t0);
+}
+
+double SystemSolver::steadyResidualNorm(Time t)
+{
     if (!initialised)
         throw std::runtime_error("steadyResidualNorm called before initialize()");
 
@@ -812,7 +851,7 @@ double SystemSolver::steadyResidualNorm()
     // Zeroing ptcDYdt is what makes this the steady residual rather than the
     // damped one: no backward-Euler term, whatever ptcStep currently is.
     N_VConst(0.0, ptcDYdt);
-    residual(t0, Y, ptcDYdt, res);
+    residual(t, Y, ptcDYdt, res);
 
     // The same norm KINSOL forms from the same weights, which is what keeps the
     // inner and outer stopping tests measuring one quantity.
