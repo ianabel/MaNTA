@@ -672,11 +672,12 @@ Two return codes worth being able to read without looking them up:
   with `h` is the signature of an inconsistent state, when `IDASetSuppressAlg`
   is off and so `sigma`, `q`, `lambda` and `phi` are all in the error test. Look
   at what `IDACalcIC` was given, not at the time loop. A `dsm` that *does* fall
-  in proportion to `h` and runs into `MinStepSize` is a different thing: on a
-  cold start the algebraic `y'` is zero (`IDA_YA_YDP_INIT` holds it), the
-  predictor's error in those rows goes like `h |y'|`, and a tight enough
-  tolerance needs a first step below the default 1e-7. Lower `MinStepSize` or
-  suppress the algebraic error.
+  in proportion to `h` and runs into `MinStepSize` is a different thing: an
+  algebraic `y'` that is wrong -- the predictor's error in those rows goes like
+  `h |y'|`, first order where the test expects second. `initialize()` solves the
+  algebraic `y'` exactly after `IDACalcIC` (below), so look at the case's
+  explicit time derivatives: a warning that they disagree with the residual
+  means a `d..._dt` hook is missing.
 * **`IDA_CONV_FAIL` (-4) from `IDACalcIC`** is the same problem one stage earlier:
   the Newton/linesearch could not reach a consistent state from the guess
   `setInitialConditions` built. The guess is worth suspecting before the solver is.
@@ -2557,11 +2558,14 @@ formula, not the operator, if the data cannot tell them apart.
   `a_restart_keeps_the_boundary_data_the_case_owns` is the guard; the same call
   is how `DegreeAdaptation` and `MeshAdaptation` hand state between levels, so
   those were resampling an autodiff case's boundary data at every rung too.
-* **A projected restart solves for its algebraic `y'`, exactly, after
-  `IDACalcIC`.** `IDA_YA_YDP_INIT` makes algebraic *values* and differential
-  *derivatives* consistent and leaves the algebraic derivatives at zero; on a
-  projected restart -- mid-run, first step at the cadence -- that zero failed the
-  error test ten times at a cadence of `t0 / 5`. `consistentAlgebraicDerivatives`
+* **A cold start and a projected restart solve for their algebraic `y'`,
+  exactly, after `IDACalcIC`.** `IDA_YA_YDP_INIT` makes algebraic *values* and
+  differential *derivatives* consistent and leaves the algebraic derivatives at
+  zero. On a projected restart -- mid-run, first step at the cadence -- that zero
+  failed the error test ten times at a cadence of `t0 / 5`; on a cold start it
+  forced the first step below `MinStepSize`'s default at a tight tolerance, and
+  10 of the 17 regression configs failed at 1000x their tolerances (all 17 run
+  now, and 4 at 10x). `consistentAlgebraicDerivatives`
   (`Solver.cpp`) solves the differentiated constraints `G_z z' = -G_t - G_u u'`
   with one Jacobian build: `J(alpha) w = [alpha M u' ; -G_t]` pins the
   differential rows only up to `F_d,y w`, but the defect `u' - w_d` is known
@@ -2571,9 +2575,17 @@ formula, not the operator, if the data cannot tell them apart.
   rate, not the answer.** `G_t` is the case's own explicit time derivative
   (`dSigmaFn_dt`, `dAuxG_dt`, `dLowerBoundary_dt`, ... -- zero by default) through
   `explicitTimeDerivative`, which assembles `dF/dt` at fixed state with the
-  residual's own code on a zero state. A cold start is deliberately left alone:
-  IDA picks a first step small enough not to need it, and
-  `at_t0_only_the_differential_part_of_dydt_exists` still pins its zeros.
+  residual's own code on a zero state. **A missing hook is checked for, not
+  trusted**: a forward difference of the residual in `t` gives `G_t` to ~1e-8
+  for any case, and where the hooks disagree with it beyond that the difference
+  is used and the case is warned about. A case that makes its data depend on `t`
+  and declares nothing otherwise starts from a `y'` contradicting its own
+  boundary, which is *worse* than zero in the cells at that boundary --
+  `MatrixDiffusionTest`, missing `dLowerBoundary_dt`, ran at 1000x with zeros and
+  failed its first step without the check. Two residuals per correction. The
+  restart's counts also survive the `IDAReInit` that hands IDA the derivatives
+  (`idaResidualEvalsBeforeReinit`), which clears IDA's counters.
+  `a_cold_start_begins_with_consistent_algebraic_derivatives` is the guard.
 
 * **`RF_cellwise` and `L_global` hold *time-dependent* boundary data, and only
   `updateBoundaryConditions(t)` may fill them.** `initialiseMatrices` sizes and
