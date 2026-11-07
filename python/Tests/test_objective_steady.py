@@ -193,3 +193,26 @@ def test_a_tolerance_per_objective_must_match_the_objectives(tmp_path):
     runner.configure(config(tmp_path, SteadyStateTest="Objective", ObjectiveTolerance=[1e-3, 1e-4]))
     with pytest.raises(Exception, match="one each"):
         runner.run_ss()
+
+
+def test_a_time_march_estimates_its_objective_where_it_stops(tmp_path):
+    """A TimeMarch run that stops on its steady test estimates the objective
+    there, as a steady solve does on finishing: the correction carries it to the
+    fixed point the steady solvers converge to, and the bound covers what it
+    moved. Stopped loosely, so there is something to correct."""
+    reference, _ = solve(tmp_path / "ref", SteadyStateStepTolerance=1e-8)
+    G_ref = np.asarray(reference.G(), float)
+
+    march, _ = solve(tmp_path / "march", SteadyStateSolver="TimeMarch",
+                     SteadyStateStepTolerance=3.0, delta_t=0.05,
+                     EstimateObjectiveOnFinish=True)
+    e = march.objectiveEstimate()
+    value = np.asarray(e["value"], float)
+    corrected = np.asarray(e["corrected"], float)
+    uncertainty = np.asarray(e["uncertainty"], float)
+
+    raw = np.abs(value - G_ref)
+    left = np.abs(corrected - G_ref)
+    assert np.all(raw > 1e-10), f"the march stopped at the fixed point already: {raw}"
+    assert np.all(left < 1e-3 * raw), f"raw {raw}, corrected {left}"
+    assert np.all(raw <= uncertainty), f"raw {raw}, bound {uncertainty}"

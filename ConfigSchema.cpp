@@ -118,7 +118,8 @@ const std::vector<Entry> &table()
          "Least the pseudo-time step may grow on a step that reduced the residual. "
          "1 means no floor. Must not be below 1."},
         {"EstimateObjectiveOnFinish", {}, Type::Bool, Category::Solver, false, false, true,
-         "Estimate the objective and its remaining error at the end of each steady solve. Costs "
+         "Estimate the objective and its remaining error at the end of each steady solve, or of "
+         "a TimeMarch run that stops on its steady test. Costs "
          "one residual, one Jacobian build and one solve, and needs solveAdjoint. Charged per "
          "solve, so a solve driven in slices pays it per slice."},
         {"EstimateDiscretisationError", {}, Type::Bool, Category::Solver, false, false, false,

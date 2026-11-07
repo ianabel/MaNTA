@@ -367,7 +367,8 @@ extrapolated to is a steady state, not the end of a pseudo-time step.
 
 It runs at every exit from ``solveSteadyState``, including the two that then
 throw, so a caught failure still carries a partial answer and a bound saying what
-that answer is worth. ``lastSteadyOutcome()`` says which exit it was.
+that answer is worth -- and when a ``TimeMarch`` run stops on its steady test, at
+the state and time it stopped in. ``lastSteadyOutcome()`` says which exit it was.
 ``PyRunner::objectiveEstimate()`` returns ``value``, ``corrected`` and
 ``uncertainty``, one entry per objective; it is empty when the run had no
 ``AdjointProblem``, and it costs nothing in that case.
@@ -414,6 +415,25 @@ of :math:`G` from one Jacobian solve. By ``Newton`` both tests reach round-off
 in six sweeps. The bound holds throughout -- replaying every continuation step
 of a tight ``Residual`` solve, it is 1.04x the true error at its tightest and
 2.3x at its loosest.
+
+Two more measurements, on the four benchmarks of
+``python-examples/objective-tolerance`` with their stored-energy objectives, by
+``PseudoTransient``, ``Newton`` and ``TimeMarch`` at ``SteadyStateStepTolerance``
+3, 1, 0.33 and 0.1 -- 58 objective values in all, against references solved to a
+step tolerance of 1e-6:
+
+* **A time march transfers.** At a ``TimeMarch`` run's stop the correction leaves
+  1e-16 to 1e-7 of algebraic errors between 1e-9 and 2e-4, and the bound holds at
+  5.5x to 73x the error. A march that has passed its steady test is near the same
+  fixed point a steady solve stops near, and the extrapolation is to that point.
+* **The 2-norm pairing is not the loose part.** Pairing IDA's error-weighted norm
+  with its dual instead gives the same bound to three digits in every row. These
+  objectives read ``u`` alone, whose weights are uniform where
+  ``AbsoluteTolerance`` governs, and a uniform weight cancels between a norm and
+  its dual. Across all 58 the bound holds before and after the correction, at 4x
+  to 73x the error; the looseness is the Cauchy--Schwarz inequality between a
+  ``dG/dy`` and a correction that are far from parallel, which no choice of
+  weights fixes.
 
 To stop a solve on this quantity rather than estimate it afterwards, set
 ``SteadyStateTest = "Objective"``: the undamped Newton solve then ends when
