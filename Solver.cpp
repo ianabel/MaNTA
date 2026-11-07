@@ -5,6 +5,7 @@
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
+#include <algorithm>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -826,40 +827,42 @@ double SystemSolver::weightedResidualNorm(double t, N_Vector Y_in, N_Vector dYdt
 	return norm;
 }
 
-// The algebraic components of y' at a consistent state, from differentiating the
-// algebraic rows G(t, y) = 0 along the trajectory: G_y y' = -G_t, i.e.
-// G_z z' = -G_t - G_u u' for the algebraic unknowns z given the differential
-// derivatives u'. IDA_YA_YDP_INIT computes algebraic values and differential
-// derivatives and leaves the algebraic derivatives where it found them, so a
-// state IDACalcIC has just made consistent still has z' = 0 -- which tells IDA's
-// predictor those components are not moving, and makes the first step's error
-// estimate h |z'| rather than h^2.
+// The algebraic components of y' at a consistent state. IDA_YA_YDP_INIT
+// computes algebraic values and differential derivatives and leaves the
+// algebraic derivatives where it found them, so a state IDACalcIC has just made
+// consistent still has z' = 0 -- which tells IDA's predictor those components
+// are not moving, and makes the first step's error estimate h |z'| rather than
+// h^2.
 //
-// Solved exactly, with the coupled Jacobian solve J(alpha) = F_y + alpha F_y' --
-// whose algebraic rows are exactly G_y, whatever the case couples them to (aux,
-// global scalars, a field model), since F_y' vanishes there -- and iterative
-// refinement on the differential rows:
+// What fixes z' is that every row of the residual stays zero along the
+// trajectory: d/dt F(t, y, y') = F_y y' + F_y' y'' + F_t = 0. The differential
+// derivatives u' are given, and nothing reads an algebraic y', so F_y' y'' is
+// F_y' u'' and the unknowns are u'' and z'. Where no algebraic row reads y' --
+// every case but a scalar constraint on du/dt -- the algebraic rows alone give
+// G_z z' = -G_t - G_u u', and u'' is a by-product. Where one does, as
+// ScalarTestLD3's controller reads dM/dt, its row reads u'' too, and u'' is
+// pinned by the differentiated differential rows; leaving them out, or setting
+// u'' to zero, gives a y' that contradicts its own constraint.
 //
-//   * J(alpha) w = [alpha M u' ; -G_t], M = F_y' on the differential rows. The
-//     algebraic rows hold exactly; the differential ones pin w_d to u' only up to
-//     the F_d,y w term the right-hand side leaves out.
-//   * That defect, delta = u' - w_d, is known exactly, because the solution
-//     sought has w_d = u'. J(alpha) c = [alpha M delta ; 0] corrects it while
-//     leaving the algebraic rows satisfied, so w + c is again an exact solution of
-//     them with a smaller defect -- by a factor of order 1 / (alpha tau), tau the
-//     fastest differential time scale.
+// The coupled Jacobian solve J(alpha) = F_y + alpha F_y' solves exactly this
+// system, up to O(1/alpha), with x_d = u' + u'' / alpha:
 //
-// Iterated to round-off, so alpha sets only how many corrections it takes, never
-// the answer. M v is F(t, Y, v) - F(t, Y, 0), exact for a residual affine in y'.
-// G_t is the case's own explicit time derivative (explicitTimeDerivative), so
-// it is exact, and identically zero for a case with no explicit time
-// dependence. The cost is one Jacobian build, one solve per refinement, and two
-// residuals plus one per refinement. Only the algebraic components are taken;
-// the differential ones stay as IDACalcIC computed them.
+//   J(alpha) x = alpha F_y' u' - F_t + F_y P_d (x_d - u'),
+//
+// P_d keeping the differential components. The last term is what the O(1/alpha)
+// is, and it is known once x is, so it is iterated: each pass takes one residual
+// difference for it and one solve, and contracts the error by about s / alpha, s
+// the fastest rate in the differential rows. F_y' u' is F(t, Y, u') - F(t, Y, 0),
+// exact for a residual affine in y'. F_t is the case's own explicit time
+// derivative on the algebraic rows (explicitTimeDerivative), checked against the
+// residual, and a forward difference of the residual on the differential ones,
+// where it enters only through u''. Only the algebraic components are taken; the
+// differential ones stay as IDACalcIC computed them.
 void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, Time tc)
 {
-	N_Vector ud = N_VClone(Yc), zero = N_VClone(Yc), F0 = N_VClone(Yc), Fv = N_VClone(Yc),
-			 rhs = N_VClone(Yc), w = N_VClone(Yc), c = N_VClone(Yc), delta = N_VClone(Yc);
+	N_Vector ud = N_VClone(Yc), zero = N_VClone(Yc), F0 = N_VClone(Yc), Fa = N_VClone(Yc),
+			 Fv = N_VClone(Yc), base = N_VClone(Yc), rhs = N_VClone(Yc), x = N_VClone(Yc),
+			 xPrevious = N_VClone(Yc), d = N_VClone(Yc), Yp = N_VClone(Yc), minusFt = N_VClone(Yc);
 
 	double const *isDiff = N_VGetArrayPointer(id);
 	const sunindextype n = N_VGetLength(Yc);
@@ -868,27 +871,22 @@ void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, T
 	N_VProd(dYdtc, id, ud);
 	N_VConst(0.0, zero);
 	residual(tc, Yc, zero, F0);
+	residual(tc, Yc, ud, Fa);
+	// F_y' u', on every row: M u' on the differential rows, and the du/dt an
+	// algebraic row reads, where one does.
+	N_VLinearSum(1.0, Fa, -1.0, F0, base);
+	double const *fy = N_VGetArrayPointer(base);
+	double readsYdot = 0.0;
+	for (sunindextype i = 0; i < n; ++i)
+		if (isDiff[i] == 0.0)
+			readsYdot = std::max(readsYdot, std::abs(fy[i]));
 
-	// alpha M v on the differential rows, rhsAlg on the algebraic ones.
-	auto assemble = [&](N_Vector v, N_Vector algebraic)
-	{
-		residual(tc, Yc, v, Fv);
-		N_VLinearSum(1.0, Fv, -1.0, F0, rhs);
-		N_VScale(alphaLarge(), rhs, rhs);
-		double *r = N_VGetArrayPointer(rhs);
-		double const *a = algebraic ? N_VGetArrayPointer(algebraic) : nullptr;
-		for (sunindextype i = 0; i < n; ++i)
-			if (isDiff[i] == 0.0)
-				r[i] = a ? a[i] : 0.0;
-	};
-
-	// -G_t on the algebraic rows, from the case's own d/dt hooks.
-	N_Vector minusGt = N_VClone(Yc);
-	N_VConst(0.0, minusGt);
+	// -F_t: the case's own d/dt hooks on the algebraic rows...
+	N_VConst(0.0, minusFt);
 	{
 		DGSoln Yh(nVars, grid, k, N_VGetArrayPointer(Yc), nScalars, nAux, nField);
 		DGSoln dYh(nVars, grid, k, N_VGetArrayPointer(ud), nScalars, nAux, nField);
-		DGSoln Gt(nVars, grid, k, N_VGetArrayPointer(minusGt), nScalars, nAux, nField);
+		DGSoln Gt(nVars, grid, k, N_VGetArrayPointer(minusFt), nScalars, nAux, nField);
 		explicitTimeDerivative(Yh, dYh, tc, Gt);
 	}
 
@@ -899,21 +897,26 @@ void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, T
 	// its first step with this one. A forward difference in t at fixed (Y, u')
 	// is G_t to about 1e-8 for any case, so where the hooks disagree with it by
 	// more than that could explain, the difference is used and the case is
-	// named. Forward, so nothing is evaluated before t0. Two residuals.
+	// named. Forward, so nothing is evaluated before t0. The differential rows
+	// take the difference whatever the hooks say: they reach z' only through u''
+	// and only where an algebraic row reads du/dt, and a source's explicit time
+	// dependence has no hook to compare with.
 	{
 		const double e = 1e-7 * std::max(1.0, std::abs(tc));
-		N_Vector Fa = N_VClone(Yc), Fb = N_VClone(Yc);
-		residual(tc, Yc, ud, Fa);
+		N_Vector Fb = N_VClone(Yc);
 		residual(tc + e, Yc, ud, Fb);
-		double *h = N_VGetArrayPointer(minusGt);
+		double *h = N_VGetArrayPointer(minusFt);
 		double const *fa = N_VGetArrayPointer(Fa), *fb = N_VGetArrayPointer(Fb);
 		double gap = 0.0, scale = 0.0, size = 0.0;
 		for (sunindextype i = 0; i < n; ++i)
 		{
 			size = std::max(size, std::abs(fa[i]));
-			if (isDiff[i] != 0.0)
-				continue;
 			const double fd = (fb[i] - fa[i]) / e;
+			if (isDiff[i] != 0.0)
+			{
+				h[i] = fd;
+				continue;
+			}
 			gap = std::max(gap, std::abs(fd - h[i]));
 			scale = std::max({scale, std::abs(fd), std::abs(h[i])});
 		}
@@ -932,53 +935,132 @@ void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, T
 				if (isDiff[i] == 0.0)
 					h[i] = (fb[i] - fa[i]) / e;
 		}
-		N_VDestroy(Fa);
 		N_VDestroy(Fb);
 	}
-	N_VScale(-1.0, minusGt, minusGt);
+	N_VScale(-1.0, minusFt, minusFt);
+
+	// F_y v by a forward difference of the residual in y, at fixed y' = u'. v is
+	// x_d - u' = u'' / alpha, a small vector, and its product is an O(s / alpha)
+	// correction, so the difference's own ~1e-8 relative error is negligible.
+	const double yScale = std::max(1.0, N_VMaxNorm(Yc));
+	auto stateDirectional = [&](N_Vector v, N_Vector out)
+	{
+		const double vmax = N_VMaxNorm(v);
+		if (vmax == 0.0)
+		{
+			N_VConst(0.0, out);
+			return;
+		}
+		const double e = std::sqrt(std::numeric_limits<double>::epsilon()) * yScale / vmax;
+		N_VLinearSum(1.0, Yc, e, v, Yp);
+		residual(tc, Yp, ud, Fv);
+		N_VLinearSum(1.0 / e, Fv, -1.0 / e, Fa, out);
+	};
+
+	// alpha has to beat the problem's stiffness, which nothing here knows in
+	// advance and which the output cadence says nothing about: tied to
+	// 1 / delta_t, alpha was 1e5 on Shestakov's problem (delta_t = 1e3), and IDA
+	// started from an algebraic y' 4-18% out. So alpha starts at
+	// consistentDerivativeAlpha and is raised by what each pass shows: a
+	// contraction slower than 1e-3 asks for alpha times the shortfall against
+	// 1e-6, and a Jacobian rebuild. The iterate survives the rebuild, since the
+	// system it converges to does not involve alpha.
+	//
+	// It is capped, lower where an algebraic row reads du/dt: that row's
+	// alpha F_y' x_d and alpha F_y' u' cancel to its answer, which so carries an
+	// error of about alpha eps |F_y' u'| -- 1e-6 relative at 1e10, O(1) by 1e16.
+	constexpr double converged = 1e-14, roundOff = 1e-10, slow = 1e-3, wanted = 1e-6;
+	const double alphaMax = readsYdot > 0.0 ? 1e10 : 1e14;
+	constexpr int maxPasses = 32, maxBuilds = 6;
 
 	const double alphaOnEntry = alpha;
-	setAlpha(alphaLarge());
+	double a = consistentDerivativeAlpha;
 	setJacTime(tc);
 	updateBoundaryConditions(tc);
-	setJacEvalY(Yc, ud);
-	updateMatricesForJacSolve();
+	auto build = [&]()
+	{
+		setAlpha(a);
+		setJacEvalY(Yc, ud);
+		updateMatricesForJacSolve();
+	};
+	build();
 
-	assemble(ud, minusGt);
-	solveJacEq(rhs, w);
+	// One pass: rhs = alpha F_y' u' - F_t + F_y P_d (x_d - u'), solved for x.
+	auto pass = [&]()
+	{
+		N_VLinearSum(1.0, x, -1.0, ud, d);
+		N_VProd(d, id, d);
+		stateDirectional(d, rhs);
+		N_VLinearSum(a, base, 1.0, rhs, rhs);
+		N_VLinearSum(1.0, minusFt, 1.0, rhs, rhs);
+		N_VScale(1.0, x, xPrevious);
+		solveJacEq(rhs, x);
+	};
+	// How far a pass moved the algebraic components, relative to them or to u'.
+	auto change = [&]()
+	{
+		double moved = 0.0, size = N_VMaxNorm(ud);
+		double const *xv = N_VGetArrayPointer(x), *xp = N_VGetArrayPointer(xPrevious);
+		for (sunindextype i = 0; i < n; ++i)
+			if (isDiff[i] == 0.0)
+			{
+				moved = std::max(moved, std::abs(xv[i] - xp[i]));
+				size = std::max(size, std::abs(xv[i]));
+			}
+		return moved / std::max(size, 1e-300);
+	};
 
-	const double scale = std::max(N_VMaxNorm(ud), 1e-300);
-	double defect = 0.0;
-	int refinements = 0;
+	// The first pass starts from x_d = u', where the correction term vanishes.
+	// What the second moves the answer by, against a start of 1, is the first
+	// rate.
+	N_VScale(1.0, ud, x);
+	pass();
+	int passes = 1, builds = 1;
+	double moved = 1.0, rate = 1.0, rateBeforeRaise = -1.0;
+	bool raising = true;
 	for (;;)
 	{
-		// delta = u' - w_d on the differential components, zero elsewhere.
-		N_VLinearSum(1.0, ud, -1.0, w, delta);
-		N_VProd(delta, id, delta);
-		defect = N_VMaxNorm(delta) / scale;
-		if (defect <= 1e-14 || refinements == 8)
+		pass();
+		++passes;
+		const double previous = moved;
+		moved = change();
+		rate = moved / previous;
+		if (moved <= converged || passes == maxPasses)
 			break;
-		assemble(delta, nullptr);
-		solveJacEq(rhs, c);
-		N_VLinearSum(1.0, w, 1.0, c, w);
-		++refinements;
+		if (rate > 0.5 && moved <= roundOff)
+			break;
+		// A raise that did not buy a tenth of what it should have says the slow
+		// mode is not alpha's, and further raises would only cost round-off.
+		if (rateBeforeRaise > 0.0 && rate > 0.1 * rateBeforeRaise)
+			raising = false;
+		rateBeforeRaise = -1.0;
+		if (rate > slow && raising && builds < maxBuilds && a < alphaMax)
+		{
+			rateBeforeRaise = rate;
+			a = std::min(a * std::clamp(rate / wanted, 10.0, 1e8), alphaMax);
+			build();
+			++builds;
+		}
 	}
 	setAlpha(alphaOnEntry);
-	consistentDerivativeRefinements = refinements;
-	consistentDerivativeDefect = defect;
-	if (defect > 1e-14)
+	consistentDerivativePasses = passes;
+	consistentDerivativeBuilds = builds;
+	consistentDerivativeAlphaUsed = a;
+	consistentDerivativeChange = moved;
+	if (moved > roundOff)
 		logmsg<LOG_LEVEL::WARNING>(
-			"The algebraic derivatives at the restart were refined {} times and the differential "
-			"rows still miss u' by {:g} relative; the algebraic y' handed to IDA carries that error.",
-			refinements, defect);
+			"The algebraic derivatives at t = {:g} took {} passes over {} Jacobian builds, up to "
+			"alpha = {:g}, and the last still moved them by {:g} relative; the algebraic y' handed "
+			"to IDA carries that error.",
+			tc, passes, builds, a, moved);
 
 	double *dy = N_VGetArrayPointer(dYdtc);
-	double const *wv = N_VGetArrayPointer(w);
+	double const *xv = N_VGetArrayPointer(x);
 	for (sunindextype i = 0; i < n; ++i)
 		if (isDiff[i] == 0.0)
-			dy[i] = wv[i];
+			dy[i] = xv[i];
 
-	for (N_Vector v : {ud, zero, F0, Fv, rhs, w, c, delta, minusGt})
+	for (N_Vector v : {ud, zero, F0, Fa, Fv, base, rhs, x, xPrevious, d, Yp, minusFt})
 		N_VDestroy(v);
 }
 

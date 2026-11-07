@@ -29,6 +29,7 @@
 #include "Types.hpp"
 #include "../../FieldModel.hpp"
 #include "../../PhysicsCases/ADTestProblem.hpp"
+#include "../../PhysicsCases/ScalarTestLD3.hpp"
 
 #include <ida/ida.h>
 #include <netcdf>
@@ -718,7 +719,7 @@ BOOST_AUTO_TEST_CASE(a_cold_start_begins_with_consistent_algebraic_derivatives)
         sys.initialize();
     }
     BOOST_REQUIRE(sys.initialConditionWasCorrected());
-    BOOST_TEST(sys.consistentDerivativeDefect <= 1e-14);
+    BOOST_TEST(sys.consistentDerivativeChange <= 1e-14);
 
     // d/dt of the algebraic rows along (1, y'), y' held fixed.
     auto alongTrajectory = [&](N_Vector dY)
@@ -754,6 +755,128 @@ BOOST_AUTO_TEST_CASE(a_cold_start_begins_with_consistent_algebraic_derivatives)
         sys.destroySundials();
     }
     removeOutput("lifecycle_cold_algebraic");
+}
+
+BOOST_AUTO_TEST_CASE(the_algebraic_derivative_solve_raises_alpha_until_it_converges)
+{
+    // The refinement contracts by about s / alpha per correction, s being the
+    // problem's fastest rate, so an alpha below s stalls it. alpha used to be
+    // 1e8 / delta_t, and Shestakov's delta_t = 1e3 made it 1e5: the defect sat
+    // at 4-18% and IDA started from that. Started here from alpha = 1, far
+    // below this discretisation's stiffness, the solve has to find its own
+    // alpha -- and land on the y' the default start gives, because alpha sets
+    // the rate and not the answer.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_alpha");
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+    BOOST_REQUIRE(sys.initialConditionWasCorrected());
+    const double defaultAlpha = sys.consistentDerivativeAlpha;
+    BOOST_TEST(sys.consistentDerivativeBuilds == 1);
+
+    N_Vector reference = N_VClone(sys.dYdt), fromLow = N_VClone(sys.dYdt);
+    N_VScale(1.0, sys.dYdt, reference);
+    N_VScale(1.0, sys.dYdt, fromLow);
+    sys.consistentDerivativeAlpha = 1.0;
+    sys.consistentAlgebraicDerivatives(sys.Y, fromLow, 0.0);
+    sys.consistentDerivativeAlpha = defaultAlpha;
+    BOOST_TEST_MESSAGE("from alpha = 1: " << sys.consistentDerivativePasses << " passes, "
+                                          << sys.consistentDerivativeBuilds << " builds, alpha "
+                                          << sys.consistentDerivativeAlphaUsed << ", last change "
+                                          << sys.consistentDerivativeChange);
+    BOOST_TEST(sys.consistentDerivativeBuilds > 1);
+    BOOST_TEST(sys.consistentDerivativeAlphaUsed > 1e3);
+    BOOST_TEST(sys.consistentDerivativeChange <= 1e-14);
+
+    double gap = 0.0, size = 0.0;
+    double const *r = N_VGetArrayPointer(reference), *l = N_VGetArrayPointer(fromLow);
+    for (sunindextype i = 0; i < N_VGetLength(reference); ++i)
+    {
+        gap = std::max(gap, std::abs(r[i] - l[i]));
+        size = std::max(size, std::abs(r[i]));
+    }
+    BOOST_TEST_MESSAGE("|y'(alpha = 1 start) - y'(default start)| = " << gap << " against " << size);
+    BOOST_TEST(gap <= 1e-10 * size);
+    N_VDestroy(reference);
+    N_VDestroy(fromLow);
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_alpha");
+}
+
+BOOST_AUTO_TEST_CASE(algebraic_derivatives_do_not_depend_on_alpha_where_an_algebraic_row_reads_du_dt)
+{
+    // ScalarTestLD3's controller scalar J is algebraic and its row reads dM/dt,
+    // i.e. du/dt, so differentiating it brings in u'', which only the
+    // differentiated differential rows pin down. J(alpha)'s algebraic rows are
+    // G_y + alpha G_y' there: a right-hand side of -G_t alone left
+    // alpha G_y' u' in the answer, and holding x_d = u' threw u'' away and left
+    // a mode the iteration could not damp at any alpha -- raising alpha to beat
+    // it took it to 1e33 and the regression config's first step failed. Solved as
+    // the total derivative of every row, the answer does not involve alpha: three
+    // starts a decade apart must converge and agree, to the alpha eps |G_y' u'|
+    // that row's cancellation leaves.
+    const toml::value config = u8R"(
+        [DiffusionProblem]
+        gamma = 1.0
+        gamma_d = -0.1
+        gamma_I = -0.5
+    )"_toml;
+    Grid grid(-1.0, 1.0, 8);
+    ScalarTestLD3 problem(config, grid);
+    SystemSolver sys(grid, 3, &problem);
+    configure(sys, "lifecycle_ld3_alpha");
+    sys.setTolerances({1e-3}, 1e-4);
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+    BOOST_REQUIRE(sys.initialConditionWasCorrected());
+
+    N_Vector start = N_VClone(sys.dYdt);
+    N_VScale(1.0, sys.dYdt, start);
+    std::vector<std::vector<double>> answers;
+    const double defaultAlpha = sys.consistentDerivativeAlpha;
+    for (double alpha0 : {1e6, 1e7, 1e8})
+    {
+        N_Vector dY = N_VClone(sys.dYdt);
+        N_VScale(1.0, start, dY);
+        sys.consistentDerivativeAlpha = alpha0;
+        sys.consistentAlgebraicDerivatives(sys.Y, dY, 0.0);
+        BOOST_TEST_MESSAGE("from alpha = " << alpha0 << ": " << sys.consistentDerivativePasses
+                                           << " passes, " << sys.consistentDerivativeBuilds
+                                           << " builds, alpha " << sys.consistentDerivativeAlphaUsed
+                                           << ", last change " << sys.consistentDerivativeChange);
+        BOOST_TEST(sys.consistentDerivativeChange <= 1e-12);
+        BOOST_TEST(sys.consistentDerivativeAlphaUsed <= 1e10);
+        double const *p = N_VGetArrayPointer(dY);
+        answers.emplace_back(p, p + N_VGetLength(dY));
+        N_VDestroy(dY);
+    }
+    sys.consistentDerivativeAlpha = defaultAlpha;
+    N_VDestroy(start);
+
+    double gap = 0.0, size = 0.0;
+    for (std::size_t i = 0; i < answers[0].size(); ++i)
+    {
+        size = std::max(size, std::abs(answers[1][i]));
+        gap = std::max({gap, std::abs(answers[0][i] - answers[1][i]), std::abs(answers[2][i] - answers[1][i])});
+    }
+    BOOST_TEST_MESSAGE("y' spread over the three starts: " << gap << " against " << size);
+    BOOST_TEST(gap <= 1e-8 * size);
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_ld3_alpha");
 }
 
 BOOST_AUTO_TEST_CASE(a_second_integration_on_one_solver_matches_a_fresh_one)

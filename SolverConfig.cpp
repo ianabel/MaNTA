@@ -839,8 +839,9 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
         // On Shestakov's problem (docs/adaptivity.rst, "What grading buys") a
         // time-marching run fails once the narrowest cell is around 1e-6 of the
         // span -- IDA's corrector at |h| = MinStepSize, and no setting of
-        // MinStepSize, SuppressAlgebraicError or the tolerances gets past it --
-        // while Newton and PseudoTransient solve the same meshes down to 1e-15. So
+        // MinStepSize, SuppressAlgebraicError or the tolerances gets past it,
+        // though a lower MinStepSize buys the decade above -- while Newton and
+        // PseudoTransient solve the same meshes down to 1e-15. So
         // the failure that follows points at IDA, not at the mesh, and the run has
         // not run out of accuracy to gain.
         //
@@ -856,8 +857,8 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
                 "The graded mesh's narrowest cell is {:.2e} of the domain. Past "
                 "roughly 1e-6 a time-marching run is limited by the time integrator, "
                 "not the discretisation: expect IDA corrector failures at "
-                "|h| = MinStepSize, which lowering MinStepSize does not cure. A "
-                "Newton or PseudoTransient steady solve is not limited this way.",
+                "|h| = MinStepSize that no setting cures. A Newton or "
+                "PseudoTransient steady solve is not limited this way.",
                 narrowest / span);
 
         return std::make_unique<Grid>(points);

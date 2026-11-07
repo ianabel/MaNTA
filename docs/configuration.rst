@@ -256,9 +256,10 @@ Three things to expect:
   because the cells that are *not* the innermost stop resolving the singularity
   well enough to stay negligible.
 * **A time-marching run's ceiling is the time integrator, not the
-  discretisation.** Past roughly :math:`h_0 / \mathrm{span} = 10^{-6}` IDA's
-  corrector fails at ``|h| = MinStepSize``. Lowering ``MinStepSize`` does not
-  help, and neither do ``SuppressAlgebraicError`` or the tolerances. Below about
+  discretisation.** From about :math:`h_0 / \mathrm{span} = 10^{-5}` IDA's
+  corrector can fail at ``|h| = MinStepSize``, and lowering ``MinStepSize`` to
+  ``1e-12`` buys about a decade. Past roughly :math:`10^{-6}` no setting gets
+  through. Below about
   :math:`3 \times 10^{-8}`, ``IDACalcIC`` cannot build a consistent initial
   condition at all. A ``Newton`` or ``PseudoTransient`` steady solve does not
   have this limit: it has been run to :math:`10^{-15}`, given a steady test tight

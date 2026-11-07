@@ -279,7 +279,7 @@ struct AdaptiveMeshResult
 // the same.
 //
 // **A grading that fails to solve is a rejected step, not an error.** Time
-// marching failed 61 of 112 hand-built gradings of Shestakov's problem,
+// marching failed 63 of 112 hand-built gradings of Shestakov's problem,
 // non-monotonically in everything -- IDA's corrector giving up at
 // |h| = MinStepSize, and below about h0/span = 3e-8 IDACalcIC as well -- where
 // Newton and PseudoTransient solved all of them (docs/adaptivity.rst). So a

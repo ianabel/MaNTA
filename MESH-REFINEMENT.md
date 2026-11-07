@@ -540,7 +540,11 @@ failure, before and after the cold-start `y'` fix alike). Meanwhile `Newton` and
 `h0 = 2.6e-15` and all 112 gradings of a wider sweep, of which `TimeMarch`
 fails 61. The error bottoms at 1.385e-07 at `sigma = 0.25` and rises below it, so
 the law's wall is real and the solver's is `TimeMarch`'s alone.
-`docs/adaptivity.rst` has the current numbers.
+Once the cold-start `y'` solve converged (it had stalled on this problem's
+`delta_t = 1e3`), the default `TimeMarch` ladder stopped a rung earlier, at
+`sigma = 0.4`, and `MinStepSize = 1e-12` recovers `sigma = 0.35` and 0.3 again;
+`sigma = 0.25` still fails at every setting. `docs/adaptivity.rst` has the
+current numbers.
 
 So the reachable gain from redistribution on this problem is a little over four
 orders of magnitude at fixed DOF, and both walls sit at about the same place. **A

@@ -319,16 +319,18 @@ mesh needs about 148000 cells.
 
    **A time-marching run's ceiling is the time integrator, not the
    discretisation, and it arrives early.** On the 10-cell ``k = 5`` family above,
-   ``SteadyStateSolver = "TimeMarch"`` solves down to :math:`h_0 / \text{span} =
-   6.6 \times 10^{-6}` and no further: at :math:`1.5 \times 10^{-6}` IDA's corrector
-   fails at :math:`\lvert h \rvert =` ``MinStepSize``, whose default is ``1e-7``.
-   Lowering it to ``1e-12`` or ``1e-16`` does not help — the run crawls for
-   220 s and fails the same way — and neither do ``SuppressAlgebraicError``,
-   either tolerance, or anything else tried. At :math:`2.6 \times 10^{-8}`
-   ``IDACalcIC`` cannot build a consistent initial condition at all. Across 112
-   hand-built gradings — eight mesh shapes, ``k`` from 2 to 8, ratios 0.3 and
-   0.15 — time marching failed 61, non-monotonically in everything: 17 of 56 at
-   ratio 0.3 and 44 of 56 at 0.15, some with an innermost cell as wide as
+   ``SteadyStateSolver = "TimeMarch"`` at its defaults solves down to
+   :math:`h_0 / \text{span} = 6.6 \times 10^{-5}`; at :math:`2.3 \times 10^{-5}`
+   IDA's corrector fails at :math:`\lvert h \rvert =` ``MinStepSize``, whose
+   default is ``1e-7``. Lowering it to ``1e-12`` buys a decade, to
+   :math:`6.6 \times 10^{-6}` — as do ``SuppressAlgebraicError = false`` and
+   ``AbsoluteTolerance = 1e-6``, though not a tighter ``RelativeTolerance``. At
+   :math:`1.5 \times 10^{-6}` nothing tried gets through, and at
+   :math:`2.6 \times 10^{-8}` ``IDACalcIC`` cannot build a consistent initial
+   condition at all. Across 112 hand-built gradings — eight mesh shapes, ``k``
+   from 2 to 8, ratios 0.3 and 0.15 — time marching at its defaults failed 63,
+   non-monotonically in everything: 20 of 56 at ratio 0.3 and 43 of 56 at 0.15,
+   some with an innermost cell as wide as
    :math:`3.4 \times 10^{-4}`, and two meshes differing only in how many cells
    sat outside the layer gave one success and one failure.
 
