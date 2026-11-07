@@ -220,9 +220,9 @@ this tree has one benchmark on each side of the classical hp criterion.
 **Per-cell degrees are a much larger change than they look.** `DGSolnImpl`
 holds one `const Index k` and one `const BasisType Basis` by value, and there
 are ~320 `(k+1)` sites in the core — 200 in `SystemSolver.cpp`, 74 in
-`Matrices.cpp`. That is the same single-`k` assumption `TODO` records as the
-blocker for paper II's HDG+ family. A global-`k` loop is cheap; per-cell is a
-project.
+`Matrices.cpp`. Paper II's HDG+ family, with different degrees per field,
+would run into the same single-`k` assumption. A global-`k` loop is cheap;
+per-cell is a project.
 
 ## 7. The modal-decay sensor works, and drives it from the decay *rate*
 
@@ -1116,8 +1116,9 @@ build, and it is a much smaller change than what follows here.
 **So the rest of this section is kept as a scoping record, not as a plan.** It is
 still the right analysis of what per-cell degrees would cost, and the structural
 finding below — that the global condensed system is `k`-free — is worth having
-whenever this comes back, e.g. for paper II's HDG+ family, which `TODO` records as
-blocked on the same single-`k` assumption. It should not be started for adaptivity.
+whenever this comes back, e.g. for paper II's HDG+ family, which needs different
+degrees per field and so rests on the same single-`k` assumption. It should not be
+started for adaptivity.
 
 ### What would have justified beginning
 

@@ -264,8 +264,8 @@ in two iterations and 3060 physics evaluations — against 2.0e-6 at 128 DoF for
 16672 with adaptive h. Genuine per-cell degrees are a much larger change:
 `DGSolnImpl` holds one `k` and one basis by value, and there are ~320 `(k+1)`
 sites in the core, 200 of them in `SystemSolver.cpp` and 74 in `Matrices.cpp`.
-That is the same single-`k` assumption `TODO` already records as the blocker
-for paper II's HDG+ family.
+Paper II's HDG+ family, with different degrees per field, would run into the
+same single-`k` assumption.
 
 **Woopen supplies the piece the other three leave out: how to choose between
 the two levers.** Their §4.3 takes Persson & Peraire's modal-decay sensor,
