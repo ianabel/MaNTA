@@ -2200,10 +2200,17 @@ formula, not the operator, if the data cannot tell them apart.
   `pip install -e .` has no extension to find — `PYTHONPATH=<build>/python` is
   the editable form.
 
-* **g++-14 miscompiles this tree at `-O3 -flto -march=native`, and the symptom is
-  a wrong number rather than a crash. Do not trust a g++-14 release build.**
-  Measured 2026-08-23 on g++-14.2.0, znver2. It is no longer a CI leg, and the
-  README's floor for gcc moved to 15 because of it.
+* **g++-14.2.0 miscompiled this tree at `-O3 -flto -march=native`, and the
+  symptom is a wrong number rather than a crash.** Measured 2026-08-23 on
+  g++-14.2.0, znver2; the README's floor for gcc is 14.3 because of it.
+  **g++-14.3.0 does not reproduce it** (2026-11-06): all three suites pass at the
+  release flags, and with the inert member below in place the reproduction test
+  and three full unit-suite runs are clean. Whether 14.3 fixed it or the rebuilt
+  test misses it is not known, which is why two CI legs carry gcc 14 again --
+  the ubuntu-24.04 image's, which is 14.3.0 there too, and RHEL 10's system
+  compiler, on `almalinux:10`. Nothing in CI builds 14.2.0. RHEL 10 keeps
+  gcc 14 for the life of the release, so this is a platform question rather than
+  a curiosity.
 
   The trigger is **any change to `SystemSolver`'s member layout**. Adding one
   inert member — a `bool` and an unused `std::vector<double>`, referenced by no
@@ -2213,11 +2220,12 @@ formula, not the operator, if the data cannot tell them apart.
   with a relative drift of about 1.24: an O(1) error, not a tolerance one.
   Nothing else in the suite ever failed.
 
-  **Reproducing it needs a test of that shape**, and the tree currently has none
-  wired for it; `SolveJacTests.cpp` differences the residual the same way and is
-  where to build one. The two ingredients are a dense finite-difference of
-  `residual()` inlined into a test TU and a change to `SystemSolver`'s member
-  layout. The defect was never diagnosed, only bounded, so treat it as live.
+  **The test of that shape is `an_aux_jacobian_matches_a_finite_difference_of_its_residual`**
+  (`SolveJacTests.cpp`): the same `AuxDiffusion` case, a dense finite difference
+  of `residual()` inlined into the test TU, checked as `J dy = g` at k = 1-3,
+  plain and superconvergent. With an inert member added to `SystemSolver` it is
+  the reproduction. The defect was never diagnosed, only bounded, so treat it as
+  live on 14.2.
 
   What breaks is the **finite-difference reference**, not the assembly. `|J|` of
   the assembled Jacobian is bit-identical every run (7.9144520420784605 at
@@ -2258,21 +2266,24 @@ formula, not the operator, if the data cannot tell them apart.
   wrong and nothing here has checked the solver's numbers against anything but
   themselves.
 
-  **g++-14 has been dropped from CI entirely** — both build legs and the coverage
-  job, which moved to g++-15 even though at `-O0 --coverage` it was never exposed.
-  The Eigen 5.0.1 leg moved with them and became two, on g++-15 and clang++-19.
-  Count the cost honestly: g++-14 is what Ubuntu noble's archive ships, so the
-  gcc most people have by default is now the one this project tests least. The
-  release build warns when it sees it; `TODO` has the full reproduction.
+  **g++-14 was dropped from CI for this and is back on two legs**, `Build + tests
+  (g++-14)` (the runner image's, 14.3.0) and `Build + tests (almalinux:10, gcc 14)`. The
+  coverage job stays on g++-15, and the Eigen 5.0.1 legs on g++-15 and
+  clang++-19. A failure on either gcc 14 leg in a test that differences the
+  residual, by the drift above, is this defect rather than the change under
+  review. Both pass every suite (2026-11-07): the runner's g++ 14.3.0 and
+  AlmaLinux 10's gcc 14.3.1, Red Hat's build of the compiler RHEL 10 keeps for
+  the life of the release. The release build warns below 14.3; `TODO` has the
+  full reproduction.
 
 * **gcc and clang do not diagnose the same things, so build with clang
-  occasionally** — that is what CI's clang matrix legs are for. (CI is eight
-  `build-and-test` legs: g++-15/16 and clang++-19/20/21 against the distro's
+  occasionally** — that is what CI's clang matrix legs are for. (CI is nine
+  `build-and-test` legs: g++-14/15/16 and clang++-19/20/21 against the distro's
   Eigen 3.4.0, plus g++-15 and clang++-19 against Eigen 5.0.1, plus g++-15 with
-  `MANTA_OPENMP=ON`; then two Fedora container legs, with and without OpenMP,
-  which keep the build's notions of a system prefix — `/usr/lib64`,
-  pkg-config-discovered netCDF — from quietly becoming Ubuntu-specific. Those two
-  built and stopped until 2026-08-26 and now run the suites as well.) gcc never
+  `MANTA_OPENMP=ON`; then three container legs, Fedora with and without OpenMP
+  and AlmaLinux 10 on its system gcc 14, which keep the build's notions of a
+  system prefix — `/usr/lib64`, pkg-config-discovered netCDF, EPEL — from
+  quietly becoming Ubuntu-specific.) gcc never
   diagnoses a polymorphic base with a non-virtual destructor; clang does
   (`-Wdelete-non-abstract-non-virtual-dtor`), and it reports it at the point of
   *destruction* inside libstdc++, once per instantiating translation unit, which

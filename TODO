@@ -158,7 +158,7 @@ numbers are worth not re-deriving.
   which is why the permutation is local to the solve -- but a solution vector that
   interleaved lambda the same way would remove the gather and scatter entirely.
 
-g++-14 miscompiles this tree at -O3 -flto -march=native. Root cause not found.
+g++-14.2.0 miscompiled this tree at -O3 -flto -march=native. Root cause not found.
 Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
 
   To reproduce, on g++-14 (14.2.0 here) on an AVX2 host:
@@ -174,22 +174,19 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
     3. Run the one test in a loop:
 
            for i in $(seq 1 12); do
-             Tests/UnitTests/UnitTests --run_test=algebraic_derivative_tests/\
-               the_assembled_jacobian_matches_a_finite_difference_of_the_residual
+             Tests/UnitTests/UnitTests --run_test=solve_jac_tests/\
+               an_aux_jacobian_matches_a_finite_difference_of_its_residual
            done
 
-    Without the member: 12/12 pass. With it: 8/12 fail, always the same way --
-    the AuxDiffusion cases, plain and superconvergent, at k = 1, 2 and 3, drift
-    ~1.24.
+    That test is the original's AuxDiffusion case rebuilt on SolveJacTests'
+    J dy = g check -- the original, algebraic_derivative_tests, went with the
+    dG/dt gate. With 14.2.0 the original failed 8/12 with the member in place.
 
-    NOTE: `algebraic_derivative_tests` no longer exists -- it went with the dG/dt
-    gate, the only thing that read the algebraic time derivatives -- so step 3
-    cannot be run as written. The miscompilation was never diagnosed, only
-    bounded, so this needs a fresh reproduction rather than deletion. What
-    mattered was a dense finite-difference of residual() inlined into a test
-    translation unit plus a change to SystemSolver's member layout;
-    SolveJacTests.cpp differences the residual the same way and is where to
-    start.
+    On g++-14.3.0 (2026-11-06) it does not reproduce: 12/12 pass with the
+    member, and so do three full unit-suite runs and all three suites without
+    it, and so does CI's g++-14 leg, which the ubuntu-24.04 image now ships at
+    14.3.0 too. Either 14.3 fixed it or the rebuilt test misses it. Nothing in
+    CI builds 14.2.0 any more; the almalinux:10 leg is RHEL 10's own gcc 14.
 
   The signature, which is how to recognise it if it turns up elsewhere: the
   differenced Jacobian loses the column of the first interior trace DOF
@@ -236,9 +233,8 @@ Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
     scalar.
 
   Until then the build warns when it sees g++-14 (cmake/MantaCompilerFlags.cmake),
-  and CI's two
-  g++-14 legs should be treated as capable of failing for reasons unrelated to
-  the change under review.
+  and CI's two gcc 14 legs should be treated as capable of failing for reasons
+  unrelated to the change under review.
 
 Left over from the TransportSystem interface work. Everything else in that plan
 landed; these are the pieces that were deliberately not done, with the reason.

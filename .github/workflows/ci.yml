@@ -92,16 +92,18 @@ jobs:
           #                 the project to clang-18 -Werror compliance, and P2448R2
           #                 was only the first C++23 gap. It is verified, not
           #                 guarded -- expect it to rot.
-          # g++-14 is deliberately absent. It miscompiles this tree at the release
-          # flags -- -O3 -flto -march=native, all three required -- and the symptom
-          # is a wrong number rather than a diagnostic: adding any member to
-          # SystemSolver makes the AuxDiffusion cases of
-          # the_assembled_jacobian_matches_a_finite_difference_of_the_residual fail
-          # about half their runs. See CLAUDE.md and TODO. A leg that fails half the
-          # time for reasons unrelated to the change under review is worse than no
-          # leg, so it is gone rather than marked flaky, and noble's archive
-          # compiler is therefore *not* covered here. That is a real gap: the
-          # nearest thing to it is the Fedora container job, which only compiles.
+          # g++-14 is the ubuntu-24.04 image's (14.3.0 there now) and RHEL 10's
+          # system compiler for the life of that release, so it is worth knowing
+          # whether this tree is safe to build with it. 14.2.0 miscompiled it at
+          # -O3 -flto -march=native once SystemSolver's member layout changed: the
+          # finite-difference reference in a test translation unit lost a column,
+          # on the AuxDiffusion case that SolveJacTests'
+          # an_aux_jacobian_matches_a_finite_difference_of_its_residual carries.
+          # 14.3.0 passes every suite, padded member included. This leg, and the
+          # almalinux:10 one below, are how a recurrence would be seen. See
+          # CLAUDE.md and TODO.
+          - cxx: g++-14
+            pkg: g++-14
           #
           # Not in the noble archive (which stops at g++-14), so these two legs need
           # the toolchain PPA -- g++-15 there is 15.2.0-14ubuntu1~24~ppa1 and
@@ -444,6 +446,13 @@ jobs:
             openmp: 'ON'
             omp_threads: 4
             label: 'fedora:latest, OpenMP'
+          # RHEL 10's system compiler, which stays gcc 14 for the life of the
+          # release: the toolchain this tree's g++-14 warning is about, and the
+          # one the ubuntu matrix stopped testing when it dropped g++-14. Its
+          # Eigen and netCDF come from EPEL, and its BLAS from CRB.
+          - image: almalinux:10
+            el: true
+            label: 'almalinux:10, gcc 14'
     container: ${{ matrix.image }}
     # As on the ubuntu OpenMP leg: -fopenmp loads libgomp, and that alone is enough
     # for a dispatching BLAS to start threading itself and change reduction order.
@@ -469,6 +478,10 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          if [ "${{ matrix.el || false }}" = true ]; then
+            dnf -y install --setopt=install_weak_deps=False dnf-plugins-core epel-release
+            dnf config-manager --set-enabled crb
+          fi
           dnf -y install --setopt=install_weak_deps=False \
             gcc-c++ cmake wget tar gzip \
             boost-devel \
