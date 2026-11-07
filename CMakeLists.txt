@@ -190,12 +190,16 @@ endif()
 # linking libmanta is precisely the mistake that gives a plugin its own copy of
 # the registry. The rule is easier to state when there is no target to link.
 
-# Installed binaries keep the paths to the libraries they were linked against
-# outside the build tree -- SUNDIALS under a prefix of its own, typically. CMake
-# otherwise drops the whole build RPATH on install, and the installed solver
-# cannot find libsundials_ida at startup. System directories are never added.
-# The extension gets the same in python/CMakeLists.txt.
-set_target_properties(MaNTA manta PROPERTIES INSTALL_RPATH_USE_LINK_PATH ON)
+# Installed binaries keep the paths to the libraries they were linked against --
+# SUNDIALS under a prefix of its own, typically. CMake otherwise drops the whole
+# build RPATH on install, and the installed solver cannot find libsundials_ida at
+# startup. USE_LINK_PATH covers libraries outside the project; SUNDIALS is named
+# explicitly (MANTA_DEPENDENCY_RPATH, cmake/MantaDependencies.cmake) because
+# ./build_sundials puts it inside. System directories are never added. The
+# extension gets the same in python/CMakeLists.txt.
+set_target_properties(MaNTA manta PROPERTIES
+  INSTALL_RPATH_USE_LINK_PATH ON
+  INSTALL_RPATH "${MANTA_DEPENDENCY_RPATH}")
 
 install(TARGETS MaNTA RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT runtime)
 

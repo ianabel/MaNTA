@@ -1846,7 +1846,12 @@ headers include: the vendored toml11, installed under `include/manta/extern`, an
 SUNDIALS, Eigen, Boost and netCDF wherever this configure found them (`manta_deps`'s
 usage requirements, evaluated at generate time), less the compiler's own search
 directories -- without them the documented plugin build did not compile anywhere
-SUNDIALS was not in a system directory. There is deliberately **no installed CMake package**: an
+SUNDIALS was not in a system directory. The installed binaries likewise carry an
+RPATH to SUNDIALS's library directory, named from the linked targets rather than
+left to `INSTALL_RPATH_USE_LINK_PATH`, which skips anything inside the project --
+and `./build_sundials` installs into `./sundials/install`, so the documented setup
+installed a solver that could not find `libsundials_ida` at startup. There is
+deliberately **no installed CMake package**: an
 exported target would invite `target_link_libraries(mycase manta)`, and linking
 `libmanta` is exactly the mistake below. A physics case built as a shared object and named
 in the config's `PhysicsPlugins` array is dlopened by `runManta` before
