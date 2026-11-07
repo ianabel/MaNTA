@@ -323,26 +323,23 @@ const std::vector<Entry> &table()
          "manifold. A cold time-marching run always runs it and this cannot turn that off."},
         {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
          "Name of the registered physics case to run."},
-        // ProblemSelection, beside TransportSystem and for the same reason: it
-        // names a registered class that runManta instantiates with the parsed
-        // config and the grid. A dict has no equivalent -- a Runner is handed
-        // objects, not names -- so it is an *error* there rather than being
-        // accepted and ignored.
-        {"FieldModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
+        // FieldSelection: a registered model's name, instantiated by whichever
+        // surface reads it -- runManta from the config file, PyRunner from the
+        // dict, whose nested tables become the model's own -- through
+        // geometrySourceFromConfig, so both resolve FieldCoupling alike.
+        {"FieldModel", {}, Type::String, Category::FieldSelection, false, false, std::string{},
          "Name of a registered magnetic-field model to couple to; absent means no coupling."},
-        // ProblemSelection for the same reason as FieldModel, and exclusive with
-        // it: a run has one source of geometry.
-        {"EquilibriumModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
-         "Name of a registered native equilibrium model to take the geometry from, in place of a "
-         "FieldModel; FieldCoupling chooses consistent or reduced for it (see "
+        // Exclusive with FieldModel: a run has one source of geometry.
+        {"EquilibriumModel", {}, Type::String, Category::FieldSelection, false, false, std::string{},
+         "Name of a registered equilibrium model -- C++, or Python through "
+         "manta.registerEquilibriumModel -- to take the geometry from, in place of a FieldModel; FieldCoupling chooses consistent or reduced for it (see "
          "docs/field_coupling.rst)."},
-        // How runManta attaches the FieldModel, so a ProblemSelection key for the
-        // same reason: a dict has no FieldModel for it to apply to.
-        {"FieldCoupling", {}, Type::String, Category::ProblemSelection, false, false,
+        // How the geometry source is attached, resolved with it.
+        {"FieldCoupling", {}, Type::String, Category::FieldSelection, false, false,
          std::string{"auto"},
          "How the FieldModel is coupled: coupled (its unknowns join the DAE and its "
          "derivatives the Jacobian), reduced (solved to convergence at each transport state, "
-         "with its response in the Jacobian but no unknowns and no adjoint), consistent "
+         "with its response in the Jacobian and no unknowns), consistent "
          "(solved to convergence at each transport state, as a black box, with no Jacobian "
          "coupling and no adjoint), or auto (the "
          "default: coupled where the transport system supplies geometry derivatives, except "

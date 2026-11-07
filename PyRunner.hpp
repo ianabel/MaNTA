@@ -10,6 +10,7 @@
 #include <string_view>
 #include <variant>
 
+#include "GeometrySource.hpp"
 #include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
 
@@ -162,6 +163,13 @@ public:
   Vector getPostprocessedSolution(Index var,
                                   std::optional<std::vector<Position>> const &points);
 
+  // Take the geometry from this equilibrium model at the next configure(), in
+  // place of one the dict names (EquilibriumModel / FieldModel, which are then
+  // refused beside it). FieldCoupling resolves for it exactly as for a named
+  // model. None clears it.
+  void setEquilibriumModel(std::shared_ptr<EquilibriumModel> model) { equilibriumObject = std::move(model); }
+  std::shared_ptr<EquilibriumModel> getEquilibriumModel() const { return equilibriumObject; }
+
   // The registered name of the C++ case this Runner drives, or empty when it
   // was handed a transport system object. Exposed because a driver that was
   // given a Runner has otherwise no way to ask which of the two it is.
@@ -248,6 +256,15 @@ private:
 
   // The physics table a named case was built from, kept for rebuilding it.
   toml::value physicsTable;
+
+  // The run's geometry source -- a field or equilibrium model the dict named,
+  // or the one set_equilibrium_model handed over -- resolved against
+  // FieldCoupling by the function runManta uses, and attached to every solver
+  // configure() builds. Rebuilt on every configure(), like the case.
+  GeometrySource geometry;
+  // A model object handed over from Python rather than named; kept across
+  // configure() calls, as a case object is.
+  std::shared_ptr<EquilibriumModel> equilibriumObject;
 
   // Build the case `caseName` names, from the config dict, against `grid`.
   // Only called when caseName is non-empty, and only from configure(), which
