@@ -532,6 +532,16 @@ Diagnosed one config key at a time on the meshes that failed, at `9+1`, `k = 5`:
   they contain. Either way there is a floor near 1e-7 in the quantity anyone would
   quote, and it arrives just as the solver does.
 
+**Re-measured 2026-11-07, and the "nothing got through" half no longer holds.**
+The `TimeMarch` ladder reproduces to four figures, `sigma = 0.25` included, but
+`MinStepSize = 1e-12` no longer rescues it (220 s, then the same corrector
+failure, before and after the cold-start `y'` fix alike). Meanwhile `Newton` and
+`PseudoTransient`, with `SteadyStateTest = "Residual"`, solve every rung down to
+`h0 = 2.6e-15` and all 112 gradings of a wider sweep, of which `TimeMarch`
+fails 61. The error bottoms at 1.385e-07 at `sigma = 0.25` and rises below it, so
+the law's wall is real and the solver's is `TimeMarch`'s alone.
+`docs/adaptivity.rst` has the current numbers.
+
 So the reachable gain from redistribution on this problem is a little over four
 orders of magnitude at fixed DOF, and both walls sit at about the same place. **A
 loop should therefore treat a failed grading as a rejected step and back off**,

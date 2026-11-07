@@ -278,13 +278,15 @@ struct AdaptiveMeshResult
 // ObjectiveTolerance. The regrades themselves, the retries and the fallbacks are
 // the same.
 //
-// **A grading that fails to solve is a rejected step, not an error.** Section 9
-// measured 15 of 52 hand-built gradings failing outright, non-monotonically in
-// everything -- IDA's corrector giving up at |h| = MinStepSize, and below about
-// h0/span = 1e-7 nothing getting through at all. So a failed attempt softens the
-// ratio towards 1 and retries, and after `MeshAdaptationAttempts` tries it falls
-// back to the uniform mesh and says so. A driver without that would die on a
-// third of the problems it is pointed at.
+// **A grading that fails to solve is a rejected step, not an error.** Time
+// marching failed 61 of 112 hand-built gradings of Shestakov's problem,
+// non-monotonically in everything -- IDA's corrector giving up at
+// |h| = MinStepSize, and below about h0/span = 3e-8 IDACalcIC as well -- where
+// Newton and PseudoTransient solved all of them (docs/adaptivity.rst). So a
+// failed attempt softens the ratio towards 1 and retries, and after
+// `MeshAdaptationAttempts` tries it falls back to the uniform mesh and says so.
+// A driver without that would die on half the problems it is pointed at under
+// TimeMarch.
 //
 // The case must have been built against `start`. Each graded mesh, and the
 // degree loop's levels, are new evaluation plans, so the case follows its
