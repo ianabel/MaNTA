@@ -515,6 +515,12 @@ PYBIND11_MODULE(_manta, m) {
       .def("dAuxG_dt", &TransportSystem::dAuxG_dt)
       .def("dLowerBoundary_dt", &TransportSystem::dLowerBoundary_dt)
       .def("dUpperBoundary_dt", &TransportSystem::dUpperBoundary_dt)
+      // The batched derivative hooks fill a GlobalState out-parameter that
+      // crosses as a dict copy, so a Python caller never sees what they write.
+      // They stay bound as *drivers*: calling one runs the C++ loop over the
+      // pointwise hook, which is how test_jax_aux.py reaches AuxGPrime per
+      // point. A case overrides them under these names (batched_hook_names in
+      // PyTransportSystem.hpp).
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -582,14 +588,18 @@ PYBIND11_MODULE(_manta, m) {
       .def("dgFndp", &AdjointProblem::dgFndp)
       .def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
       .def("dg", &AdjointProblem::dg)
-      // Not exposed, for the same reason as ScalarGPrime: its output parameter
-      // is an array of GlobalStateMatrix references, which has no Python type,
-      // so the bound base method was never callable from Python. A vectorised
-      // subclass *overrides* it and the trampoline reaches the override
-      // directly; binding it only put an unresolvable name in the stub.
-      .def("dSigma", &AdjointProblem::dSigma)
-      .def("dSources", &AdjointProblem::dSources)
-      .def("dAux", &AdjointProblem::dAux)
+      // Not exposed: ComputePhysicsDerivatives, dSigma, dSources and dAux. The
+      // first takes an array of GlobalStateMatrix references, which has no
+      // Python type, as ScalarGPrime does. The other three take a GlobalState
+      // out-parameter, which crosses as a dict *copy*: the bound base wrote into
+      // it and the caller never saw a value. All four are reached the other
+      // way, from C++ into a subclass's override through the trampoline, and
+      // that needs no binding. Binding the last three also made
+      // `adjoint.dAux(i, states, x)` look like the solver's entry point when
+      // it is not -- on a JAXAdjointProblem it is the decorated method, which
+      // expects a converted State, and the trampoline hands an override the raw
+      // dict; the solver reaches neither through it, only through
+      // ComputePhysicsDerivatives.
       .def("dAux_dp", &AdjointProblem::dAux_dp)
       .def("dScalarG_dp", &AdjointProblem::dScalarG_dp)
       .def("computeUpperBoundarySensitivity",

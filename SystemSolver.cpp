@@ -96,7 +96,36 @@ SystemSolver::~SystemSolver()
     delete[] dydtJacMem;
     freeScalarWorkVectors();
     freeFieldWorkVectors();
+    freeCouplingWorkVectors();
     SUNContext_Free(&ctx);
+}
+
+N_Vector SystemSolver::workVector(N_Vector &slot, N_Vector like)
+{
+    if (slot != nullptr && N_VGetLength(slot) != N_VGetLength(like))
+    {
+        N_VDestroy(slot);
+        slot = nullptr;
+    }
+    if (slot == nullptr)
+        slot = N_VClone(like);
+    return slot;
+}
+
+void SystemSolver::freeCouplingWorkVectors()
+{
+    CouplingWork &c = couplingWork;
+    for (N_Vector *slot : {&c.exactCol, &c.exactAinvR1, &c.sweepWork, &c.sweepEwt, &c.sweepPrev, &c.sweepChange,
+                           &c.krylovEwt, &c.krylovWork, &c.krylovZ, &c.genericWork, &c.genericZ})
+    {
+        if (*slot != nullptr)
+            N_VDestroy(*slot);
+        *slot = nullptr;
+    }
+    for (N_Vector v : c.exactAinvA1)
+        if (v != nullptr)
+            N_VDestroy(v);
+    c.exactAinvA1.clear();
 }
 
 // a2 belongs to the *solver*, not to a run: it is sized by nField, which
@@ -241,6 +270,7 @@ void SystemSolver::setFieldModel(std::shared_ptr<FieldModel> model)
 
     // Before nField moves: the count of vectors to destroy is the old one.
     freeFieldWorkVectors();
+    freeCouplingWorkVectors(); // sized by nField and getDoF(), both about to change
 
     fieldModel = std::move(model);
     nField = fieldModel ? fieldModel->nFieldDOF() : 0;
@@ -2986,13 +3016,14 @@ void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
     // A^-1 A1, one transport solve per field DOF, kept because the
     // back-substitution needs the same vectors the Schur complement was built
     // from.
-    N_Vector col = N_VClone(delY);
+    N_Vector col = workVector(couplingWork.exactCol, delY);
     Matrix S = Matrix::Zero(nField, nField);
-    std::vector<N_Vector> AinvA1(nField);
+    std::vector<N_Vector> &AinvA1 = couplingWork.exactAinvA1;
+    AinvA1.resize(nField, nullptr);
 
     for (Index m = 0; m < nField; ++m)
     {
-        AinvA1[m] = N_VClone(delY);
+        workVector(AinvA1[m], delY);
         scatterA1Column(m, col);
         solveTransportJac(col, AinvA1[m]);
         for (Index f = 0; f < nField; ++f)
@@ -3011,7 +3042,7 @@ void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
     }
     const Matrix Schur = Bdense - S;
 
-    N_Vector Ainv_r1 = N_VClone(delY);
+    N_Vector Ainv_r1 = workVector(couplingWork.exactAinvR1, delY);
     solveTransportJac(res_g, Ainv_r1);
 
     Vector r2 = rhs.getField();
@@ -3031,11 +3062,6 @@ void SystemSolver::solveCoupledJacExact(N_Vector res_g, N_Vector delY)
     for (Index m = 0; m < nField; ++m)
         N_VLinearSum(1.0, delY, -dpsi(m), AinvA1[m], delY);
     out.getField() = dpsi;
-
-    for (Index m = 0; m < nField; ++m)
-        N_VDestroy(AinvA1[m]);
-    N_VDestroy(col);
-    N_VDestroy(Ainv_r1);
 }
 
 // See the declaration for the algebra and for why this rather than SOR.
@@ -3099,7 +3125,7 @@ Vector SystemSolver::ironsTuck(const Vector &g, const Vector &delta, const Vecto
 // tail escalates to the exact solve.
 bool SystemSolver::couplingSweep(N_Vector res_g, N_Vector delY, CouplingOperator const &op)
 {
-    N_Vector work = N_VClone(delY);
+    N_Vector work = workVector(couplingWork.sweepWork, delY);
     Vector dpsi = Vector::Zero(op.n);
     Vector delta = Vector::Zero(op.n), deltaPrev = Vector::Zero(op.n);
     bool haveDeltaPrev = false, converged = false;
@@ -3107,7 +3133,8 @@ bool SystemSolver::couplingSweep(N_Vector res_g, N_Vector delY, CouplingOperator
     // weights IDA's error and Newton tests use (it takes them from
     // getErrorWeights), and those NewtonStep's tests use. See the acceptance
     // test below for why the sweep has to be measured in them.
-    N_Vector ewt = N_VClone(delY), prevDelY = N_VClone(delY), change = N_VClone(delY);
+    N_Vector ewt = workVector(couplingWork.sweepEwt, delY), prevDelY = workVector(couplingWork.sweepPrev, delY),
+             change = workVector(couplingWork.sweepChange, delY);
     jacobianErrorWeights(ewt);
     N_VConst(0.0, prevDelY);
 
@@ -3199,10 +3226,6 @@ bool SystemSolver::couplingSweep(N_Vector res_g, N_Vector delY, CouplingOperator
         haveDeltaPrev = true;
     }
 
-    N_VDestroy(ewt);
-    N_VDestroy(prevDelY);
-    N_VDestroy(change);
-
     if (converged)
     {
         // At tier 1 the transport increment is the *whole* Newton update -- the
@@ -3220,7 +3243,6 @@ bool SystemSolver::couplingSweep(N_Vector res_g, N_Vector delY, CouplingOperator
         }
         op.writeField(dpsi, delY);
     }
-    N_VDestroy(work);
     return converged;
 }
 
@@ -3363,7 +3385,8 @@ bool SystemSolver::couplingKrylov(N_Vector res_g, N_Vector delY, CouplingOperato
     constexpr double relativeFloor = 1e-6;
     ++krylovSolves;
 
-    N_Vector ewt = N_VClone(delY), work = N_VClone(delY), z = N_VClone(delY);
+    N_Vector ewt = workVector(couplingWork.krylovEwt, delY), work = workVector(couplingWork.krylovWork, delY),
+             z = workVector(couplingWork.krylovZ, delY);
     jacobianErrorWeights(ewt);
     const Vector w = op.weights(ewt);
 
@@ -3439,9 +3462,6 @@ bool SystemSolver::couplingKrylov(N_Vector res_g, N_Vector delY, CouplingOperato
             op.writeField(op.affine(delY), delY);
         converged = true;
     }
-    N_VDestroy(ewt);
-    N_VDestroy(work);
-    N_VDestroy(z);
 
     if (data.error)
         std::rethrow_exception(data.error);
@@ -3452,7 +3472,7 @@ bool SystemSolver::couplingKrylov(N_Vector res_g, N_Vector delY, CouplingOperato
 // z = A^-1 (-C e_j); the right-hand side is c0 + L A^-1 r.
 void SystemSolver::couplingExact(N_Vector res_g, N_Vector delY, CouplingOperator const &op)
 {
-    N_Vector work = N_VClone(delY), z = N_VClone(delY);
+    N_Vector work = workVector(couplingWork.genericWork, delY), z = workVector(couplingWork.genericZ, delY);
 
     Matrix system = Matrix::Identity(op.n, op.n);
     for (Index j = 0; j < op.n; ++j)
@@ -3472,9 +3492,6 @@ void SystemSolver::couplingExact(N_Vector res_g, N_Vector delY, CouplingOperator
     op.subtractRows(c, work);
     solveTransportJac(work, delY);
     op.writeField(c, delY);
-
-    N_VDestroy(work);
-    N_VDestroy(z);
 }
 
 // Tier 2 under FieldSolve = krylov: GMRES over dx with psi eliminated, and the
