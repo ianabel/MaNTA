@@ -15,6 +15,7 @@
 
 #include "PhysicsCases.hpp"
 #include "PhysicsInstance.hpp"
+#include "DegreeAdaptation.hpp"
 
 namespace py = pybind11;
 
@@ -231,6 +232,28 @@ private:
   // Shared by start_steady and continue_steady, so the two cannot differ on the
   // outcome policy or on refreshing yJac.
   SystemSolver::SteadyOutcome runSlice(bool resume, bool estimate);
+
+  // A sliced solve under DegreeAdaptation: runAdaptiveDegree's loop, a level at
+  // a time (DegreeAdaptationLoop). A slice that converges a level finishes the
+  // run on it -- output, restart file, adjoint -- exactly as runSolver would,
+  // closes the level, and either ends the solve or builds and initialises the
+  // next degree and returns Refined. Both live from start_steady() until the
+  // solve is finished or abandoned; the PhysicsInstance holds the case slots
+  // the loop rebuilds into, and has to outlive it.
+  std::unique_ptr<PhysicsInstance> slicePhysics;
+  std::unique_ptr<DegreeAdaptationLoop> sliceAdaptation;
+  // The adaptive solve's last level has already been finished, so
+  // finish_steady() has nothing left to write.
+  bool sliceRunFinished = false;
+  // What the last slice returned, which under adaptation can be Refined -- a
+  // value no solver records, since the one that reached it has been replaced.
+  SystemSolver::SteadyOutcome lastSliceOutcome = SystemSolver::SteadyOutcome::NotRun;
+  SystemSolver::SteadyOutcome adaptiveSlice(bool resume, bool estimate);
+  // The stats of the level a Refined slice closed, and its pseudo-time step,
+  // for steadyStats() to report until the next slice.
+  std::optional<std::pair<SystemSolver::SteadyStats, double>> closedLevelStats;
+  // Drop the adaptive loop, clearing the restart state it set. Safe when none.
+  void abandonAdaptation(void);
 
   // Tear down a slice loop that will not be finished: write nothing, free
   // everything. Safe when no loop is live.

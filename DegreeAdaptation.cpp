@@ -200,14 +200,49 @@ SolverConfig carriedStepConfig(SolverConfig const &config, SystemSolver const &p
     return carried;
 }
 
-std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
-                                                PhysicsInstance &physics,
-                                                Grid const &grid,
-                                                unsigned int k0,
-                                                double tFinal,
-                                                std::unique_ptr<SystemSolver> solvedFirstLevel)
+struct DegreeAdaptationLoop::State
 {
-    AdjointProblem const *adjoint = physics.adjoint();
+    SolverConfig const &config;
+    PhysicsInstance &physics;
+    Grid const &grid;
+    AdjointProblem const *adjoint;
+    Index nVars;
+    double eps;
+    bool toObjective;
+    unsigned int kMax;
+    bool batchBound;
+
+    unsigned int k;
+    int level = 0;
+
+    // What the whole adaptive run cost, as against what one level did. This is
+    // the only construct in the tree where a run contains more than one steady
+    // solve, so it is the only place where "the run's total" and
+    // SystemSolver::lastSteadyStats() are different numbers -- and it is the
+    // total the benchmarks quote, since the point of adapting the degree is that
+    // the coarse levels are cheap enough to be worth paying for. A solver is
+    // destroyed at the end of each level, so it has to be read before then.
+    SystemSolver::SteadyStats runTotal;
+    int levels = 0;
+
+    // Each level after the first starts from the previous one's state (below), and
+    // from its final pseudo-transient step: see carriedStepConfig. Reset to
+    // `config` itself if a level fails that way and is retried.
+    SolverConfig levelConfig;
+
+    bool finished = false;
+
+    State(SolverConfig const &c, PhysicsInstance &p, Grid const &g, unsigned int k0)
+        : config(c), physics(p), grid(g), adjoint(p.adjoint()), k(k0), levelConfig(c)
+    {
+    }
+};
+
+DegreeAdaptationLoop::DegreeAdaptationLoop(SolverConfig const &config, PhysicsInstance &physics,
+                                           Grid const &grid, unsigned int k0)
+    : s(std::make_unique<State>(config, physics, grid, k0))
+{
+    AdjointProblem const *adjoint = s->adjoint;
 
     // Only Python can arm spatial adjoint parameters, so this cannot be caught
     // in loadSolverConfig with the rest. The objection is the one that already
@@ -221,13 +256,13 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
             "the parameter vector is indexed by node, so changing the "
             "polynomial degree changes how many parameters there are.");
 
-    const Index nVars = physics.problem().getNumVars();
-    const double eps = config.DegreeTolerance;
+    s->nVars = physics.problem().getNumVars();
+    s->eps = config.DegreeTolerance;
 
     // The objectives are the adjoint problem's, so the target needs one -- and
     // tolerances that name each of its objectives once, or all of them together.
-    const bool toObjective = config.AdaptationTarget == "Objective";
-    if (toObjective)
+    s->toObjective = config.AdaptationTarget == "Objective";
+    if (s->toObjective)
     {
         if (adjoint == nullptr)
             throw std::invalid_argument(
@@ -256,8 +291,8 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
     unsigned int kMax = config.MaxPolynomialDegree;
     if (config.MaxPhysicsBatch > 0)
     {
-        const auto planner = physics.plannerFor(grid, k0, [&](SystemSolver &s)
-                                                { applySolverConfig(config, s); });
+        const auto planner = physics.plannerFor(grid, k0, [&](SystemSolver &sys)
+                                                { applySolverConfig(config, sys); });
         kMax = degreeCeiling([&](Grid const &g, unsigned int kk)
                              { return planner->evaluationPlanFor(g, kk); },
                              grid, k0, config.MaxPolynomialDegree, config.MaxPhysicsBatch);
@@ -268,12 +303,13 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         // level whose estimate breaks the cap -- and it is the larger, at two
         // degrees beyond the residual's nodes. So the ceiling comes down to the
         // last degree whose estimate fits as well.
-        if (toObjective)
+        if (s->toObjective)
             while (kMax > k0 && !discretisationEstimateFits(planner->evaluationPlanFor(grid, kMax),
                                                             config.MaxPhysicsBatch))
                 --kMax;
     }
-    const bool batchBound = kMax < config.MaxPolynomialDegree;
+    s->kMax = kMax;
+    s->batchBound = kMax < config.MaxPolynomialDegree;
 
     // Before the first solve, not when the first level wants raising: a level
     // after the first is a new plan, and a case that can follow none should be
@@ -282,234 +318,218 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
         physics.requireAdaptable("DegreeAdaptation");
 
     const std::string ceilingNote =
-        batchBound ? std::format(" (MaxPhysicsBatch = {})", config.MaxPhysicsBatch) : std::string{};
-    if (toObjective)
+        s->batchBound ? std::format(" (MaxPhysicsBatch = {})", config.MaxPhysicsBatch) : std::string{};
+    if (s->toObjective)
         std::println("Degree adaptation: starting at k = {}, ceiling {}{}, to the objectives' "
                      "discretisation share {:g} of ObjectiveTolerance, base {:g}",
                      k0, kMax, ceilingNote, config.ObjectiveBudget[0], config.DegreeAdaptationBase);
     else
         std::println("Degree adaptation: starting at k = {}, ceiling {}{}, relative "
                      "tolerance {:g}, base {:g}",
-                     k0, kMax, ceilingNote, eps, config.DegreeAdaptationBase);
+                     k0, kMax, ceilingNote, s->eps, config.DegreeAdaptationBase);
+}
 
-    std::unique_ptr<SystemSolver> system;
-    unsigned int k = k0;
+DegreeAdaptationLoop::~DegreeAdaptationLoop() = default;
 
-    // What the whole adaptive run cost, as against what one level did. This is
-    // the only construct in the tree where a run contains more than one steady
-    // solve, so it is the only place where "the run's total" and
-    // SystemSolver::lastSteadyStats() are different numbers -- and it is the
-    // total the benchmarks quote, since the point of adapting the degree is that
-    // the coarse levels are cheap enough to be worth paying for. A solver is
-    // destroyed at the end of each level, so it has to be read before then.
-    SystemSolver::SteadyStats runTotal;
-    int levels = 0;
+unsigned int DegreeAdaptationLoop::degree() const { return s->k; }
+int DegreeAdaptationLoop::levels() const { return s->levels; }
 
-    // Each level after the first starts from the previous one's state (below), and
-    // from its final pseudo-transient step: see carriedStepConfig. Reset to
-    // `config` itself if a level fails that way and is retried.
-    SolverConfig levelConfig = config;
+void DegreeAdaptationLoop::openLevel(std::unique_ptr<SystemSolver> &system)
+{
+    // A new degree is a new plan: physics may hand back a solver around a
+    // rebuilt case, which takes over the restart state set below.
+    system = s->physics.solverFor(s->grid, s->k, [&](SystemSolver &sys)
+                                  { applySolverConfig(s->levelConfig, sys); });
 
-    if (solvedFirstLevel != nullptr && solvedFirstLevel->getOrder() != k0)
-        throw std::logic_error(
-            "runAdaptiveDegree was handed a solved first level at a degree other "
-            "than the one it was asked to start from.");
+    // Checked here, against the solver, because this is the point of truth
+    // and a proxy for it is what let a transient through: loadSolverConfig
+    // refuses SteadyStateSolver = "TimeMarch", but that key defaults to
+    // "PseudoTransient" and the mode is only consulted once termination is
+    // *armed*. A configuration that simply never set SteadyStateTolerance
+    // therefore passed validation and then time-marched every level.
+    //
+    // That is not a scope question, it is a wrong answer. Each level would
+    // take the previous one's state at t_final as its initial condition at
+    // t_initial and integrate the same interval again -- so the run has
+    // evolved twice. Measured on NonlinDiffTest at k = 4: u(0.9) came out
+    // 0.4048 against a plain fixed-degree run's 0.3767, 7.5% apart, where
+    // two runs at the same degree should agree to discretisation error.
+    if (s->level == 0 && !system->solvesForSteadyState())
+        throw std::invalid_argument(
+            "DegreeAdaptation needs a steady solve, but this configuration "
+            "time-marches: SteadyStateTolerance is absent, so steady-state "
+            "termination is never armed and SteadyStateSolver is not "
+            "consulted. Set SteadyStateTolerance, or call run_ss().");
+}
 
-    for (int level = 0;; ++level)
+bool DegreeAdaptationLoop::retry(std::unique_ptr<SystemSolver> &system, std::exception const &failure)
+{
+    // Only a level that was given a carried step has anything to fall
+    // back to. It keeps its warm state -- the restart values are still
+    // set -- and starts the ramp from the configured step instead.
+    if (s->level == 0 ||
+        s->levelConfig.PseudoTransientInitialStep == s->config.PseudoTransientInitialStep)
+        return false;
+    logmsg<LOG_LEVEL::WARNING>(
+        "Degree adaptation: k = {} failed from the carried pseudo-time step "
+        "({}); retrying it from the configured one.", s->k, failure.what());
+    std::println("  k = {} failed from the carried step; retrying from the "
+                 "configured one", s->k);
+    system.reset();
+    system = s->physics.solverFor(s->grid, s->k, [&](SystemSolver &sys)
+                                  { applySolverConfig(s->config, sys); });
+    return true;
+}
+
+bool DegreeAdaptationLoop::closeLevel(std::unique_ptr<SystemSolver> &system)
+{
+    SolverConfig const &config = s->config;
+    const unsigned int k = s->k;
+    const unsigned int kMax = s->kMax;
+
+    // Read now: `system` is reset below, and a level that breaks out leaves
+    // the last one alive but the earlier ones gone.
     {
-        if (level == 0 && solvedFirstLevel != nullptr)
-        {
-            // Already configured, checked for a steady solve, given the adjoint
-            // problem and run by whoever built it -- so straight to measuring it.
-            system = std::move(solvedFirstLevel);
-        }
-        else
-        {
-            // A new degree is a new plan: physics may hand back a solver around a
-            // rebuilt case, which takes over the restart state set below.
-            system = physics.solverFor(grid, k, [&](SystemSolver &s)
-                                       { applySolverConfig(levelConfig, s); });
-
-            // Checked here, against the solver, because this is the point of truth
-            // and a proxy for it is what let a transient through: loadSolverConfig
-            // refuses SteadyStateSolver = "TimeMarch", but that key defaults to
-            // "PseudoTransient" and the mode is only consulted once termination is
-            // *armed*. A configuration that simply never set SteadyStateTolerance
-            // therefore passed validation and then time-marched every level.
-            //
-            // That is not a scope question, it is a wrong answer. Each level would
-            // take the previous one's state at t_final as its initial condition at
-            // t_initial and integrate the same interval again -- so the run has
-            // evolved twice. Measured on NonlinDiffTest at k = 4: u(0.9) came out
-            // 0.4048 against a plain fixed-degree run's 0.3767, 7.5% apart, where
-            // two runs at the same degree should agree to discretisation error.
-            if (level == 0 && !system->solvesForSteadyState())
-                throw std::invalid_argument(
-                    "DegreeAdaptation needs a steady solve, but this configuration "
-                    "time-marches: SteadyStateTolerance is absent, so steady-state "
-                    "termination is never armed and SteadyStateSolver is not "
-                    "consulted. Set SteadyStateTolerance, or call run_ss().");
-
-            try
-            {
-                system->runSolver(tFinal);
-            }
-            catch (std::invalid_argument const &)
-            {
-                throw;
-            }
-            catch (std::exception const &e)
-            {
-                // Only a level that was given a carried step has anything to fall
-                // back to. It keeps its warm state -- the restart values are still
-                // set -- and starts the ramp from the configured step instead.
-                if (level == 0 || levelConfig.PseudoTransientInitialStep ==
-                                      config.PseudoTransientInitialStep)
-                    throw;
-                logmsg<LOG_LEVEL::WARNING>(
-                    "Degree adaptation: k = {} failed from the carried pseudo-time step "
-                    "({}); retrying it from the configured one.", k, e.what());
-                std::println("  k = {} failed from the carried step; retrying from the "
-                             "configured one", k);
-                system.reset();
-                system = physics.solverFor(grid, k, [&](SystemSolver &s)
-                                           { applySolverConfig(config, s); });
-                system->runSolver(tFinal);
-            }
-        }
-
-        // Read now: `system` is reset at the bottom of the loop, and a level
-        // that breaks out leaves the last one alive but the earlier ones gone.
-        {
-            const auto levelStats = system->lastSteadyStats();
-            runTotal.steps += levelStats.steps;
-            runTotal.rejected += levelStats.rejected;
-            runTotal.newtonIters += levelStats.newtonIters;
-            runTotal.kinFuncEvals += levelStats.kinFuncEvals;
-            runTotal.kinJacEvals += levelStats.kinJacEvals;
-            runTotal.residualEvals += levelStats.residualEvals;
-            runTotal.jacBuilds += levelStats.jacBuilds;
-            runTotal.jacSolves += levelStats.jacSolves;
-            ++levels;
-        }
-
-        // The control quantity E and the target it is held to. Under the
-        // solution target E is the relative L2 gap between u* and u_h and the
-        // target DegreeTolerance; under the objective target E is already a
-        // ratio to the tolerance, so the target is 1.
-        double E = 0.0, target = eps;
-        if (toObjective)
-        {
-            // Read off the estimate the level's steady solve made on its way
-            // out, so measuring a level costs nothing beyond what solving it did.
-            const ObjectiveAccuracy acc = objectiveAccuracy(*system);
-            for (Index g = 0; g < acc.eta.size(); ++g)
-                std::println("  k = {}: objective {}: discretisation error {:.3e} against "
-                             "{:.3e} ({:.3g}x), G ~ {:.10g}",
-                             k, g, acc.eta(g), acc.tolerance(g),
-                             std::abs(acc.eta(g)) / acc.tolerance(g), acc.G(g) - acc.eta(g));
-            E = acc.ratio;
-            target = 1.0;
-        }
-        else
-        {
-            // runSolver has already freed the SUNDIALS state; accuracyEstimate
-            // reads yJac, which owns its own memory, and the postprocessor, which
-            // is a member -- so both outlive it.
-            const LevelError err = measure(*system, config, grid, nVars);
-
-            // Both aggregates, every level. globalL2 drives the decision because
-            // it is the quantity the benchmarks quote, so the tolerance means the
-            // same thing as the numbers they report; worstCell is the binding
-            // constraint on a *single* global degree and is the one to watch if
-            // the loop stops while some corner of the domain is plainly
-            // unresolved.
-            std::println("  k = {}: relative L2 error {:.3e} (variable {}), "
-                         "absolute {:.3e}, worst cell {:.3e} at cell {}",
-                         k, err.relative, err.worstVar, err.globalL2, err.worstCell,
-                         err.worstCellIndex);
-            E = err.relative;
-        }
-
-        const unsigned int bump = degreeIncrement(E, target, config.DegreeAdaptationBase);
-
-        if (bump == 0)
-        {
-            std::println("  converged at k = {} after {} solve{}", k, level + 1,
-                         level == 0 ? "" : "s");
-            break;
-        }
-
-        if (k >= kMax)
-        {
-            // Deliberately not an exception. The answer at kMax is the best one
-            // available and the caller can still have it; what must not happen
-            // is that the run reports success at a tolerance it never reached.
-            logmsg<LOG_LEVEL::WARNING>(
-                "Degree adaptation stopped at the ceiling k = {} ({}) with {} of {:g} against "
-                "{:g}. The result is the best this degree can do, not a converged one.",
-                kMax,
-                batchBound ? std::format("the highest degree within MaxPhysicsBatch = {}",
-                                         config.MaxPhysicsBatch)
-                           : std::string("MaxPolynomialDegree"),
-                toObjective ? "a discretisation error, relative to its share of ObjectiveTolerance,"
-                            : "a relative L2 error",
-                E, target);
-            std::println("  stopped at the ceiling k = {}, tolerance not met", kMax);
-            break;
-        }
-
-        // Capped, then clamped to the ceiling. Giorgiani's rule is free to ask
-        // for a very large jump from a coarse first solve -- k = 1 with a 1e-8
-        // target asks for 7 at base 10, which on NonlinDiffTest cleared a
-        // ceiling of 8 in one step and learned nothing between the two. Taking
-        // it in bounded steps costs solves but each one reports where it got to,
-        // which is what makes a run diagnosable.
-        const unsigned int capped = std::min(bump, config.MaxDegreeIncrement);
-        const unsigned int chosen = std::min(k + capped, kMax);
-
-        if (capped < bump)
-            std::println("  raising k from {} to {} (the rule asked for +{}, capped at +{})",
-                         k, chosen, bump, config.MaxDegreeIncrement);
-        else
-            std::println("  raising k from {} to {}", k, chosen);
-
-        // Then as far beyond that as costs no more rounds of physics, up to the
-        // ceiling but not bound by MaxDegreeIncrement: the cap bounds how far one
-        // estimate may send the loop, and degrees that cost nothing extra to
-        // evaluate are not a bet on the estimate.
-        const unsigned int next = filledDegree(
-            [&](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
-            grid, chosen, kMax, config.PhysicsParallelism, config.MaxPhysicsBatch);
-        if (next > chosen)
-            std::println("  filled to k = {}: no more rounds of {} than k = {}", next,
-                         config.PhysicsParallelism, chosen);
-
-        // Hand the state on. setRestartValues copies both the vector and the
-        // Grid, so nothing here points into the solver about to be destroyed --
-        // and the destruction has to come before the next construction, or the
-        // two solvers thrash Integrator's cache between them.
-        physics.problem().setRestartValues(system->stateVector(), system->derivativeVector(),
-                                           grid, k);
-        levelConfig = carriedStepConfig(config, *system);
-
-        system.reset();
-        k = next;
+        const auto levelStats = system->lastSteadyStats();
+        auto &runTotal = s->runTotal;
+        runTotal.steps += levelStats.steps;
+        runTotal.rejected += levelStats.rejected;
+        runTotal.newtonIters += levelStats.newtonIters;
+        runTotal.kinFuncEvals += levelStats.kinFuncEvals;
+        runTotal.kinJacEvals += levelStats.kinJacEvals;
+        runTotal.residualEvals += levelStats.residualEvals;
+        runTotal.jacBuilds += levelStats.jacBuilds;
+        runTotal.jacSolves += levelStats.jacSolves;
+        ++s->levels;
     }
+
+    // The control quantity E and the target it is held to. Under the
+    // solution target E is the relative L2 gap between u* and u_h and the
+    // target DegreeTolerance; under the objective target E is already a
+    // ratio to the tolerance, so the target is 1.
+    double E = 0.0, target = s->eps;
+    if (s->toObjective)
+    {
+        // Read off the estimate the level's steady solve made on its way
+        // out, so measuring a level costs nothing beyond what solving it did.
+        const ObjectiveAccuracy acc = objectiveAccuracy(*system);
+        for (Index g = 0; g < acc.eta.size(); ++g)
+            std::println("  k = {}: objective {}: discretisation error {:.3e} against "
+                         "{:.3e} ({:.3g}x), G ~ {:.10g}",
+                         k, g, acc.eta(g), acc.tolerance(g),
+                         std::abs(acc.eta(g)) / acc.tolerance(g), acc.G(g) - acc.eta(g));
+        E = acc.ratio;
+        target = 1.0;
+    }
+    else
+    {
+        // runSolver has already freed the SUNDIALS state; accuracyEstimate
+        // reads yJac, which owns its own memory, and the postprocessor, which
+        // is a member -- so both outlive it.
+        const LevelError err = measure(*system, config, s->grid, s->nVars);
+
+        // Both aggregates, every level. globalL2 drives the decision because
+        // it is the quantity the benchmarks quote, so the tolerance means the
+        // same thing as the numbers they report; worstCell is the binding
+        // constraint on a *single* global degree and is the one to watch if
+        // the loop stops while some corner of the domain is plainly
+        // unresolved.
+        std::println("  k = {}: relative L2 error {:.3e} (variable {}), "
+                     "absolute {:.3e}, worst cell {:.3e} at cell {}",
+                     k, err.relative, err.worstVar, err.globalL2, err.worstCell,
+                     err.worstCellIndex);
+        E = err.relative;
+    }
+
+    const unsigned int bump = degreeIncrement(E, target, config.DegreeAdaptationBase);
+
+    if (bump == 0)
+    {
+        std::println("  converged at k = {} after {} solve{}", k, s->level + 1,
+                     s->level == 0 ? "" : "s");
+        return true;
+    }
+
+    if (k >= kMax)
+    {
+        // Deliberately not an exception. The answer at kMax is the best one
+        // available and the caller can still have it; what must not happen
+        // is that the run reports success at a tolerance it never reached.
+        logmsg<LOG_LEVEL::WARNING>(
+            "Degree adaptation stopped at the ceiling k = {} ({}) with {} of {:g} against "
+            "{:g}. The result is the best this degree can do, not a converged one.",
+            kMax,
+            s->batchBound ? std::format("the highest degree within MaxPhysicsBatch = {}",
+                                        config.MaxPhysicsBatch)
+                          : std::string("MaxPolynomialDegree"),
+            s->toObjective ? "a discretisation error, relative to its share of ObjectiveTolerance,"
+                           : "a relative L2 error",
+            E, target);
+        std::println("  stopped at the ceiling k = {}, tolerance not met", kMax);
+        return true;
+    }
+
+    // Capped, then clamped to the ceiling. Giorgiani's rule is free to ask
+    // for a very large jump from a coarse first solve -- k = 1 with a 1e-8
+    // target asks for 7 at base 10, which on NonlinDiffTest cleared a
+    // ceiling of 8 in one step and learned nothing between the two. Taking
+    // it in bounded steps costs solves but each one reports where it got to,
+    // which is what makes a run diagnosable.
+    const unsigned int capped = std::min(bump, config.MaxDegreeIncrement);
+    const unsigned int chosen = std::min(k + capped, kMax);
+
+    if (capped < bump)
+        std::println("  raising k from {} to {} (the rule asked for +{}, capped at +{})",
+                     k, chosen, bump, config.MaxDegreeIncrement);
+    else
+        std::println("  raising k from {} to {}", k, chosen);
+
+    // Then as far beyond that as costs no more rounds of physics, up to the
+    // ceiling but not bound by MaxDegreeIncrement: the cap bounds how far one
+    // estimate may send the loop, and degrees that cost nothing extra to
+    // evaluate are not a bet on the estimate.
+    const unsigned int next = filledDegree(
+        [&](Grid const &g, unsigned int kk) { return system->evaluationPlanFor(g, kk); },
+        s->grid, chosen, kMax, config.PhysicsParallelism, config.MaxPhysicsBatch);
+    if (next > chosen)
+        std::println("  filled to k = {}: no more rounds of {} than k = {}", next,
+                     config.PhysicsParallelism, chosen);
+
+    // Hand the state on. setRestartValues copies both the vector and the
+    // Grid, so nothing here points into the solver about to be destroyed --
+    // and the destruction has to come before the next construction, or the
+    // two solvers thrash Integrator's cache between them.
+    s->physics.problem().setRestartValues(system->stateVector(), system->derivativeVector(),
+                                          s->grid, k);
+    s->levelConfig = carriedStepConfig(config, *system);
+
+    system.reset();
+    s->k = next;
+    ++s->level;
+    return false;
+}
+
+void DegreeAdaptationLoop::finish(bool report)
+{
+    if (s->finished)
+        return;
+    s->finished = true;
 
     // `restarting` is sticky, and the transfer above set it. Left armed, the
     // next run on this same configuration would resume from the second-to-last
     // level instead of building an initial condition -- which is the defect
     // test_reconfiguring_without_restart_clears_the_restart_state exists for,
     // one level up.
-    physics.problem().clearRestart();
+    s->physics.problem().clearRestart();
 
     // Printed unconditionally when the diagnostics are on, even at one level,
     // where it duplicates that level's own block. The duplication is the lesser
     // evil: a log whose shape depends on how many levels the run happened to
     // take is one nothing can read mechanically, and the label says how many
     // solves went into it either way.
-    if (config.SteadyStateDiagnostics && levels > 0)
+    auto const &runTotal = s->runTotal;
+    const int levels = s->levels;
+    if (report && s->config.SteadyStateDiagnostics && levels > 0)
     {
         std::println("Degree adaptation totals -- {} level{}, one steady solve each",
                      levels, levels == 1 ? "" : "s");
@@ -522,7 +542,55 @@ std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
                      runTotal.jacBuilds, runTotal.kinJacEvals);
         std::println("  Jacobian solves         : {}", runTotal.jacSolves);
     }
+}
 
+std::unique_ptr<SystemSolver> runAdaptiveDegree(SolverConfig const &config,
+                                                PhysicsInstance &physics,
+                                                Grid const &grid,
+                                                unsigned int k0,
+                                                double tFinal,
+                                                std::unique_ptr<SystemSolver> solvedFirstLevel)
+{
+    DegreeAdaptationLoop loop(config, physics, grid, k0);
+    std::unique_ptr<SystemSolver> system;
+
+    if (solvedFirstLevel != nullptr && solvedFirstLevel->getOrder() != k0)
+        throw std::logic_error(
+            "runAdaptiveDegree was handed a solved first level at a degree other "
+            "than the one it was asked to start from.");
+
+    for (bool first = true;; first = false)
+    {
+        if (first && solvedFirstLevel != nullptr)
+        {
+            // Already configured, checked for a steady solve, given the adjoint
+            // problem and run by whoever built it -- so straight to measuring it.
+            system = std::move(solvedFirstLevel);
+        }
+        else
+        {
+            loop.openLevel(system);
+            try
+            {
+                system->runSolver(tFinal);
+            }
+            catch (std::invalid_argument const &)
+            {
+                throw;
+            }
+            catch (std::exception const &e)
+            {
+                if (!loop.retry(system, e))
+                    throw;
+                system->runSolver(tFinal);
+            }
+        }
+
+        if (loop.closeLevel(system))
+            break;
+    }
+
+    loop.finish();
     return system;
 }
 

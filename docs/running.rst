@@ -1094,8 +1094,16 @@ the end should pass ``estimate=False`` and let the last slice produce the one
 that counts. Without ``solveAdjoint`` there is nothing to estimate and nothing to
 pay. ``EstimateObjectiveOnFinish = false`` turns it off for a whole run.
 
-Slicing is refused with ``DegreeAdaptation``: adapting the degree replaces the
-solver, and a slice loop holds the state of the one it started on.
+Under ``DegreeAdaptation`` each level is solved in slices. The slice that
+converges a level finishes the run on it, exactly as an unsliced level ends, and
+if the loop raises the degree it builds the next level from that answer and
+returns ``SteadyOutcome.Refined``; the iterator carries on through it as through
+``OutOfSteps``, and ``stats["degree"]`` names the level each slice was on. The
+levels, and the answer, are those ``run_ss()`` reaches -- the two run one loop,
+``DegreeAdaptationLoop``, and a sliced run lands on the same state bit for bit.
+``stop()`` part way through a level writes the state reached, at the degree
+reached. ``MeshAdaptation`` and the ladders are still refused: they replace the
+mesh as well as the solver.
 
 Through the JAX FFI
 '''''''''''''''''''

@@ -119,7 +119,8 @@ class SteadySolve:
     takes sixteen uninterrupted takes sixteen in slices of three.
 
     Iterating yields ``(outcome, stats)`` per slice and stops of its own accord
-    once a slice returns anything but :attr:`SteadyOutcome.OutOfSteps`::
+    once a slice returns anything but :attr:`SteadyOutcome.OutOfSteps` or
+    :attr:`SteadyOutcome.Refined`::
 
         with manta.SteadySolve(runner) as solve:
             for outcome, stats in solve:
@@ -135,8 +136,13 @@ class SteadySolve:
     Parameters
     ----------
     runner:
-        A configured :class:`Runner`. ``DegreeAdaptation`` is refused -- see the
-        note in :meth:`Runner.start_steady`.
+        A configured :class:`Runner`. Under ``DegreeAdaptation`` each level is
+        solved in slices, and the slice that converges a level and raises the
+        degree returns :attr:`SteadyOutcome.Refined`, the next slice starting
+        the new level from that answer; ``stats["degree"]`` says which level a
+        slice was on. The run makes the levels and reaches the answer
+        :meth:`Runner.run_ss` does. ``MeshAdaptation`` and the ladders are
+        refused.
     estimate:
         Whether each slice estimates the objective on its way out. That costs a
         residual, a Jacobian build and a solve *per slice* and needs
@@ -166,7 +172,7 @@ class SteadySolve:
                 outcome = self._runner.start_steady(self._estimate)
                 self._started = True
             yield outcome, self._runner.steadyStats()
-            if outcome != SteadyOutcome.OutOfSteps:
+            if outcome not in (SteadyOutcome.OutOfSteps, SteadyOutcome.Refined):
                 return
 
     def stop(self):
