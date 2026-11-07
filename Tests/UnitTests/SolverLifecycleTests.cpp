@@ -3203,48 +3203,149 @@ BOOST_AUTO_TEST_CASE(a_resumed_steady_solve_does_not_re_climb_the_ser_ramp)
     removeOutput("lifecycle_resume");
 }
 
-// SteadyStateSolver = "TimeMarch" stops when dY/dt on the trace, over one output
-// interval, falls below one in weights 1 / (SteadyStateTolerance |lambda| +
-// AbsoluteTolerance). The floor was a hard-coded 1e-3, so for a trace of order
-// one the run stopped at the same slice whatever was configured; this requires
-// a looser AbsoluteTolerance to stop strictly earlier and a tighter one strictly
-// later, which the hard-coded floor fails. And the per-variable form is the
-// scalar one when there is one variable.
-BOOST_AUTO_TEST_CASE(a_time_march_stops_where_its_absolute_tolerance_says)
+// SteadyStateSolver = "TimeMarch" stops on the steady solvers' own
+// SteadyStateTest, made at each output time (timeMarchIsSteady), so a tolerance
+// means one thing whichever solver reaches the steady state. It used to test the
+// trace's change over an output interval against a floor that governed at any
+// SteadyStateTolerance tighter than 1e-3, so the key moved nothing.
+namespace
 {
-    auto stopAt = [](std::vector<double> atol)
+struct TimeMarchStop
+{
+    double t;      // when the run reported a steady state
+    double measure; // the test's own quantity at the state it stopped at
+};
+
+// Integrate to a steady state under TimeMarch with `test`, and measure the
+// state it stopped at with that test's own norm. The phases are driven
+// separately so Y is still allocated when the run ends.
+TimeMarchStop timeMarchStop(SystemSolver::SteadyTest test, double steadyTol, double stepTol,
+                            std::string const &stem)
+{
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setOutputCadence(0.02);
+    sys.setSteadyMode(SystemSolver::SteadyMode::TimeMarch);
+    sys.setSteadyTest(test);
+    sys.setSteadyStateTolerance(steadyTol);
+    sys.setSteadyStateStepTolerance(stepTol);
+
+    std::string text;
     {
-        const std::string stem = "lifecycle_timemarch_atol";
+        CapturedOutput out;
+        sys.initialize();
+        sys.integrate(10.0);
+        text = out.text();
+    }
+
+    const std::string marker = "Steady State achieved at time t = ";
+    const auto at = text.find(marker);
+    BOOST_TEST_REQUIRE(at != std::string::npos, "the run never reported a steady state");
+    // Printed to six figures; the stop is an output time, a multiple of the
+    // cadence. TestDiffusion's data does not depend on t either way.
+    TimeMarchStop stop{};
+    stop.t = std::round(std::stod(text.substr(at + marker.size())) / 0.02) * 0.02;
+    stop.measure = test == SystemSolver::SteadyTest::Residual ? sys.steadyResidualNorm(stop.t)
+                                                              : sys.steadyCorrectionNorm(stop.t);
+    sys.destroySundials();
+    removeOutput(stem);
+    return stop;
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(a_time_march_stops_on_the_steady_residual_under_residual)
+{
+    // Under Residual, SteadyStateTolerance bounds the weighted ||F|| here as it
+    // does for PseudoTransient and Newton: a tighter one stops later, and the
+    // state stopped at meets it.
+    std::vector<TimeMarchStop> stops;
+    for (double tol : {1e-2, 1e-4, 1e-6})
+    {
+        stops.push_back(timeMarchStop(SystemSolver::SteadyTest::Residual, tol, 0.33,
+                                      "lifecycle_timemarch_residual"));
+        BOOST_TEST_MESSAGE("Residual, SteadyStateTolerance " << tol << ": stops at t = "
+                                                             << stops.back().t << ", ||F|| = "
+                                                             << stops.back().measure);
+        BOOST_TEST(stops.back().measure <= tol);
+    }
+    BOOST_TEST(stops[0].t < stops[1].t);
+    BOOST_TEST(stops[1].t < stops[2].t);
+}
+
+BOOST_AUTO_TEST_CASE(a_time_march_stops_on_the_newton_correction_under_newton_step)
+{
+    // Under NewtonStep, the default, SteadyStateStepTolerance bounds the
+    // undamped Newton correction in the error weights, and SteadyStateTolerance
+    // is not read -- as for the steady solvers.
+    std::vector<TimeMarchStop> stops;
+    for (double tol : {1.0, 0.33, 1e-2})
+    {
+        stops.push_back(timeMarchStop(SystemSolver::SteadyTest::NewtonStep, 1e-3, tol,
+                                      "lifecycle_timemarch_newton"));
+        BOOST_TEST_MESSAGE("NewtonStep, SteadyStateStepTolerance " << tol << ": stops at t = "
+                                                                   << stops.back().t
+                                                                   << ", correction "
+                                                                   << stops.back().measure);
+        BOOST_TEST(stops.back().measure <= tol);
+    }
+    BOOST_TEST(stops[0].t < stops[1].t);
+    BOOST_TEST(stops[1].t < stops[2].t);
+
+    const TimeMarchStop other = timeMarchStop(SystemSolver::SteadyTest::NewtonStep, 1e-9, 0.33,
+                                              "lifecycle_timemarch_newton");
+    BOOST_TEST(other.t == stops[1].t);
+}
+
+BOOST_AUTO_TEST_CASE(a_time_march_check_does_not_perturb_the_integration)
+{
+    // The NewtonStep check factorises the Jacobian at alpha = 0 over the one IDA
+    // is reusing, and has to put IDA's back. Every slice written before the stop
+    // must be bit for bit the slice a run that never checks writes.
+    auto slices = [](bool check, double tFinal, std::string const &stem)
+    {
         Grid grid(0.0, 1.0, nCells);
         TestDiffusion problem(lifecycle_config);
         SystemSolver sys(grid, k, &problem);
         configure(sys, stem);
-        sys.setTolerances(atol, 1e-6);
         sys.setOutputCadence(0.02);
-        sys.setSteadyMode(SystemSolver::SteadyMode::TimeMarch);
-        sys.setSteadyStateTolerance(1e-10);
-
-        std::string text;
+        if (check)
         {
-            CapturedOutput out;
-            sys.runSolver(10.0);
-            text = out.text();
+            sys.setSteadyMode(SystemSolver::SteadyMode::TimeMarch);
+            sys.setSteadyTest(SystemSolver::SteadyTest::NewtonStep);
+            sys.setSteadyStateTolerance(1e-3);
+            sys.setSteadyStateStepTolerance(1e-2);
         }
+        {
+            CapturedOutput quiet;
+            sys.runSolver(tFinal);
+        }
+        netCDF::NcFile out;
+        out.open(stem + ".nc", netCDF::NcFile::FileMode::read);
+        const size_t nt = out.getDim("t").getSize(), nx = out.getDim("x").getSize();
+        std::vector<double> t(nt);
+        out.getVar("t").getVar(t.data());
+        std::vector<std::vector<double>> fields;
+        for (const char *name : {"u", "q", "sigma"})
+        {
+            std::vector<double> v(nt * nx);
+            out.getGroup(problem.getVariableName(0)).getVar(name).getVar(v.data());
+            fields.push_back(std::move(v));
+        }
+        out.close();
         removeOutput(stem);
-
-        const std::string marker = "Steady State achieved at time t = ";
-        const auto at = text.find(marker);
-        BOOST_TEST_REQUIRE(at != std::string::npos, "the run never reported a steady state");
-        return std::stod(text.substr(at + marker.size()));
+        return std::pair{t, fields};
     };
 
-    const double loose = stopAt({1e-1}), standard = stopAt({1e-3}), tight = stopAt({1e-6});
-    BOOST_TEST_MESSAGE("TimeMarch stops at t = " << loose << ", " << standard << ", " << tight
-                                                 << " for AbsoluteTolerance 1e-1, 1e-3, 1e-6");
-    BOOST_TEST(loose < standard);
-    BOOST_TEST(standard < tight);
-    BOOST_TEST(tight < 10.0);
-    BOOST_TEST(stopAt({1e-3}) == standard); // deterministic, so the comparison above means something
+    const auto [tChecked, checked] = slices(true, 10.0, "lifecycle_timemarch_checked");
+    const double tStop = tChecked.back();
+    const auto [tPlain, plain] = slices(false, tStop, "lifecycle_timemarch_plain");
+
+    BOOST_TEST_REQUIRE(tChecked.size() > 3u);
+    BOOST_TEST_REQUIRE(tPlain.size() == tChecked.size());
+    for (size_t f = 0; f < checked.size(); ++f)
+        BOOST_TEST(checked[f] == plain[f], boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

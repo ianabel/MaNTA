@@ -89,7 +89,8 @@ class SystemSolver
         void setSteadyStateTermination(bool on) { TerminateOnSteadyState = on; };
 
         // How a steady state is reached. TimeMarch is the original behaviour --
-        // integrate until dY/dt is small -- and is kept because it is the only
+        // integrate until an output time passes the steady test
+        // (timeMarchIsSteady) -- and is kept because it is the only
         // one that picks a branch by physics rather than by wherever Newton
         // lands. The other two are one algorithm: pseudo-transient continuation
         // keeps the 1/dt mass term purely as damping and grows dt from the
@@ -832,8 +833,11 @@ class SystemSolver
         // test and this one stay the identical quantity rather than decoupling by
         // whatever the normalisation is worth. See residualWeights().
         //
-        // Costs one residual evaluation, and counts as one.
+        // Costs one residual evaluation, and counts as one. At t0 unless told
+        // otherwise: a steady solve's time is frozen there, and only the
+        // TimeMarch test (timeMarchIsSteady) asks at another.
         double steadyResidualNorm();
+        double steadyResidualNorm(Time t);
         void setNOutput(int nO)
         {
             if (nO <= 0)
@@ -1982,8 +1986,31 @@ class SystemSolver
         int steadyNewtonSolve(SteadyStepStats &rec);
 
         // ||J0^-1 F(Y)||_WRMS(ewt(Y)): one residual, one build at alpha = 0, one
-        // solve. What SteadyStateMeasureCorrection reports.
+        // solve. What SteadyStateMeasureCorrection reports. At t0 unless told
+        // otherwise, as steadyResidualNorm.
         double steadyCorrectionNorm();
+        double steadyCorrectionNorm(Time t);
+
+        // SteadyStateSolver = "TimeMarch"'s stopping test, made at each output
+        // time with the steady solvers' own SteadyStateTest, so a tolerance means
+        // the same thing whichever solver reaches the steady state: under
+        // Residual, the weighted ||F|| at the state IDA returned, with du/dt
+        // taken as zero, against SteadyStateTolerance; under NewtonStep, the
+        // undamped Newton correction from it in the error weights against
+        // SteadyStateStepTolerance. That correction is the first-order distance
+        // to the fixed point, so it is taken as it stands, s = 1, where a steady
+        // solve scales it by the distance a contraction rate implies -- there is
+        // no Newton sequence here to have a rate. Objective is refused with
+        // TimeMarch at configuration.
+        //
+        // The NewtonStep test builds and factorises the Jacobian at alpha = 0,
+        // over the factorisation IDA is reusing -- IDA calls its setup only when
+        // cj drifts or Newton fails. So the build IDA last made is rebuilt
+        // before returning, at its own state, time and alpha: an integration
+        // that checks is bit for bit one that does not
+        // (a_time_march_check_does_not_perturb_the_integration). One residual,
+        // two builds and a solve per output time; Residual, one residual.
+        bool timeMarchIsSteady(Time t);
 
         // N_VWrmsNorm, masked to the differential components when
         // SuppressAlgebraicError was set explicitly.

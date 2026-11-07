@@ -1522,8 +1522,8 @@ These are deliberate and tracked, not oversights:
   jardin-critical-gradient 1.23603 to 3.90868 on 10 (3.1622 against 3.1623) --
   and **neither run's continuation step count changes**, 3 and 5 respectively,
   both still converging to round-off. `shestakov-nonlinear` is unaffected because
-  it pins `TimeMarch`, whose stopping test is on `dY/dt` and does not go through
-  this function at all.
+  it pins `TimeMarch`, which makes its steady test only at output times, and
+  under the default `NewtonStep` test does not read this norm at all.
 
   What is still uncovered is the rest of the algorithm -- step rejection, the
   `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure path (the ordinary
