@@ -191,12 +191,16 @@ endif()
 # linking libmanta is precisely the mistake that gives a plugin its own copy of
 # the registry. The rule is easier to state when there is no target to link.
 
-# Installed binaries keep the paths to the libraries they were linked against
-# outside the build tree -- SUNDIALS under a prefix of its own, typically. CMake
-# otherwise drops the whole build RPATH on install, and the installed solver
-# cannot find libsundials_ida at startup. System directories are never added.
-# The extension gets the same in python/CMakeLists.txt.
-set_target_properties(MaNTA manta PROPERTIES INSTALL_RPATH_USE_LINK_PATH ON)
+# Installed binaries keep the paths to the libraries they were linked against --
+# SUNDIALS under a prefix of its own, typically. CMake otherwise drops the whole
+# build RPATH on install, and the installed solver cannot find libsundials_ida at
+# startup. USE_LINK_PATH covers libraries outside the project; SUNDIALS is named
+# explicitly (MANTA_DEPENDENCY_RPATH, cmake/MantaDependencies.cmake) because
+# ./build_sundials puts it inside. System directories are never added. The
+# extension gets the same in python/CMakeLists.txt.
+set_target_properties(MaNTA manta PROPERTIES
+  INSTALL_RPATH_USE_LINK_PATH ON
+  INSTALL_RPATH "${MANTA_DEPENDENCY_RPATH}")
 
 install(TARGETS MaNTA RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT runtime)
 
@@ -249,6 +253,25 @@ install(DIRECTORY util/
 install(TARGETS manta
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         COMPONENT runtime NAMELINK_COMPONENT devel)
+
+# toml11 is vendored, and PhysicsCases.hpp and FieldModel.hpp include
+# <toml.hpp> -- a case's constructor takes a toml::value -- so a plugin cannot
+# compile without it. Installed beside the headers that need it, at the version
+# the core was built against, and named in manta.pc. (extern/autodiff is not:
+# no installed header includes it.)
+install(DIRECTORY extern/toml11/include/
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/manta/extern/toml11"
+        COMPONENT devel)
+
+# The other dependency headers the installed ones include -- SUNDIALS, Eigen,
+# Boost, netCDF -- are wherever this configure found them, so manta.pc has to
+# say where. Taken from manta_deps's usage requirements, transitively, rather
+# than from any one variable: each dependency has more than one route to it (a
+# system Eigen or MANTA_EIGEN_INCLUDE_DIR; netCDF through pkg-config or its
+# fallback), and these are the directories the core was compiled against.
+# MantaInstallPc.cmake filters them.
+file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/manta-pc-includes.txt"
+     CONTENT "$<TARGET_PROPERTY:manta_deps,INTERFACE_INCLUDE_DIRECTORIES>")
 
 set(MANTA_PC_STD "c++${MANTA_CXX_STANDARD}")
 set(MANTA_PC_MARCH "")

@@ -157,7 +157,7 @@ Read the live rule rather than trusting this paragraph —
   are, and a workflow that works for `ianabel` is not evidence it works for
   anyone else.
 
-**Eleven of the twelve contexts `ci.yml` publishes are required**, each pinned to app
+**Twelve of the thirteen contexts `ci.yml` publishes are required**, each pinned to app
 15368 (GitHub Actions), so a status of that name from anything else does not
 count:
 
@@ -167,7 +167,7 @@ Build + tests (g++-16)                    Build + tests (clang++-20)
 Build + tests (g++-15, Eigen 5.0.1)       Build + tests (clang++-21)
 Build + tests (clang++-19, Eigen 5.0.1)   Build + tests (fedora:latest)
 Build + tests (g++-15, OpenMP)            Build + tests (fedora:latest, OpenMP)
-Docs
+Docs                                      Out of tree
 ```
 
 **`Coverage` is the one that is deliberately *not* required**, and it is the only
@@ -1863,12 +1863,25 @@ Three things to know:
 *install* time, not configure time**, so `--prefix` is recorded correctly and
 `DESTDIR` is honoured; a plain `configure_file` bakes in whatever the prefix was
 when cmake last ran, and the first symptom of that is a plugin compiling against
-the wrong headers. There is deliberately **no installed CMake package**: an
+the wrong headers. It also carries the include directories of what the installed
+headers include: the vendored toml11, installed under `include/manta/extern`, and
+SUNDIALS, Eigen, Boost and netCDF wherever this configure found them (`manta_deps`'s
+usage requirements, evaluated at generate time), less the compiler's own search
+directories -- without them the documented plugin build did not compile anywhere
+SUNDIALS was not in a system directory. The installed binaries likewise carry an
+RPATH to SUNDIALS's library directory, named from the linked targets rather than
+left to `INSTALL_RPATH_USE_LINK_PATH`, which skips anything inside the project --
+and `./build_sundials` installs into `./sundials/install`, so the documented setup
+installed a solver that could not find `libsundials_ida` at startup. There is
+deliberately **no installed CMake package**: an
 exported target would invite `target_link_libraries(mycase manta)`, and linking
 `libmanta` is exactly the mistake below. A physics case built as a shared object and named
 in the config's `PhysicsPlugins` array is dlopened by `runManta` before
 `InstantiateProblem`; its static initialiser registers it into the same
-process-global map. Two traps, neither of which is a link error:
+process-global map. CI's `Out of tree` job runs both routes the way a user does --
+this install, a plugin built with pkg-config's flags, and `pip install .` into a
+fresh venv driving a Python case through `manta` -- from `Tests/OutOfTree/`,
+whose files `docs/out_of_tree.rst` includes. Two traps, neither of which is a link error:
 
 * **A plugin must be compiled with the flags `pkg-config --cflags manta`
   reports.** Eigen aligns its types to the widest vector unit the compiler knows
