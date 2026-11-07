@@ -621,8 +621,9 @@ transient *is* the answer.
    rejected step drops it to a finite ``dt`` and it continues as continuation.
 
 ``TimeMarch``
-   The original behaviour: integrate with IDA until ``dY/dt`` is negligible --
-   see below for the test. Slower, and the only one of the three that selects
+   The original behaviour: integrate with IDA until the state passes the same
+   ``SteadyStateTest`` the other two stop on, checked at each output time --
+   see below. Slower, and the only one of the three that selects
    a solution *branch* by following the physics — which matters for a problem
    with more than one steady state, such as a transport model with a barrier
    bifurcation.
@@ -683,20 +684,16 @@ happen to agree — they match bit for bit in ``Newton`` mode, where the damping
 term is identically zero. Its ``u_scale`` stays unit: that one is about the
 solution's units, and it drives the step-length test and the Newton step clamp.
 
-``TimeMarch`` does not use any of this. At each output time it measures the
-change in the trace over one output interval, :math:`\Delta t\,\dot\lambda`,
-in the weights IDA builds for a value,
-
-.. math::
-
-   \left\| \Delta t\,\dot\lambda \right\|, \qquad
-   w_{v,i} = \frac{1}{\texttt{SteadyStateTolerance}\,|\lambda_{v,i}| + \texttt{AbsoluteTolerance}_v},
-
-and stops when that falls below one. ``SteadyStateTolerance`` is the relative
-part and ``AbsoluteTolerance`` -- one value, or one per variable -- the floor, so
-for a trace of order one the floor governs at any ``SteadyStateTolerance``
-tighter than it. A config that switches between the modes is therefore changing
-what the number means.
+``TimeMarch`` makes the same test, at each output time, on the state IDA
+returns: under ``Residual`` this norm of the residual, with :math:`\partial_t u`
+taken as zero, against ``SteadyStateTolerance``; under ``NewtonStep`` the
+undamped Newton correction below. So the tolerance means one thing whichever
+``SteadyStateSolver`` reaches the steady state. The test runs only at output
+times, so ``delta_t`` sets how soon after the state settles the run can notice,
+and its cost is per output: one residual under ``Residual``; under
+``NewtonStep`` a residual, a solve and two Jacobian builds, the second
+rebuilding the factorisation IDA is reusing so that a run which checks
+integrates exactly as one which does not.
 
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — flux and derivative evaluations per point — by
@@ -705,7 +702,9 @@ the reuse-1 columns of ``python-examples/paper-figures/steady_modes.py`` with
 the ``Residual`` entries (``RelativeTolerance = 1e-6``,
 ``AbsoluteTolerance = 1e-3``). The resolution
 is stated because the counts depend on it: ``park-convergence`` at 4 cells, the
-other two at 10, all three at :math:`k = 3`. ``TimeMarch`` reads neither test.
+other two at 10, all three at :math:`k = 3`. These configurations set an output
+cadence as long as the run, so ``TimeMarch`` makes its test once, at its first
+output; the two figures in its column are that test's own cost under each rule.
 Every answer agrees with the converged one in every digit printed, except
 Shestakov under ``NewtonStep``, where ``Newton`` stops 6.5e-3 from the exact
 solution and ``PseudoTransient`` 5.6e-3, against the converged state's 7.2e-3 —
@@ -715,19 +714,19 @@ within their ``AbsoluteTolerance``.
    :header-rows: 1
 
    * - benchmark
-     - ``TimeMarch``
+     - ``TimeMarch``, ``NewtonStep`` / ``Residual``
      - ``PseudoTransient``, ``NewtonStep`` / ``Residual``
      - ``Newton``, ``NewtonStep`` / ``Residual``
    * - ``park-convergence``
-     - 120
+     - 123 / 121
      - 7 / 10
      - **5** / **5**
    * - ``jardin-critical-gradient``
-     - 183
+     - 186 / 184
      - 15 / 22
      - **11** / 15
    * - ``shestakov-nonlinear``
-     - 257
+     - 260 / 258
      - 31 / 44
      - **29** / 37
 
@@ -766,9 +765,9 @@ documents; on this table's configuration both steady modes beat it.
 .. note::
 
    A steady solve is also *better* for adjoints, not merely cheaper. The adjoint
-   state method assumes ``F(y, p) = 0``; ``TimeMarch`` only approximates that
-   through a ``dY/dt`` threshold, while these two enforce it. On the
-   ``test_adjoint.py`` fixture the gradient moves from ``2e-5`` to ``2e-8``
+   state method assumes ``F(y, p) = 0``; ``TimeMarch`` stops on the first output
+   time that passes the test, where these two iterate until it does. On the
+   ``test_adjoint.py`` fixture the gradient moves from ``4.7e-6`` to ``2e-8``
    against a finite-difference reference — the same accuracy as integrating far
    past the transient, for a fraction of the work.
 
@@ -998,8 +997,8 @@ slice*, and do not difference the two for a rate of change.
 converged state.
 
 ``TimeMarch`` is unaffected — it writes a slice per output cadence at real times
-and stops when ``dY/dt`` falls below the tolerance, so its last slice carries the
-time the state was actually reached.
+and stops at the first that passes the steady test, so its last slice carries
+the time the state was actually reached.
 
 **A failed steady solve writes its last state too**, at the same ``t = 1``,
 before the error propagates — which is exactly the run whose state is worth
