@@ -63,31 +63,6 @@ Raised 2026-11-06; the last attempt stalled on a choice rather than a defect.
   the degree).
 
 
-TimeMarch stops on dY/dt; the other two steady modes stop on the residual.
-Found 2026-09-23, re-measuring the paper's steady-cost table at a tolerance a
-plasma transport run would actually use.
-
-  PseudoTransient and Newton bound ||F|| by SteadyStateTolerance. TimeMarch
-  bounds the trace's change over one output interval, in weights
-  1 / (SteadyStateTolerance |lambda| + AbsoluteTolerance) -- so for a trace of
-  order one the floor, AbsoluteTolerance, governs, and SteadyStateTolerance
-  barely moves where it stops: at the default floor of 1e-3, Park, Jardin and
-  Shestakov report the same 120, 183 and 257 visits from 1e-11 to 1e-2. The
-  floor was a hard-coded 1e-3 until 2026-11-06; it is AbsoluteTolerance now,
-  which is what tightens a TimeMarch stop.
-
-  So the three methods still cannot be put on a common accuracy target by one
-  key, which is what a cost comparison between them wants. At 1e-2 the
-  residual-driven methods stop at 1.7e-3 on Jardin while TimeMarch runs on to
-  3.8e-16, so the ratio between them flatters the steady solvers; the paper's
-  table carries the errors beside the visits and quotes the matched-accuracy
-  factors separately.
-
-  To decide: whether TimeMarch's test should be on the residual instead, which
-  would make SteadyStateTolerance mean one thing across all three modes at the
-  cost of changing what every existing TimeMarch run stops at.
-
-
 The Dirichlet trace is seeded differently by a cold start and by a restart.
 Found 2026-09-23, by a ladder test asserting that a ladder reaches the same
 answer as a direct solve and finding it did not, in exactly two entries.
