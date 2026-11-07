@@ -525,19 +525,6 @@ Superconvergence follow-ons (see Tests/README.md for what is already verified):
     casters and the restart format all rest on. tau ~ 1/h also changes every
     existing run.
 
-  - No manufactured case has more than one aux variable, more than one scalar, or
-    both at once. The order studies cover nAux = 1 and nScalars = 1 separately, so
-    a block-indexing error that only appears at the second of either would not
-    show up in them. SystemSolverMatrixTests.cpp covers the layout with two
-    scalars and one aux, and ScalarJacobianTests.cpp with three scalars, but
-    neither measures a rate.
-
-
-The regression suite compares only `u`, never the `q`, `sigma` and `u_star` that
-every run also writes. Closing it means regenerating the references and picking
-tolerances for three fields a derivative rougher than `u`. Tests/README.md's
-"Regression tests" section has the detail and the evidence that it is real slack.
-
 
 From the origin/optimize-mode review, still unmerged and worth taking:
   - the branch's Objective2.py changes. Two of them: grad_solver_config gains
