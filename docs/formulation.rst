@@ -84,7 +84,10 @@ comparison against a closed form can.
 
 **The** ``State::Flux`` **array that physics hooks read carries the negated**
 :math:`\sigma_h`, not :math:`\hat\sigma`. A source term that reads the flux back
-out of the state is reading :math:`-\hat\sigma`.
+out of the state is reading :math:`-\hat\sigma`; ``State::sigmaHat`` is the
+physical flux. ``AutodiffTransportSystem`` hands ``Source`` and ``GFunc`` the
+physical flux, and takes the sign into their derivatives for them
+(:doc:`physics_interface`).
 
 Degrees of freedom
 ------------------

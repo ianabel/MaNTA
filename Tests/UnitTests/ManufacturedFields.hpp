@@ -151,6 +151,76 @@ public:
     void InitialFieldValue(VectorRef out) override { out(0) = manufacturedPsiExact(0.0); }
 };
 
+/// nFieldDOF = 1, algebraic, and its row reads the transport time derivative:
+///
+///     R = psi - Int u_t dx,   g(x; psi) = 1 + psi c(x).
+///
+/// u_t = sin(pi x) on the manufactured solution, so psi = 2/pi at every t. A
+/// solver that handed the row no du/dt would converge psi to zero and g to 1,
+/// and the transport would then integrate a source derived for a different
+/// geometry: an O(1) error in u that refinement does not remove.
+///
+/// Its d(row)/d(u') is what FieldResidualPrime's dRdot is for, and the
+/// coupling weights it by alpha -- so a Jacobian check of it has to be made
+/// at alpha != 0.
+class ManufacturedRateField : public FieldModel
+{
+public:
+    ManufacturedRateField() : FieldModel(buildSpec()) {}
+
+    static FieldModelSpec buildSpec()
+    {
+        FieldModelSpec s;
+        s.dofs = {{"psi", "the integral of du/dt", "1", false}};
+        s.geometry = {{"g", "metric factor multiplying the diffusivity", "1"}};
+        s.label = "x";
+        s.readsTransportTimeDerivatives = true;
+        return s;
+    }
+
+    // ---- the exact solution, as ManufacturedField's -----------------------
+
+    Vector fieldExact(Time) const
+    {
+        Vector psi(1);
+        psi(0) = 2.0 / M_PI;
+        return psi;
+    }
+    Value geometryExact(Position x, Time) const { return 1.0 + (2.0 / M_PI) * manufacturedC(x); }
+    Value dGeometryExact_dx(Position x, Time) const { return -2.0 * std::sin(M_PI * x); }
+
+    void FieldResidual(VectorRef out, Vector const &psi, Vector const &,
+                       GlobalState const &states, std::vector<Position> const &,
+                       Vector const &weights, Time) override
+    {
+        double integral = 0.0;
+        for (Index j = 0; j < weights.size(); ++j)
+            integral += weights(j) * states[j].udot(0);
+        out(0) = psi(0) - integral;
+    }
+
+    void Geometry(VectorRef out, Vector const &psi, Position x, Time) override
+    {
+        out(0) = 1.0 + psi(0) * manufacturedC(x);
+    }
+
+    void dGeometry_dpsi(MatrixRef out, Vector const &, Position x, Time) override
+    {
+        out(0, 0) = manufacturedC(x);
+    }
+
+    void FieldResidualPrime(GlobalStateMatrix &, GlobalStateMatrix &dRdot, MatrixRef dRdpsi,
+                            MatrixRef, Vector const &, Vector const &, GlobalState const &,
+                            std::vector<Position> const &, Vector const &weights, Time) override
+    {
+        dRdpsi(0, 0) = 1.0;
+        // Through Variable(), for the reason ManufacturedField's gives.
+        dRdot[0].Variable().row(0) = -weights.transpose();
+    }
+
+    void InitialFieldValue(VectorRef out) override { out(0) = 2.0 / M_PI; }
+};
+
 /// nFieldDOF = n:  L psi = strength * f(state), f_m sampling the transport solution.
 /// B = L is tridiagonal and dGeometry/dpsi is dense, because geometry at x
 /// interpolates every entry of psi.

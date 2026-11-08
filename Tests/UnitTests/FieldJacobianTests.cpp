@@ -893,6 +893,58 @@ BOOST_AUTO_TEST_CASE(a_sign_error_in_a2_would_be_caught)
     BOOST_TEST(flipped.solutionError > 1e-3);
 }
 
+// A field row reading du/dt. Its derivative in u' enters A2 weighted by alpha,
+// beside the mass term's place in the transport rows, so -- as for a transport
+// source reading du/dt -- a check at alpha = 0 sees none of it.
+CoupledSolver rateFixture(double cj)
+{
+    return makeCoupledSolverAtState(/*nCells=*/6, /*k=*/2, std::make_unique<GeometricAuxDiffusion>(),
+                                    std::make_shared<ManufacturedRateField>(),
+                                    /*superconvergent=*/false, /*tau=*/0.75, cj);
+}
+
+BOOST_AUTO_TEST_CASE(a_field_row_reading_du_dt_sees_it_in_the_residual)
+{
+    // The field row moves with y' at fixed y: the difference between the
+    // Jacobians at two values of cj, in that row, is cj times d(row)/d(y'),
+    // which here is -w_j in the u columns. A residual that never handed the
+    // model du/dt would make the two rows identical, and the solve check below
+    // would then pass without the block having been assembled.
+    auto solver = rateFixture(3.7);
+    const Matrix J = fdjac::jacobian(*solver, solver.Y, solver.dYdt, solver.t, 3.7);
+    const Matrix J0 = fdjac::jacobian(*solver, solver.Y, solver.dYdt, solver.t, 0.0);
+    const Index fieldRow = J.rows() - 1;
+    const double moved = (J.row(fieldRow) - J0.row(fieldRow)).cwiseAbs().maxCoeff();
+    BOOST_TEST_MESSAGE("field row reading du/dt: largest change between cj = 3.7 and 0 is " << moved);
+    BOOST_TEST(moved > 1e-2);
+}
+
+BOOST_AUTO_TEST_CASE(its_jacobian_carries_the_alpha_weighted_block)
+{
+    auto solver = rateFixture(3.7);
+    for (int trial = 0; trial < 3; ++trial)
+    {
+        const SolveReport r = checkExactSolve(solver, trial);
+        BOOST_TEST_MESSAGE("field row reading du/dt, cj = 3.7, trial "
+                           << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                           << ", ||J dy* - g||/||g|| = " << r.residual);
+        BOOST_TEST(r.solutionError < 1e-7);
+        BOOST_TEST(r.residual < 1e-7);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(at_alpha_zero_that_block_is_invisible)
+{
+    // The companion, recorded so the test above is not later "simplified" into
+    // this one: at cj = 0 the block is multiplied by zero, so this passes
+    // whether or not it is assembled. It also says the adjoint, built at
+    // alpha = 0, carries none of it.
+    auto solver = rateFixture(0.0);
+    const SolveReport r = checkExactSolve(solver, 0);
+    BOOST_TEST(r.solutionError < 1e-7);
+    BOOST_TEST(r.residual < 1e-7);
+}
+
 BOOST_AUTO_TEST_CASE(solve_jac_eq_dispatches_to_the_exact_solve)
 {
     // The dispatcher, not the solve: solveJacEq must route a coupled system to

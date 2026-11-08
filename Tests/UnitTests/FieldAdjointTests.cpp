@@ -860,6 +860,88 @@ double relativeError(Vector const &a, Vector const &b) { return (a - b).norm() /
 
 Vector baseParameters() { return (Vector(NP) << KAPPA0, S0_0).finished(); }
 
+// ------------------------------------------- a parameter in the field row --
+//
+// The closed-form problem with a gain on the field constraint,
+//
+//     psi = a Int_0^1 u dx,
+//
+// which moves the fixed point to psi = 2 a s0 / (24 kappa - a s0) and leaves
+//
+//     G = Int u dx = 2 s0 / d,   d = 24 kappa - a s0,
+//     dG/dkappa = -48 s0 / d^2,  dG/ds0 = 48 kappa / d^2,  dG/da = 2 s0^2 / d^2.
+//
+// a appears in the field residual and nowhere else, so the whole of dG/da is
+// -z_psi dR/da: a gradient that contracts the adjoint with the transport rows
+// alone reports zero for it.
+constexpr Index P_GAIN = 2, NP_GAIN = 3;
+constexpr double GAIN0 = 1.25;
+
+double exactGainG(double kappa, double s0, double a) { return 2.0 * s0 / (24.0 * kappa - a * s0); }
+
+Vector exactGainGradient(double kappa, double s0, double a)
+{
+    const double d = 24.0 * kappa - a * s0;
+    Vector g(NP_GAIN);
+    g(P_KAPPA) = -48.0 * s0 / (d * d);
+    g(P_S0) = 48.0 * kappa / (d * d);
+    g(P_GAIN) = 2.0 * s0 * s0 / (d * d);
+    return g;
+}
+
+/// LinearGeometryField with psi = gain * Int u dx.
+class GainField : public LinearGeometryField
+{
+public:
+    explicit GainField(double gain_) : gain(gain_) {}
+
+    void FieldResidual(VectorRef out, Vector const &psi, Vector const &, GlobalState const &states,
+                       std::vector<Position> const &, Vector const &weights, Time) override
+    {
+        out(0) = psi(0) - gain * states.Variable().row(0).dot(weights);
+    }
+
+    void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &, MatrixRef dRdpsi, MatrixRef,
+                            Vector const &, Vector const &, GlobalState const &,
+                            std::vector<Position> const &, Vector const &weights, Time) override
+    {
+        dRdpsi(0, 0) = 1.0;
+        dR[0].Variable().row(0) = -gain * weights.transpose();
+    }
+
+    double gain;
+};
+
+/// ClosedFormAdjoint over (kappa, s0, a). dR/da = -Int u dx, reported unless
+/// the adjoint is built not to, which is what an adjoint problem written before
+/// the hook existed does.
+class GainAdjoint : public ClosedFormAdjoint
+{
+public:
+    explicit GainAdjoint(bool declares_ = true) : declares(declares_) { np = NP_GAIN; }
+
+    Matrix dFieldResidual_dp(Index f, Vector const &psi, Vector const &dpsidt, GlobalState const &states,
+                             std::vector<Position> const &points, Vector const &weights, Time t) override
+    {
+        if (!declares)
+            return ClosedFormAdjoint::dFieldResidual_dp(f, psi, dpsidt, states, points, weights, t);
+        Matrix d = Matrix::Zero(NP_GAIN, 1);
+        d(P_GAIN, 0) = -states.Variable().row(0).dot(weights);
+        return d;
+    }
+
+    bool declares;
+};
+
+AdjointRun gainRun(Vector const &p, Index nCells, Index k, std::string const &stem, bool declares = true)
+{
+    return buildRun(std::make_unique<ClosedFormCoupledDiffusion>(Vector(p.head(NP))),
+                    std::make_unique<GainAdjoint>(declares), std::make_shared<GainField>(p(P_GAIN)),
+                    nCells, k, stem, SystemSolver::FieldSolveMode::Exact);
+}
+
+Vector gainParameters() { return (Vector(NP_GAIN) << KAPPA0, S0_0, GAIN0).finished(); }
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(field_adjoint_tests)
@@ -1640,6 +1722,54 @@ BOOST_AUTO_TEST_CASE(the_same_holds_for_a_multi_dof_field_block)
                        << adjointGrad.transpose() << "\n  finite difference = " << fd.transpose()
                        << "\n  relative error = " << relativeError(adjointGrad, fd));
     BOOST_TEST(relativeError(adjointGrad, fd) < 1e-5);
+}
+
+BOOST_AUTO_TEST_CASE(a_parameter_in_the_field_row_reaches_the_gradient)
+{
+    // Closed form for all three components, and a finite difference of the one
+    // that comes only through the field row. At k = 3 the discrete solution is
+    // the analytic one, as for the problem without the gain.
+    const Vector p0 = gainParameters();
+    const Index nCells = 4, k = 3;
+
+    auto run = gainRun(p0, nCells, k, "field_adjoint_gain");
+    integrateQuietly(run);
+    const Vector adjointGrad = run.gradient();
+    const Vector analytic = exactGainGradient(KAPPA0, S0_0, GAIN0);
+
+    const double h = 1e-5 * GAIN0;
+    Vector plus = p0, minus = p0;
+    plus(P_GAIN) += h;
+    minus(P_GAIN) -= h;
+    auto a = gainRun(plus, nCells, k, "field_adjoint_gain_p");
+    integrateQuietly(a);
+    auto b = gainRun(minus, nCells, k, "field_adjoint_gain_m");
+    integrateQuietly(b);
+    const double fd = (a.objective() - b.objective()) / (2.0 * h);
+
+    BOOST_TEST_MESSAGE("gain on the field row:\n  adjoint     = "
+                       << adjointGrad.transpose() << "\n  closed form = " << analytic.transpose()
+                       << "\n  dG/da by finite difference = " << fd);
+
+    BOOST_TEST(run.objective() == exactGainG(KAPPA0, S0_0, GAIN0), boost::test_tools::tolerance(1e-8));
+    BOOST_TEST(relativeError(adjointGrad, analytic) < 1e-7);
+    BOOST_TEST(adjointGrad(P_GAIN) == fd, boost::test_tools::tolerance(1e-6));
+}
+
+BOOST_AUTO_TEST_CASE(an_adjoint_problem_that_declares_no_field_derivative_reads_as_independent)
+{
+    // The default: no dFieldResidual_dp means the field rows do not read the
+    // parameters. Here they do, so that component comes back zero -- while the
+    // other two, which reach G through the transport rows, are unaffected. The
+    // test above is not vacuous for exactly this reason.
+    auto run = gainRun(gainParameters(), 4, 3, "field_adjoint_gain_undeclared", /*declares=*/false);
+    integrateQuietly(run);
+    const Vector grad = run.gradient();
+    const Vector analytic = exactGainGradient(KAPPA0, S0_0, GAIN0);
+
+    BOOST_TEST(grad(P_GAIN) == 0.0);
+    BOOST_TEST(analytic(P_GAIN) > 0.1);
+    BOOST_TEST(relativeError(grad.head(NP), analytic.head(NP)) < 1e-7);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

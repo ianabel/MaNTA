@@ -367,11 +367,14 @@ anti-diffusion `+` would give. Get it backwards and the case still converges, to
 the wrong function, at the right rate — so an order study will not catch it, only
 a closed-form comparison will. And the stored flux a hook reads
 carries the negated `sigma_h`: `State::sigma(i)` is that stored value,
-`State::sigmaHat(i)` the physical flux `SigmaFn` returned. Nothing in the tree
-reads the incoming sigma at all — `AdjointPlasma` threads it into
-`Sn`/`Spi`/`Spe` without using it, and every `dSources_dsigma` is
-zero — so a case that starts using it is the first to care, and no test would
-catch a sign error there.
+`State::sigmaHat(i)` the physical flux `SigmaFn` returned. The autodiff layer
+hands `Source` and `GFunc` the physical flux (`physicalFlux`) and negates
+`dSources_dsigma` and `AuxGPrime`'s sigma block to match, since autodiff then
+differentiates in `sigma_hat` while the Jacobian's column is the stored sigma.
+No case in the tree reads it; `AutodiffSigmaTests.cpp` is what pins both halves
+-- a manufactured solve for the value, which the wrong sign misses by O(1), and
+a finite-differenced Jacobian for the derivative, which a missing negation
+fails while the solve still passes.
 
 ### Solve path
 
@@ -2765,8 +2768,9 @@ These are deliberate and documented, not oversights — see `Tests/README.md` an
   and `MagneticFieldTest.cpp` is now the *whole* of its coverage rather than a
   supplement, since nothing instantiates either field class. `AdjointPlasma`
   itself is untouched: every `PlasmaConstants` use in it was already commented
-  out. And `AutodiffTransportSystem::MMS_Solution` remains as a facility with no
-  overrider left — `MirrorPlasma` was the only one.
+  out. And `AutodiffTransportSystem::MMS_Solution` remains as a facility no
+  physics case overrides; `AutodiffSigmaTests.cpp` is what exercises it, with
+  `MMS_Geometry` for a case that reads the geometry.
 
   The cost is real and worth naming: `plasma_init_tests` and
   `neutral_model_tests` are gone from CI, and the Python case's own suite is not

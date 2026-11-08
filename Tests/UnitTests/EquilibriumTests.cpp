@@ -15,6 +15,8 @@
 #include "ManufacturedFields.hpp"
 #include "../../EquilibriumModel.hpp"
 #include "../../FieldModelEquilibrium.hpp"
+#include "../../GeometrySource.hpp"
+#include "../../SolverConfig.hpp"
 #include "../../SystemSolver.hpp"
 
 #include <nvector/nvector_serial.h>
@@ -333,6 +335,30 @@ BOOST_AUTO_TEST_CASE(a_field_with_dynamics_cannot_be_an_equilibrium)
     // state, which is all tier 0 can express.
     BOOST_CHECK_THROW(FieldModelEquilibrium(std::make_shared<DifferentialField>()), std::invalid_argument);
     BOOST_CHECK_NO_THROW(FieldModelEquilibrium(std::make_shared<ManufacturedField>()));
+}
+
+BOOST_AUTO_TEST_CASE(nor_can_a_field_whose_row_reads_du_dt)
+{
+    // An equilibrium is solved from the transport state alone, so a row
+    // reading the transport time derivative would see none. Refused as a field
+    // with dynamics is: by the wrapper, by "reduced", and coupled by "auto".
+    BOOST_CHECK_THROW(FieldModelEquilibrium(std::make_shared<ManufacturedRateField>()),
+                      std::invalid_argument);
+
+    const SystemSpec spec{.variables = {{"u", "", ""}},
+                          .readsGeometry = true,
+                          .geometryDerivatives = GeometryDerivatives::Analytic};
+    SolverConfig config;
+    config.FieldCoupling = "auto";
+    {
+        CapturedOutput quiet;
+        const GeometrySource source =
+            geometrySourceFor(config, spec, std::make_shared<ManufacturedRateField>(), nullptr);
+        BOOST_TEST(!source.equilibrium);
+    }
+    config.FieldCoupling = "reduced";
+    BOOST_CHECK_THROW(geometrySourceFor(config, spec, std::make_shared<ManufacturedRateField>(), nullptr),
+                      std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

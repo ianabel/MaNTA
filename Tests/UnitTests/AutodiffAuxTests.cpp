@@ -79,6 +79,8 @@ protected:
     // Deliberately depends on u, q, sigma and phi, each differently, so that all
     // four blocks AuxGPrime fills are exercised and none can be confused with
     // another:  dG/dphi = 1,  dG/du = -2u,  dG/dq = -0.5,  dG/dsigma = 0.25.
+    // `sigma` here is sigma_hat, the physical flux; the stored sigma the
+    // solver differentiates in is -sigma_hat, so AuxGPrime reports -0.25.
     Real GFunc(Index, RealVector u, RealVector q, RealVector sigma, RealVector phi,
                Position, Time) override
     {
@@ -231,12 +233,13 @@ BOOST_AUTO_TEST_CASE(aux_g_prime_matches_a_finite_difference_of_g_func)
         double expected;
     };
 
-    // dG/dphi = 1, dG/du = -2u = -1.4, dG/dq = -0.5, dG/dsigma = 0.25.
+    // dG/dphi = 1, dG/du = -2u = -1.4, dG/dq = -0.5, and d/d(stored sigma)
+    // = -0.25: GFunc reads sigma_hat = -(stored sigma).
     const Component components[] = {
         {"phi", &State::phi, 1.0},
         {"u", &State::u, -2.0 * 0.7},
         {"q", &State::q, -0.5},
-        {"sigma", &State::sigma, 0.25},
+        {"sigma", &State::sigma, -0.25},
     };
 
     for (auto const &c : components)

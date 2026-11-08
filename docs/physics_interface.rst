@@ -96,8 +96,11 @@ Its constructor takes the spec alongside the config and grid:
        : AutodiffTransportSystem(config, grid, buildSpec(config)) {}
 
 ``Flux`` returns :math:`\hat\sigma_i` — the physical flux, exactly what
-``SigmaFn`` would return. The sign convention discussed in
-:ref:`the formulation <sign-convention>` is applied by the solver, not by you.
+``SigmaFn`` would return — and the ``sigma`` that ``Source`` and the auxiliary
+``GFunc`` are handed is that same physical flux, one entry per variable. The
+sign convention discussed in :ref:`the formulation <sign-convention>` is applied
+by the layer, not by you: the solver stores :math:`-\hat\sigma`, and the layer
+negates it on the way in and negates the derivative it takes on the way out.
 
 An ``[AutodiffTransportSystem]`` config section may set ``isUpperDirichlet`` /
 ``isLowerDirichlet``, which are applied to every variable; a case that declares

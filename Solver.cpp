@@ -269,7 +269,7 @@ void SystemSolver::initialize()
 
 		fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
 									   Vector(yJac.getField()), Vector(dydtJac.getField()),
-									   yJac.evalOnNodes(), yJac.getPoints(),
+									   fieldStatesAt(yJac, dydtJac), yJac.getPoints(),
 									   integrator.integrationWeights(yJac.getBasis(), grid),
 									   t0);
 
@@ -1496,14 +1496,10 @@ void SystemSolver::runAdjointSolve()
 	// here: the adjoint fills geometry before it evaluates anything
 	// (physicsNodesAt), assembleAdjointOperator stores A1^T and A2^T beside M^T,
 	// and solveAdjointState eliminates them exactly (FieldSolve = exact) or
-	// sweeps to a checked backward error that *throws* if it is not reached.
-	//
-	// Two limits survive the lifting and are deliberate rather than overlooked.
-	// An objective whose integrand reads State::geom directly loses its dG/dpsi
-	// term, because AdjointProblem reports four state derivatives and geometry
-	// is not among them; and a FieldModel cannot depend on an adjoint parameter
-	// at all, so dR/dp is zero by construction rather than by assumption. Both
-	// are recorded in SystemSolver.hpp beside G_field and in TODO.
+	// sweeps to a checked backward error that *throws* if it is not reached. An
+	// objective reading the geometry reaches dG/dpsi through dg's geometry rows,
+	// and a field row reading a parameter reaches dG/dp through the adjoint
+	// problem's dFieldResidual_dp.
 
 	if (solveAdjoint)
 	{

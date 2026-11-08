@@ -173,15 +173,17 @@ The hooks
        quadrature weight per node — so :math:`\int f \, \mathrm{d}x` is
        ``weights.dot(f_at_nodes)``. **Use those weights rather than a rule of
        your own**; see the same warning for ``ScalarG`` in
-       :doc:`physics_interface`.
+       :doc:`physics_interface`. A row that reads :math:`\partial u/\partial t`
+       declares ``readsTransportTimeDerivatives`` in its spec and reads it as
+       ``states[j].udot(v)``; see below.
    * - ``Geometry``
      - The metric at one point, length ``nGeometry``, arriving zeroed.
    * - ``dGeometry_dpsi``
      - Shape ``(nGeometry, nFieldDOF)``, arriving zeroed.
    * - ``FieldResidualPrime``
      - Every field row's derivative at once, in the shape ``ScalarGPrime`` uses:
-       ``dR`` against the transport DOFs, ``dRdpsi`` and ``dRddpsidt`` against
-       the model's own block. Reporting every row at once is deliberate — it is
+       ``dR`` against the transport DOFs, ``dRdot`` against their time
+       derivatives, ``dRdpsi`` and ``dRddpsidt`` against the model's own block. Reporting every row at once is deliberate — it is
        what lets a model that solves a coupled system internally do so once.
    * - ``InitialFieldValue``
      - The starting guess for psi. Not called on a restart, where psi is resumed
@@ -197,18 +199,34 @@ block overrides all four**, and that is the seam a real Grad–Shafranov solver
 plugs into: MaNTA never needs :math:`B` itself, only the ability to apply and
 invert it in both directions.
 
+A field row that reads the transport time derivatives
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A row may depend on :math:`\partial u/\partial t`, as a transport source may.
+The model declares it in its spec, ``readsTransportTimeDerivatives = true``, and
+then every ``GlobalState`` the solver hands it — to ``FieldResidual``,
+``FieldResidualPrime``, ``dFieldResidual_dt`` and an adjoint problem's
+``dFieldResidual_dp`` — carries :math:`\partial u/\partial t` at the nodes,
+read pointwise as ``states[j].udot(v)``. Undeclared, the states carry none and
+``udot`` reads zero. Only :math:`u`'s derivative is available, for the reason
+the transport sources give: :math:`u` is the only transport quantity IDA treats
+as differential.
+
+The derivative goes in ``dRdot[f].Variable()``, and the coupling weights it by
+:math:`\alpha` — so it is invisible to a Jacobian check at :math:`\alpha = 0`,
+and to the adjoint, which is built there. Such a field is not a function of the
+transport state, so it runs coupled: ``FieldCoupling = "auto"`` couples it, and
+``"consistent"`` and ``"reduced"`` refuse it, as they refuse a differential
+field unknown.
+
 Two things a model author is likely to get wrong
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**``dRdot`` cannot be filled today, and leaving it zero is correct.**
-``FieldResidual`` receives ``states`` and no ``states_dot`` — unlike
-``ScalarG``, which takes both — so a field row has no way to depend on the
-transport time derivatives in the first place. The slot exists because the
-coupling assembly already weights it by :math:`\alpha`. What you must **not** do
-on finding it unfillable is put :math:`\partial R/\partial\dot\psi` there
-instead; that belongs in ``dRddpsidt``, and written into ``dRdot`` it lands in
-the coupling row at the wrong degrees of freedom entirely, with nothing to say
-so.
+**:math:`\partial R/\partial\dot\psi` goes in ``dRddpsidt``, never in
+``dRdot``.** ``dRdot`` is the derivative in the *transport* time derivatives;
+written there, a derivative in the field's own lands in the coupling row at the
+wrong degrees of freedom entirely, with nothing to say so — the coupling row is
+only ever applied, never assembled or printed.
 
 **``resetForRun`` is not optional if the model caches anything.**
 ``SystemSolver::initialize`` skips ``initialiseMatrices`` when the solver has
@@ -527,9 +545,16 @@ fill their geometry rows. The objective estimate and the ``"Objective"`` steady
 test carry :math:`G_\psi \cdot \delta\psi` beside the cells' and the
 scalars' shares.
 
-One limit is structural rather than untested: **a field model cannot depend on
-an adjoint parameter**, so :math:`\partial R/\partial p` is zero because there
-is no hook a model could fill. It is recorded in ``TODO``.
+**A field row may read a parameter** — a coil current, a boundary flux — and
+the adjoint problem says so with ``dFieldResidual_dp(f, psi, dpsidt, states,
+points, weights, t)``, taking ``FieldResidual``'s arguments and shaped as
+``dScalarG_dp``: ``(np, 1)``, or ``(np, nPoints)`` with spatial parameters. The
+gradient gains :math:`-z_{\psi,f}\, \partial R_f/\partial p`. The default is
+an empty matrix, meaning the rows read no parameter: a ``FieldModel`` has no
+parameters of its own, so the adjoint problem that knows which of its parameters
+the model holds is the one place that can report the derivative. One that does
+not report it gets zero for a parameter only the field rows read, beside a
+correct :math:`G`.
 
 .. _field-tier-0:
 
