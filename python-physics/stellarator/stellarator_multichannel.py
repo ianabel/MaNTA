@@ -354,28 +354,6 @@ vmap_axes_itg_geometry = (None, 0, State.vmap_axes(), 0, 0, 0, None, None)
 vmap_axes = (State.vmap_axes(), 0)
 vmap_axes_wfield = (State.vmap_axes(), 0, None, 0, 0, 0, None, None, None, None)
 vmap_axes_sources = (State.vmap_axes(), 0, None, 0, 0, 0, None)
-shard_map_specs = (
-    P(
-        "axis",
-    ),
-    P(
-        "axis",
-    ),
-    P(),
-    P(
-        "axis",
-    ),
-    P(
-        "axis",
-    ),
-    P(
-        "axis",
-    ),
-    P(),
-    P(),
-    P(),
-    P(),
-)
 """
 class StellaratorTransport
 
@@ -485,6 +463,52 @@ def report_memory(tag):
         + "  ".join(cards),
         flush=True,
     )
+
+
+def lineax_ignores_sharding():
+    """Make lineax compare array structures by shape and dtype alone.
+
+    Needed for useShardMap. yancc's operators declare their structures as
+    bare `jax.ShapeDtypeStruct(shape, dtype)`, with no sharding. Inside
+    jax.shard_map every traced array's shape carries the Manual mesh it is
+    traced over, and lineax compares shardings along with shapes and dtypes
+    (`strip_weak_dtype` keeps them), so the first `IdentityLinearOperator.mv`
+    of a Krylov solve raises "Vector and operator structures do not match"
+    while tracing. Under a plain jit neither side has a sharding, which is
+    why only shard_map ever saw it. Shapes and dtypes are still compared.
+
+    Measured on jax 0.9.2 / lineax 0.1.0. Process-wide, idempotent, and
+    refuses by name if a lineax lacks the function it replaces, rather than
+    leaving the original failure to surface mid-trace. The real fix is
+    upstream, in either yancc (structures from the arrays it holds) or
+    lineax (shardings ignored, or None matching any).
+    """
+    import lineax._misc
+    import lineax._operator
+    import lineax._solve
+    import lineax._solver.misc
+
+    if getattr(lineax._misc, "_manta_ignores_sharding", False):
+        return
+    modules = (lineax._misc, lineax._operator, lineax._solve, lineax._solver.misc)
+    missing = [m.__name__ for m in modules if not hasattr(m, "strip_weak_dtype")]
+    if missing:
+        raise RuntimeError(
+            f"useShardMap: this lineax has no strip_weak_dtype in {missing}, so "
+            "its structure comparison cannot be relaxed; see lineax_ignores_sharding"
+        )
+
+    def strip(tree):
+        return jax.tree.map(
+            lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype)
+            if type(x) is jax.ShapeDtypeStruct
+            else x,
+            tree,
+        )
+
+    for m in modules:
+        m.strip_weak_dtype = strip
+    lineax._misc._manta_ignores_sharding = True
 
 
 def check_batch_size(batch_size, use_batching, ndevices=None):
@@ -609,6 +633,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         MaNTA.TransportSystem.__init__(self, buildSpec(self.params))
         self.batch_size = self.params.config.batch_size
         check_batch_size(self.batch_size, self.params.config.useBatching)
+        if self.params.config.useShardMap:
+            lineax_ignores_sharding()
 
         self.yancc_wrapper = yancc_wrapper
         self.points = MaNTA.getNodes(
@@ -1193,6 +1219,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 nchunks=rounds,
                 sharding=data_sharding,
                 has_carry=True,
+                use_shard_map=self.params.config.useShardMap,
             )(states, positions, t, fields, vp, vpp, *args, f1)
         else:
             out = vmap_batched(
@@ -1201,6 +1228,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 chunk_size=self.batch_size,
                 nchunks=rounds,
                 sharding=data_sharding,
+                use_shard_map=self.params.config.useShardMap,
             )(states, positions, t, fields, vp, vpp, *args)
 
         self.rounds += rounds
@@ -1380,6 +1408,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
             chunk_size=self.batch_size,
             nchunks=nchunks,
             sharding=data_sharding,
+            use_shard_map=self.params.config.useShardMap,
         )(
             states,
             positions,
@@ -1423,6 +1452,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
                 chunk_size=self.batch_size,
                 nchunks=nchunks,
                 sharding=data_sharding,
+                use_shard_map=self.params.config.useShardMap,
             )(
                 self.itg,
                 self.itg_geometry,

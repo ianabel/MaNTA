@@ -40,6 +40,17 @@ class StellaratorConfig(eqx.Module):
     # Newton or the steady-state test notice. Static: it changes what is
     # traced.
     reuseF1: bool = eqx.field(static=True)
+    # Run each round of a batched evaluation under jax.shard_map, so every
+    # device vmaps its own slice of the batch. Without it the round is one
+    # program over the sharded batch, and the drift-kinetic solve's while
+    # loops stop only when every point on every device has converged -- an
+    # all-reduce per iteration, which across nodes is a network round trip
+    # per Krylov or multigrid sweep. Same answer to round-off (1e-11 on real
+    # yancc at a tiny resolution), except that under reuseF1 a warm-started
+    # solve may stop elsewhere inside its tolerance (4.7e-2 measured on the
+    # jacobian); see reuseF1. Turns on lineax_ignores_sharding. Static, since
+    # it changes what is traced.
+    useShardMap: bool = eqx.field(static=True)
     # How Er is determined with evolveDensity on. "Algebraic": an aux variable
     # pinned at every node by ambipolarity, J(Er) = 0. "Diffusive": a fourth
     # transported variable, V' Er, obeying
@@ -79,6 +90,7 @@ class StellaratorConfig(eqx.Module):
         nchunks=2,
         adaptiveGrid=False,
         reuseF1=False,
+        useShardMap=False,
         ErModel="Algebraic",
         ErDiffusion=0.0,
         ErInertia=1.0,
@@ -118,6 +130,7 @@ class StellaratorConfig(eqx.Module):
         self.nchunks = nchunks
         self.adaptiveGrid = adaptiveGrid
         self.reuseF1 = bool(reuseF1)
+        self.useShardMap = bool(useShardMap)
 
         if ErModel not in ("Algebraic", "Diffusive"):
             raise ValueError(
