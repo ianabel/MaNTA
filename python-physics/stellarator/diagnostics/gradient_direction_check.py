@@ -29,15 +29,31 @@ one optimizer iteration. Run it where the optimisation runs.
         --restart ../paper/stellarator_opteq8.restart.nc \\
         --low 45,7,17,27 --high 121,7,33,53 --out graddir
 
-Results go to <out>_<res>.npz (one per resolution, reused if present unless
---recompute) and <out>.json (the comparison). The physics and solver
+--refine tests a cheaper route to the high-resolution answer: converge at
+the low resolution, then restart the high resolution from that state with
+Newton only (the driver's restart settings), and take the gradient there.
+It adds that run ("refined") and reports, for every run, each steady solve's
+steps and outcome (read from MaNTA's own output, kept in <out>_<run>.log),
+the yancc residual and Jacobian evaluations, and wall time -- and compares the
+refined gradient with the full high-resolution one, which should agree when
+both converged to the same state. --skip-full leaves the full run out, to
+see the cost of refining alone.
+
+    python gradient_direction_check.py --eq ... --restart ... \\
+        --low 45,7,17,27 --high 121,7,17,27 --refine --out refine
+
+Results go to <out>_<run>.npz (one per run, reused if present unless
+--recompute) and <out>.json (the comparisons). The physics and solver
 settings below are the driver's; keep them in step with it.
 """
 
 import argparse
+import contextlib
 import json
 import os
+import re
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -119,8 +135,9 @@ def parse_res(text):
     return na, nx, nt, nz
 
 
-def jacobian_at(res, args, eq, V0, nodes):
-    """(f, J, x_scale, G, names) of the projected, scaled problem at `res`."""
+def jacobian_at(res, args, eq, V0, nodes, restart, name):
+    """(f, J, x_scale, G, names) of the projected, scaled problem at `res`,
+    MaNTA starting from `restart` (cold if None) and writing `name`.*"""
     import jax
     import jax.numpy as jnp
     import desc
@@ -140,14 +157,13 @@ def jacobian_at(res, args, eq, V0, nodes):
     from objective import ObjectiveFromUserWithParams, make_objective
 
     na, nx, nt, nz = res
-    tag = f"{na}_{nx}_{nt}_{nz}"
     points = MaNTA.getNodes(nodes, DEGREE)
     rho = jnp.array(points)
     st_config = make_config(args.Spi, args.Sn)
     normalization = {"n0": 1e19, **field_norm_from_eq(eq)}
     config = {
         "Stellarator": st_config,
-        "Solver": solver_config(f"{args.out}_{tag}", nodes, args.restart),
+        "Solver": solver_config(name, nodes, restart),
         "Normalization": normalization,
     }
     manta_objective = make_objective(config, yancc_res={"na": na, "nx": nx},
@@ -237,6 +253,52 @@ def jacobian_at(res, args, eq, V0, nodes):
                 term_dims=np.array(dims), term_names=np.array(names), x0=np.asarray(x0))
 
 
+@contextlib.contextmanager
+def captured(path):
+    """Send this process's stdout and stderr -- MaNTA's C++ output included,
+    which bypasses sys.stdout -- to `path` for the duration."""
+    import ctypes
+
+    # C stdio buffers a redirected stdout in full and flushes it at exit, by
+    # which time it would land on the console again: flush it at both ends
+    libc = ctypes.CDLL(None)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    libc.fflush(None)
+    saved = os.dup(1), os.dup(2)
+    with open(path, "w") as fh:
+        os.dup2(fh.fileno(), 1)
+        os.dup2(fh.fileno(), 2)
+        try:
+            yield
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            libc.fflush(None)
+            os.dup2(saved[0], 1)
+            os.dup2(saved[1], 2)
+            os.close(saved[0])
+            os.close(saved[1])
+
+
+def solver_stats(log):
+    """The steady solves in a captured MaNTA log, in order: the primal first,
+    then the gradient run's (a restart that is already converged)."""
+    solves = []
+    for block in log.split("Steady solve:")[1:]:
+        lines = [line.strip() for line in block.splitlines()]
+        steps = re.search(r"after (\d+) steps", block)
+        outcome = next((line for line in lines[1:] if any(
+            w in line for w in ("converged", "nothing to do", "fail", "Fail", "out of",
+                                "Stalled", "rror"))), "?")
+        solves.append({
+            "solver": lines[0],
+            "outcome": outcome,
+            "steps": int(steps.group(1)) if steps else (0 if "nothing to do" in block else None),
+        })
+    return solves
+
+
 def cosine(a, b):
     na, nb = np.linalg.norm(a), np.linalg.norm(b)
     return float(a @ b / (na * nb)) if na and nb else float("nan")
@@ -305,8 +367,15 @@ def main():
                    help="keep the file's pressure profile; the driver resets it to zero")
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--recompute", action="store_true")
+    p.add_argument("--refine", action="store_true",
+                   help="also restart the high resolution from the low one's converged "
+                        "state with Newton, and compare")
+    p.add_argument("--skip-full", action="store_true",
+                   help="with --refine, leave out the full high-resolution run")
     p.add_argument("--out", default="graddir")
     args = p.parse_args()
+    if args.skip_full and not args.refine:
+        sys.exit("--skip-full needs --refine: there would be nothing to compare")
 
     if args.restart:
         args.restart = os.path.abspath(args.restart)
@@ -327,48 +396,99 @@ def main():
         pressure_rho = jnp.concatenate([jnp.zeros(1), rho, jnp.ones(1)])
         eq.pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 
+    def tag(res):
+        return "_".join(map(str, res))
+
+    low_name = f"{args.out}_{tag(args.low)}"
+    runs = [("low", args.low, args.restart, low_name)]
+    if args.refine:
+        # the low run's converged steady state: its primal's restart file
+        runs.append(("refined", args.high, os.path.abspath(low_name + ".restart.nc"),
+                     f"{args.out}_{tag(args.high)}_refined"))
+    if not args.skip_full:
+        runs.append(("high", args.high, args.restart, f"{args.out}_{tag(args.high)}"))
+
     results = {}
-    for label, res in (("low", args.low), ("high", args.high)):
-        path = f"{args.out}_{'_'.join(map(str, res))}.npz"
+    for label, res, restart, name in runs:
+        path = name + ".npz"
         if os.path.isfile(path) and not args.recompute:
             print(f"{label} {res}: reusing {path}", flush=True)
-            results[label] = dict(np.load(path))
+            results[label] = dict(np.load(path, allow_pickle=True))
             continue
-        print(f"{label} {res}: building the projected objective and its Jacobian",
-              flush=True)
-        r = jacobian_at(res, args, eq, V0, nodes)
+        if restart is not None and not os.path.isfile(restart):
+            sys.exit(f"{label}: no restart file {restart} (rerun the low resolution "
+                     "with --recompute if only its .npz survived)")
+        print(f"{label} {res}: from {restart or 'a cold start'}; MaNTA output in "
+              f"{name}.log", flush=True)
+        from stellarator_multichannel import StellaratorTransport
+
+        counts0 = dict(StellaratorTransport.evaluation_counts)
+        t0 = time.time()
+        with captured(name + ".log"):
+            r = jacobian_at(res, args, eq, V0, nodes, restart, name)
+        r["wall_seconds"] = np.array(time.time() - t0)
+        r["evaluations"] = np.array([
+            StellaratorTransport.evaluation_counts[k] - counts0[k]
+            for k in ("ComputePhysics", "ComputePhysicsDerivatives")])
+        r["stats"] = np.array(json.dumps(solver_stats(open(name + ".log").read())))
         np.savez(path, **r)
         results[label] = r
 
-    for k in ("x0", "x_scale"):
-        if not np.allclose(results["low"][k], results["high"][k]):
-            sys.exit(f"{k} differs between the resolutions: not the same point")
-    cmp = compare(results["low"], results["high"], args.top)
-    cmp["resolutions"] = {"low": list(args.low), "high": list(args.high)}
-    with open(args.out + ".json", "w") as fh:
-        json.dump(cmp, fh, indent=1)
+    for label, r in results.items():
+        if not (np.allclose(r["x0"], results["low"]["x0"])
+                and np.allclose(r["x_scale"], results["low"]["x_scale"])):
+            sys.exit(f"x0 or x_scale differs between low and {label}: not the same point")
 
-    print(f"\nlow {args.low}  vs  high {args.high}   ({results['low']['J'].shape[1]} "
-          f"free parameters after the projections)")
-    print(f"  G: low {cmp['G']['low']}  high {cmp['G']['high']}")
+    pairs = [(a, b) for a, b in (("low", "high"), ("refined", "high"), ("low", "refined"))
+             if a in results and b in results]
+    report = {"resolutions": {"low": list(args.low), "high": list(args.high)},
+              "runs": {}, "comparisons": {}}
+    print(f"\n{results['low']['J'].shape[1]} free parameters after the projections")
+    print(f"\n{'run':8s} {'G':>12s} {'wall':>8s}   steady solves (primal first)")
+    for label, r in results.items():
+        stats = json.loads(str(r["stats"]))
+        n_res, n_jac = (int(v) for v in r["evaluations"])
+        report["runs"][label] = {"G": np.ravel(r["G"]).tolist(),
+                                 "wall_seconds": float(r["wall_seconds"]),
+                                 "yancc_residual_evaluations": n_res,
+                                 "yancc_jacobian_evaluations": n_jac,
+                                 "steady_solves": stats}
+        G = np.ravel(r["G"])
+        print(f"{label:8s} {G[0] if G.size else float('nan'):12.6g} "
+              f"{float(r['wall_seconds']):7.0f}s   yancc evaluations: {n_res} residual, "
+              f"{n_jac} Jacobian (forward Jacobian only; the adjoint's are separate)")
+        for st in stats:
+            print(f"           {st['solver'][:60]:60s}  steps {st['steps']}"
+                  f"  | {st['outcome'][:50]}")
+    for a, b in pairs:
+        cmp = compare(results[a], results[b], args.top)
+        report["comparisons"][f"{a}_vs_{b}"] = cmp
+        print_comparison(a, b, cmp)
+    with open(args.out + ".json", "w") as fh:
+        json.dump(report, fh, indent=1)
+    print(f"\nwrote {args.out}.json")
+
+
+def print_comparison(a, b, cmp):
+    print(f"\n{a} vs {b} ({b} as the reference)")
+    print(f"  G: {a} {cmp['G']['low']}  {b} {cmp['G']['high']}")
     m = cmp["manta_term_gradient_scaled"]
     print(f"  MaNTA-term gradient (scaled):  cos = {m['cosine']:+.4f}   "
-          f"low-res descent is descent for high-res: {m['low_is_descent_for_high']}")
+          f"{a}'s descent is descent for {b}: {m['low_is_descent_for_high']}")
     for space in ("scaled", "unscaled"):
         g = cmp[f"gradient_{space}"]
         print(f"  full gradient ({space:8s}):     cos = {g['cosine']:+.4f}   "
-              f"|g_lo|/|g_hi| = {g['norm_ratio_low_over_high']:.3f}")
+              f"|g_{a}|/|g_{b}| = {g['norm_ratio_low_over_high']:.3f}")
     gn = cmp["gauss_newton_step_scaled"]
-    print(f"  Gauss-Newton step (scaled):    cos = {gn['cosine']:+.4f}   d(0.5|f_hi|^2) "
-          f"along low step {gn['high_objective_change_along_low_step']:+.3e}, along own "
-          f"{gn['high_objective_change_along_high_step']:+.3e}")
-    print(f"  sign agreement, weighted by |g_hi|: "
+    print(f"  Gauss-Newton step (scaled):    cos = {gn['cosine']:+.4f}   d(0.5|f_{b}|^2) "
+          f"along {a}'s step {gn['high_objective_change_along_low_step']:+.3e}, along "
+          f"its own {gn['high_objective_change_along_high_step']:+.3e}")
+    print(f"  sign agreement, weighted by |g_{b}|: "
           f"{cmp['sign_agreement_weighted_by_high']:.1%}")
-    print("  largest high-res MaNTA-gradient components:")
+    print(f"  largest {b} MaNTA-gradient components:")
     for t in cmp["top_parameters"]:
-        print(f"    [{t['index']:4d}]  high {t['high']:+.3e}  low {t['low']:+.3e}"
+        print(f"    [{t['index']:4d}]  {b} {t['high']:+.3e}  {a} {t['low']:+.3e}"
               f"{'' if t['same_sign'] else '   <-- sign differs'}")
-    print(f"\nwrote {args.out}.json")
 
 
 if __name__ == "__main__":

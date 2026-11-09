@@ -1020,8 +1020,13 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def InitialAuxValue(self, index, x):
         return 0.0
 
+    # yancc evaluations made by every instance in this process, by hook: what a
+    # steady solve costs, counted where it is spent (diagnostics read it)
+    evaluation_counts = {"ComputePhysics": 0, "ComputePhysicsDerivatives": 0}
+
     @Physics_Decorator
     def ComputePhysics(self, states, positions, t):
+        StellaratorTransport.evaluation_counts["ComputePhysics"] += 1
 
         warm = self.params.config.reuseF1
         dke_data = self._evaluate(
@@ -1049,6 +1054,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
     @Physics_Decorator
     def ComputePhysicsDerivatives(self, states, positions, t):
+        StellaratorTransport.evaluation_counts["ComputePhysicsDerivatives"] += 1
 
         warm = self.params.config.reuseF1
         ddke_data = self._evaluate(
