@@ -409,6 +409,40 @@ CHECK_PROCESSES_AGREE = (
 )
 
 
+# STELLARATOR_MEMORY_REPORT=1: every process prints, for each of its own GPUs,
+# the bytes in use and the peak so far, at each physics evaluation. The peak
+# only ever rises, so the line at which a card's peak jumps names the phase
+# that raised it; the first line (prepareEvaluation) carries whatever DESC and
+# the field build reached before MaNTA asked for any physics. Printed from the
+# physics hooks because those run eagerly -- a print in objective.py would run
+# once, when DESC traces it.
+MEMORY_REPORT = os.environ.get("STELLARATOR_MEMORY_REPORT") == "1"
+
+
+def report_memory(tag):
+    if not MEMORY_REPORT:
+        return
+    # what live jax.Arrays hold on each local device: the allocator's in-use
+    # figure less scratch and caches, and the only number a CPU device has
+    live = {}
+    for a in jax.live_arrays():
+        for shard in a.addressable_shards:
+            live[shard.device.id] = live.get(shard.device.id, 0) + shard.data.nbytes
+    cards = []
+    for d in jax.local_devices():
+        stats = d.memory_stats() or {}  # None on CPU
+        cards.append(
+            f"{d.id}:{live.get(d.id, 0) / 1e9:6.3f}"
+            f"|{stats.get('bytes_in_use', 0) / 1e9:6.2f}"
+            f"/{stats.get('peak_bytes_in_use', 0) / 1e9:6.2f}"
+        )
+    print(
+        f"[mem p{jax.process_index()}] {tag:<34} device:live|in_use/peak GB  "
+        + "  ".join(cards),
+        flush=True,
+    )
+
+
 def check_batch_size(batch_size, use_batching, ndevices=None):
     """Refuse a batch_size the device mesh cannot split evenly.
 
@@ -1029,6 +1063,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             )
 
         self.levels.append((plan.grid.getNCells(), plan.k))
+        report_memory(f"prepareEvaluation k={plan.k}")
 
     def _evaluate(self, func, _states, _positions, t, vmap_axes, *args):
         """
@@ -1074,6 +1109,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         )(states, positions, t, fields, vp, vpp, *args)
 
         self.rounds += rounds
+        report_memory(f"{getattr(func, '__name__', type(func).__name__)} m={m}")
         return _unpad_state(out, m)
 
     """
@@ -1261,6 +1297,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
             self.params,
             self.params.config.evolveDensity,
         )
+        report_memory(f"adjoint flux jacobian m={self.npoints}")
 
         tree_in = (self.field, self.vp, self.vpp)
 
@@ -1274,6 +1311,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
                 eqx.filter_jacrev(sources), in_axes=(0, State.vmap_axes(), 0)
             )
         )(tree_in, states, positions)
+        report_memory(f"adjoint sources jacobian m={self.npoints}")
 
         def unravel(grad_out):
 
