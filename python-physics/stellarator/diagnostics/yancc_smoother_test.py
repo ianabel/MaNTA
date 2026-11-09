@@ -11,7 +11,10 @@ The plasma is the state stellarator_opteq5_acc stalled at, at the node
 rho = 0.48678 (n0 = 1e19 m^-3, T0 = 1 keV); the second node reuses it with its
 own field. Only yancc, DESC and jax are needed, not MaNTA.
 
-    python yancc_smoother_test.py paper/eq5_all_equilibria.h5
+The equilibrium path is relative to the directory you run from, so from this
+one (the .h5 is gitignored, so copy it to a new machine by hand):
+
+    python yancc_smoother_test.py ../paper/eq5_all_equilibria.h5
     python yancc_smoother_test.py eq.h5 --smoothers dense,banded --rtol 1e-3 \
         --grids 3 --npoints 2 --repeat 3
 
@@ -109,6 +112,13 @@ def main():
     p.add_argument("--verbose", type=int, default=0, help="yancc's verbose")
     p.add_argument("--worker", help=argparse.SUPPRESS)
     args = p.parse_args()
+    # absolute, so the message below names the file actually looked for
+    args.eq = os.path.abspath(args.eq)
+    if not os.path.isfile(args.eq):
+        sys.exit(
+            f"no equilibrium file at {args.eq}: the path is taken relative to "
+            f"the directory you run from ({os.getcwd()}), not to this script"
+        )
 
     if args.worker is not None:
         return worker(args)
