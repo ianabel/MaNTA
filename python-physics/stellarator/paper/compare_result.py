@@ -3,7 +3,7 @@ from netCDF4 import Dataset
 import numpy as np
 import desc.io
 
-plt.rcParams.update({"font.family": "serif", "font.size": 10})
+plt.rcParams.update({"font.family": "serif", "font.size": 8})
 
 import os
 
@@ -34,35 +34,38 @@ def load(eq, fname):
     return x, n, Ti, Te, Er[-1, :]
 
 
-_eqs = desc.io.load("eq_amb5_all_equilibria.h5")
+_eqA = desc.io.load("eq6_all_equilibria.h5")
+_eqB = desc.io.load("eq7_all_equilibria.h5")
 
-fs = ["stellarator_opt0.nc", "stellarator_opt.nc"]
-eqs = [_eqs[0], _eqs[-1]]
+fs = ["stellarator_opteq6.nc", "stellarator_opteq7.nc"]
+eqs = [_eqA[-1], _eqB[-1]]
 linspecs = ["--", ""]
-fig, ax = plt.subplots(1, 3, constrained_layout=True)
+fig, ax = plt.subplots(1, 3, figsize=(5.0, 2.0), constrained_layout=True)
+names = ["A", "B"]
+colors = ["r", "b"]
 
 for i in range(0, len(fs)):
     x, n, Ti, Te, Er = load(eqs[i], fs[i])
-    ax[0].plot(x, n, "r" + linspecs[i], label="Final", linewidth=1.5)
+    ax[0].plot(x, n * 0.1, colors[i], label=names[i], linewidth=1.5)
     ax[0].set_xlabel(r"$\rho$")
 
     ax[0].set_ylabel(r"n $(10^{20} m^{-3})$")
     ax[0].set_box_aspect(1)
 
-    ax[1].plot(x, Ti, "r" + linspecs[i], label=r"$T_i$", linewidth=1.5)
-    ax[1].plot(x, Te, "b" + linspecs[i], label=r"$T_e$", linewidth=1.5)
+    ax[1].plot(x, Ti, colors[i] + linspecs[0], label=fr"$T_i$, {names[i]}", linewidth=1.5)
+    ax[1].plot(x, Te, colors[i] + linspecs[1], label=fr"$T_e$, {names[i]}", linewidth=1.5)
     ax[1].set_xlabel(r"$\rho$")
     ax[1].set_ylabel("T (keV)")
-    ax[1].legend()
     ax[1].set_box_aspect(1)
 
-    ax[2].plot(x, Er, "r" + linspecs[i], linewidth=1.5)
+    ax[2].plot(x, Er, colors[i], label = names[i], linewidth=1.5)
     ax[2].set_xlabel(r"$\rho$")
     ax[2].set_ylabel("Er (kV/m)")
     ax[2].set_box_aspect(1)
+ax[0].legend()
+ax[1].legend()
+ax[2].legend()
+ax[2].set_ylim(bottom=-100)
 fig.suptitle("Profiles from optimized stellarator")
-fig.set_figwidth(5.5)
-fig.set_figheight(3.0)
-fig.tight_layout()
-fig.savefig("figs/optimized_profiles.pdf", dpi=500, bbox_inches="tight")
+fig.savefig("figs/optimized_profiles.pdf", dpi=500)
 plt.show()

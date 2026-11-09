@@ -26,10 +26,13 @@ python-examples/.ipynb_checkpoints/
 python-examples/*/.ipynb_checkpoints/
 python-physics/.ipynb_checkpoints/
 python-physics/*/.ipynb_checkpoints/
+python-physics/*/.ipynb_checkpoints/
+.ipynb_checkpoints/
 python/random/
 .clangd
 .clang-format
 compile_commands.json
+*.npy
 *.png
 *.eps
 tags

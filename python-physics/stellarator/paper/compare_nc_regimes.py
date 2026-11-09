@@ -46,6 +46,7 @@ manta_runs = {
     "A": ("stellarator_opteq6.nc", eqs_high[0], {"n0": 1e19, "T0": 1000.0}),
     "B": ("stellarator_opteq7.nc", eqs_low[0], {"n0": 1e19, "T0": 1000.0}),
 }
+plot_single_row = True
 
 
 def manta_local_state(nc_file, eq, rho, normalization):
@@ -143,12 +144,19 @@ colors = ["r", "b", "g", "c", "m"]
 
 plt.rcParams.update({"font.family": "serif", "font.size": 10})
 
-fig = plt.figure(figsize=(5, 2.5 * len(rhos)), layout="constrained")
-subfigs = fig.subfigures(len(rhos), 1, wspace=0, hspace=0.1)
+if plot_single_row:
+    fig = plt.figure(figsize=(10.0, 4.0), layout="constrained")
+else:
+    fig = plt.figure(figsize=(5, 2.5 * len(rhos)), layout="constrained")
+    subfigs = fig.subfigures(len(rhos), 1, wspace=0, hspace=0.1)
 
+if plot_single_row:
+    axs = fig.subplots(1, 3, sharex=True)
 for rho, i in zip(rhos, range(0, len(rhos))):
     print(f"Solving at rho={rho}")
-    axs = subfigs[i].subplots(1, 2, sharex=True)
+    if not plot_single_row:
+        axs = subfigs[i].subplots(1, 2, sharex=True)
+
     for e, n, c in zip(eqs, names, colors):
         print(f"Solving mdke for {n}")
         field = Field.from_desc(e, rho, 25, 47)
@@ -169,23 +177,36 @@ for rho, i in zip(rhos, range(0, len(rhos))):
             d11, d31 = fun(nuhats, field, [local], Erho)
         else:
             d11, d31 = fun(nuhats, field, species, -1e3)
-        axs[0].loglog(nuhats, d11, label=n, color=c)
-        axs[1].loglog(nuhats, jnp.abs(d31), label=n, color=c)
+        if plot_single_row:
+            axs[i].loglog(nuhats, d11, label=n, color=c)
+        else:
+            axs[0].loglog(nuhats, d11, label=n, color=c)
+            axs[1].loglog(nuhats, jnp.abs(d31), label=n, color=c)
         if local is not None:
             nustar = _nustar(local, field, 1.0)
-            axs[0].axvline(nustar, color=c, linestyle="--")
-            axs[1].axvline(nustar, color=c, linestyle="--")
+            if plot_single_row:
+                axs[i].axvline(nustar, color=c, linestyle="--")
+            else:
+                axs[0].axvline(nustar, color=c, linestyle="--")
+                axs[1].axvline(nustar, color=c, linestyle="--")
 
-    subfigs[i].suptitle(rf"$\rho={rho}$", x=0.5, fontsize=10)
-    axs[0].set_ylabel(r"$\hat{D}_{11}$")
-    axs[1].set_ylabel(r"$|\hat{D}_{31}|$")
-    for a in axs:
-        a.legend()
-        a.set_box_aspect(1)
+    if plot_single_row:
+        axs[i].set_xlabel(r"$\nu^*$")
+        axs[i].set_ylabel(r"$\hat{D}_{11}$")
+        axs[i].legend()
+        axs[i].set_box_aspect(1)
+        axs[i].set_title(rf"$\rho={rho}$", x=0.5, fontsize=10)
+    else:
+        subfigs[i].suptitle(rf"$\rho={rho}$", x=0.5, fontsize=10)
+        axs[0].set_ylabel(r"$\hat{D}_{11}$")
+        axs[1].set_ylabel(r"$|\hat{D}_{31}|$")
+        for a in axs:
+            a.legend()
+            a.set_box_aspect(1)
 
-    if i == len(rhos) - 1:
-        axs[0].set_xlabel(r"$\nu^*$")
-        axs[1].set_xlabel(r"$\nu^*$")
+        if i == len(rhos) - 1:
+            axs[0].set_xlabel(r"$\nu^*$")
+            axs[1].set_xlabel(r"$\nu^*$")
 
 print("done")
 
