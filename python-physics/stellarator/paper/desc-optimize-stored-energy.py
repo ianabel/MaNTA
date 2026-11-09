@@ -43,7 +43,7 @@ import manta as MaNTA
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
-eq_name = "eq6"
+eq_name = "eq8"
 fname = "stellarator_opt" + eq_name
 
 #
@@ -69,7 +69,7 @@ fname = "stellarator_opt" + eq_name
 
 def make_config(Spi=300.0, Sn=1.2):
     return {
-        "ParticleSourceCenter": 0.4,
+        "ParticleSourceCenter": 0.2,
         "ParticleSourceHeight": Sn,
         "ParticleSourceWidth": 0.6,
         "NBICenter": 0.0,
@@ -79,7 +79,7 @@ def make_config(Spi=300.0, Sn=1.2):
         "ECHPower": 0.0,
         "ECHWidth": 0.1,
         "EdgeTemperature": 1.5,
-        "EdgeDensity": 1.0,
+        "EdgeDensity": 0.5,
         "ADCoefficient": 0.0,
         "n0": 3.0,
         "T0": 3.0,
@@ -100,6 +100,7 @@ def make_config(Spi=300.0, Sn=1.2):
         "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
         "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
         "useBatching": True,
+        "batch_size": 16,
         "nchunks": 3,
     }
 
@@ -132,9 +133,9 @@ nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 5
 
 # nodes = np.concatenate(([0, 0.1, 0.15, 0.2, 0.25], nodes, [rho_upper]))
 
-# nodes = np.linspace(0, 0.99 * rho_upper, npoints)
-# nodes = np.concatenate((nodes, [rho_upper]))
-nodes = np.linspace(0, rho_upper, npoints + 1)
+nodes = np.linspace(0.05, 0.99 * rho_upper, npoints - 1)
+nodes = np.concatenate(([0.0], nodes, [rho_upper]))
+# nodes = np.linspace(0, rho_upper, npoints + 1)
 print(nodes)
 # # %%
 solver_config = {
@@ -148,7 +149,7 @@ solver_config = {
     "Relative_tolerance": rtol,
     "Absolute_tolerance": [atol],
     "delta_t": 1.0,
-    "initialTimestep": 1e-2,
+    "initialTimestep": 0.1,
     "MinStepSize": 1e-9,
     "SteadyStateTolerance": 1e-5,
     # "SteadyStateTest": "Residual",  # its tolerance is in ||F||; unverified under NewtonStep
@@ -161,7 +162,7 @@ solver_config = {
     "NewtonJacobianReuse": 4,
     "NewtonMaxIterations": 25,
     "MaxRejectedSteps": 10,
-    "restart": False,
+    "restart": True,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 0.5,
@@ -169,7 +170,7 @@ solver_config = {
 }
 
 
-st_config = make_config()
+st_config = make_config(600, 1.2)
 config = {
     "Stellarator": st_config,
     "Solver": solver_config,
@@ -182,7 +183,7 @@ points = MaNTA.getNodes(
 
 yancc_rho = jnp.array(points)
 yancc_ntheta = 17
-yancc_nzeta = 25
+yancc_nzeta = 27
 
 yancc_res = {"na": 45, "nx": 7}
 
@@ -284,7 +285,7 @@ itg_builder = make_itg_builder(config["Stellarator"], eq_init, rho_upper)
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
 )
-st.run()
+# st.run()
 # Sns = [1.1, 0.9]
 # Spis = [350.0, 400.0]
 
@@ -572,7 +573,7 @@ stored_energy_weight = 20.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 10
+max_it = 5
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -647,8 +648,8 @@ eq, info_out = eq.optimize(
     xtol=1e-5,  # stopping tolerance on the step size
     gtol=1e-6,  # stopping tolerance on the gradient
     # options={
-    #     "max_trust_radius": 1.0,
-    #     # "initial_trust_radius": 0.1,
+    #     # "max_trust_radius": 1.0,
+    #     "initial_trust_radius": 0.01,
     #     # "perturb_options": {"order": 2, "verbose": 3},  # use 2nd-order perturbations
     #     #     # "solve_options": {
     #     #     #     "ftol": 5e-3,
