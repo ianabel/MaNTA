@@ -280,10 +280,16 @@ class SumFlux(eqx.Module):
     neoclassical: Callable = eqx.field(static=True)
     itg: ITGFlux
 
-    def __call__(self, *args):
-        nc_flux, nc_aux = self.neoclassical(*args)
+    def __call__(self, *args, f1=None):
+        # f1, the drift-kinetic warm start, is the neoclassical solve's alone
+        if f1 is None:
+            nc_flux, nc_aux = self.neoclassical(*args)
+            warm = ()
+        else:
+            nc_flux, nc_aux, f1_new = self.neoclassical(*args, f1=f1)
+            warm = (f1_new,)
         itg_flux, _ = self.itg(*args)
-        return [a + b for a, b in zip(nc_flux, itg_flux)], nc_aux
+        return ([a + b for a, b in zip(nc_flux, itg_flux)], nc_aux, *warm)
 
 
 def build_itg_proxy(

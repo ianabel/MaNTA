@@ -30,6 +30,16 @@ class StellaratorConfig(eqx.Module):
     batch_size: int
     nchunks: int
     adaptiveGrid: bool
+    # Start each drift-kinetic solve from the last solution at the same point
+    # instead of from zero. About 3x fewer Krylov iterations for the ~1%
+    # changes of a Newton or late pseudo-time step (measured at 121,7,17,27,
+    # rtol 1e-4). The catch: the solve stops anywhere inside its tolerance,
+    # and where depends on the start, so the flux becomes a function of the
+    # solve history as well as of the state. At rtol 1e-4 that was 2-3% of J,
+    # as much as a 1% change of Er moves it; tighten the yancc tolerance if
+    # Newton or the steady-state test notice. Static: it changes what is
+    # traced.
+    reuseF1: bool = eqx.field(static=True)
     # How Er is determined with evolveDensity on. "Algebraic": an aux variable
     # pinned at every node by ambipolarity, J(Er) = 0. "Diffusive": a fourth
     # transported variable, V' Er, obeying
@@ -68,6 +78,7 @@ class StellaratorConfig(eqx.Module):
         batch_size=16,
         nchunks=2,
         adaptiveGrid=False,
+        reuseF1=False,
         ErModel="Algebraic",
         ErDiffusion=0.0,
         ErInertia=1.0,
@@ -106,6 +117,7 @@ class StellaratorConfig(eqx.Module):
         self.batch_size = batch_size
         self.nchunks = nchunks
         self.adaptiveGrid = adaptiveGrid
+        self.reuseF1 = bool(reuseF1)
 
         if ErModel not in ("Algebraic", "Diffusive"):
             raise ValueError(

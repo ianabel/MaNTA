@@ -41,7 +41,38 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 os.environ["EQX_ON_ERROR"] = "off"
 
+# Several nodes: no GPU autotuning. XLA splits the tuning between processes,
+# and its scratch buffers -- largest for the jacrev through yancc -- stay with
+# the allocator afterwards, so the processes that tuned the big kernels sit
+# 4-12 GB above the rest (measured on 2 x 4 A100: 34 and 25.8 GB against
+# 21.9; with the flag, 21.5 on every card). --xla_gpu_shard_autotuning=false
+# is no help: every process then tunes everything, and every card goes to the
+# higher figure. Appended, so flags already set
+# survive, and skipped if XLA_FLAGS already names an autotune level.
+# XLA reads XLA_FLAGS when a backend starts, so this only takes effect if
+# nothing has touched a device yet -- true when a driver imports this module
+# first, as they all do.
+if int(os.environ.get("SLURM_NNODES", "1")) > 1:
+    _xla_flags = os.environ.get("XLA_FLAGS", "")
+    if "xla_gpu_autotune_level" not in _xla_flags:
+        os.environ["XLA_FLAGS"] = (_xla_flags + " --xla_gpu_autotune_level=0").strip()
+
 import jax
+
+if int(os.environ.get("SLURM_NNODES", "1")) > 1:
+    try:
+        from jax._src.xla_bridge import backends_are_initialized
+
+        if backends_are_initialized():
+            print(
+                "WARNING: a JAX backend started before stellarator_multichannel "
+                "was imported, so XLA_FLAGS set here (no GPU autotuning on "
+                "several nodes) is ignored. Import this module before anything "
+                "that touches a device.",
+                flush=True,
+            )
+    except ImportError:  # a private helper; not worth failing over
+        pass
 
 # check if we're running on multiple nodes
 if "SLURM_NNODES" in os.environ:
@@ -103,6 +134,8 @@ if "TEST_STELLARATOR" in os.environ:
     print("Running stellarator model in test context")
 else:
     from dke_sol import compute_dke_sol, dke_field_jac
+# reuseF1's adaptors; they wrap whichever flux was chosen above
+from dke_sol import WarmFlux, WarmJac
 
 from itg_wrapper import ITGFlux, SumFlux
 
@@ -284,9 +317,20 @@ class DiffusiveErFlux(eqx.Module):
         speedgrid,
         params,
         evolveDensity=False,
+        f1=None,
     ):
-        fluxes, aux = self.flux(
-            state, x, t, field, vp, vpp, pitchgrid, speedgrid, params, evolveDensity
+        fluxes, aux, *warm = self.flux(
+            state,
+            x,
+            t,
+            field,
+            vp,
+            vpp,
+            pitchgrid,
+            speedgrid,
+            params,
+            evolveDensity,
+            **({} if f1 is None else {"f1": f1}),
         )
         c = params.config
         dErdrho = StellaratorState.Vp_up_to_up(Channel.Er, state, x, vp, vpp)
@@ -294,7 +338,7 @@ class DiffusiveErFlux(eqx.Module):
         # the flux's first aux is already V' J (dke_sol._normalized_fluxes), so
         # no V' here; one entry per point whatever shape the solve returned it in
         er_source = -1.0 / c.ErInertia * jnp.reshape(aux[0], jnp.shape(er_flux))
-        return list(fluxes) + [er_flux], [er_source] + list(aux[1:])
+        return (list(fluxes) + [er_flux], [er_source] + list(aux[1:]), *warm)
 
 
 def itg_geometry_jac(itg: ITGFlux, geometry, states, x, vp, vpp, params, evolveDensity):
@@ -607,6 +651,12 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # batch size M -> (rounds, padded Params). Set by prepareEvaluation from
         # MaNTA's plan; see there.
         self.layout = {}
+        # reuseF1: batch size M -> the last drift-kinetic solution at each of
+        # its (padded) points, sharded as _evaluate's inputs are. Emptied with
+        # the layout, since a new plan means new points.
+        self._f1 = {}
+        self._warm_flux = WarmFlux(self.flux_fn)
+        self._warm_jac = WarmJac(self.flux_fn)
 
         self.rounds = 0  # rounds the machine ran
 
@@ -973,8 +1023,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
     @Physics_Decorator
     def ComputePhysics(self, states, positions, t):
 
+        warm = self.params.config.reuseF1
         dke_data = self._evaluate(
-            self.flux_fn,
+            self._warm_flux if warm else self.flux_fn,
             states,
             positions,
             t,
@@ -983,6 +1034,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.yancc_wrapper.speedgrid,
             self.params,
             self.params.config.evolveDensity,
+            warm=warm,
         )
 
         sources = self._evaluate(
@@ -998,8 +1050,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
     @Physics_Decorator
     def ComputePhysicsDerivatives(self, states, positions, t):
 
+        warm = self.params.config.reuseF1
         ddke_data = self._evaluate(
-            eqx.filter_jacrev(self.flux_fn),
+            self._warm_jac if warm else eqx.filter_jacrev(self.flux_fn),
             states,
             positions,
             t,
@@ -1008,6 +1061,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
             self.yancc_wrapper.speedgrid,
             self.params,
             self.params.config.evolveDensity,
+            warm=warm,
         )
 
         dsources = self._evaluate(
@@ -1027,6 +1081,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
     def prepareEvaluation(self, plan):
         # called before physics are evaluated at a new set of points, generates field data at these points
         self.layout = {}
+        self._f1 = {}
         points_of = {}
 
         for site in plan.sites:
@@ -1065,9 +1120,25 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.levels.append((plan.grid.getNCells(), plan.k))
         report_memory(f"prepareEvaluation k={plan.k}")
 
-    def _evaluate(self, func, _states, _positions, t, vmap_axes, *args):
+    def _f1_shape(self):
+        """One point's drift-kinetic unknown: (species, nx, nalpha, ntheta,
+        nzeta), as yancc's DKESolution.f1 holds it."""
+        ns = 2 if self.params.config.evolveDensity else 1
+        return (
+            ns,
+            self.yancc_wrapper.speedgrid.nx,
+            self.yancc_wrapper.pitchgrid.nalpha,
+            self.field.ntheta,
+            self.field.nzeta,
+        )
+
+    def _evaluate(self, func, _states, _positions, t, vmap_axes, *args, warm=False):
         """
         Evaluate physics, add padding
+
+        With `warm`, `func` takes the drift-kinetic warm start as a last
+        argument and returns it as a carry (WarmFlux, WarmJac); the batch's
+        cache entry goes in, and the new solutions replace it.
         """
         m = len(_positions)
         rounds = self.nchunks
@@ -1100,13 +1171,31 @@ class StellaratorTransport(MaNTA.TransportSystem):
             states = _pad_state(_states, pad)
             positions = jnp.pad(_positions, (0, pad), mode="edge")
 
-        out = vmap_batched(
-            func,
-            vmap_axes,
-            chunk_size=self.batch_size,
-            nchunks=rounds,
-            sharding=data_sharding,
-        )(states, positions, t, fields, vp, vpp, *args)
+        if warm:
+            f1 = self._f1.get(m)
+            if f1 is None:
+                # zeros: the start a cold solve makes, built sharded rather
+                # than on one device and copied out
+                f1 = jax.jit(
+                    lambda: jnp.zeros((len(positions),) + self._f1_shape()),
+                    out_shardings=data_sharding,
+                )()
+            out, self._f1[m] = vmap_batched(
+                func,
+                tuple(vmap_axes) + (0,),
+                chunk_size=self.batch_size,
+                nchunks=rounds,
+                sharding=data_sharding,
+                has_carry=True,
+            )(states, positions, t, fields, vp, vpp, *args, f1)
+        else:
+            out = vmap_batched(
+                func,
+                vmap_axes,
+                chunk_size=self.batch_size,
+                nchunks=rounds,
+                sharding=data_sharding,
+            )(states, positions, t, fields, vp, vpp, *args)
 
         self.rounds += rounds
         report_memory(f"{getattr(func, '__name__', type(func).__name__)} m={m}")

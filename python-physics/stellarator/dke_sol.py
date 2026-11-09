@@ -1,3 +1,4 @@
+from typing import Callable
 import jax.numpy as jnp
 import equinox as eqx
 from stellarator_state import StellaratorParams, StellaratorState
@@ -30,13 +31,19 @@ def _species(state: StellaratorState, params: StellaratorParams, evolveDensity):
     return [ions, electrons]
 
 
-def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity):
+def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity, f1=None):
     """Fluxes from the drift-kinetic solve, in yancc's (SI) units.
 
     Returns per-species `<particle_flux>` [m^-3 s^-1] and `<heat_flux>`
     [W m^-3], both the flux-surface average of the flux dotted with grad(rho),
     the radial current `J_rho` [A m^-3], and the bootstrap current `<J||B>`
     [A T m^-2].
+
+    With `f1` -- a previous solution at this point, shape (species, nx,
+    nalpha, ntheta, nzeta) -- the solve starts from it rather than from zero,
+    and the new solution is returned as a fifth element. Same equation, same
+    tolerance; only where inside the tolerance the solve stops depends on the
+    starting point (see config.StellaratorConfig.reuseF1).
     """
     if evolveDensity:
         rtol, max_grids = 1e-4, 3
@@ -54,13 +61,19 @@ def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity):
         throw=False,
         verbose=0,
         multigrid_options={"smooth_solver": "banded", "max_grids": max_grids},
+        f1=f1,
     )
-    return (
+    moments = (
         sol.get("<particle_flux>"),
         sol.get("<heat_flux>"),
         sol.get("J_rho"),
         sol.get("<J||B>"),
     )
+    if f1 is None:
+        return moments
+    # the solve does not depend on where it started, to first order, so no
+    # derivative flows back through the guess
+    return moments + (jax.lax.stop_gradient(sol.f1),)
 
 
 def _normalized_fluxes(
@@ -75,9 +88,14 @@ def _normalized_fluxes(
     speedgrid,
     params: StellaratorParams,
     evolveDensity,
+    f1=None,
 ):
     """Everything between the state MaNTA holds and the fluxes it wants back,
     around a `moments` function that works in SI units.
+
+    With `f1`, `moments` is handed it as a starting guess and returns its new
+    solution last; this returns `(fluxes, aux, f1_new)` instead of
+    `(fluxes, aux)`.
 
     The physics in `moments` sees only physical quantities and returns only
     physical ones, so this function is the whole of the normalisation of the
@@ -88,15 +106,17 @@ def _normalized_fluxes(
     c = params.constants
     species = _species(state, params, evolveDensity)
 
+    warm = () if f1 is None else (f1,)
+
     if not evolveDensity:
-        _, heat_flux, _, _ = moments(
-            species, jnp.array(0.0), field, pitchgrid, speedgrid, evolveDensity
+        _, heat_flux, _, _, *f1_new = moments(
+            species, jnp.array(0.0), field, pitchgrid, speedgrid, evolveDensity, *warm
         )
         flux = -heat_flux[0] * vp / c.HeatEquationNormalization()
-        return [flux], []
+        return ([flux], [], *f1_new)
 
-    particle, heat_flux, current, bootstrap = moments(
-        species, state.Er * c.T0eV, field, pitchgrid, speedgrid, evolveDensity
+    particle, heat_flux, current, bootstrap, *f1_new = moments(
+        species, state.Er * c.T0eV, field, pitchgrid, speedgrid, evolveDensity, *warm
     )
 
     # add a little extra diffusion to the density
@@ -124,7 +144,11 @@ def _normalized_fluxes(
         _state, params
     ) - bootstrap / c.BootstrapCurrentNormalization()
 
-    return [particle_flux, heat_flux[0], heat_flux[1]], [aux_g_out, bootstrap_g_out]
+    return (
+        [particle_flux, heat_flux[0], heat_flux[1]],
+        [aux_g_out, bootstrap_g_out],
+        *f1_new,
+    )
 
 
 # we keep this function pure and not dependent on class data so jax can save it in persistent cache
@@ -139,6 +163,7 @@ def compute_dke_sol(
     speedgrid: MaxwellSpeedGrid,
     params: StellaratorParams,
     evolveDensity=False,
+    f1=None,
 ):
     """
     Computes neoclassical information for stellarator model
@@ -164,10 +189,13 @@ def compute_dke_sol(
     speedgrid: yancc.MaxwellSpeedGrid
     evolveDensity: bool
         whether to compute multichannel fluxes
+    f1: jax.Array, optional
+        a previous drift-kinetic solution here, to start the solve from
     Returns
     -------
     float
-        Computed flux and aux terms (normalized)
+        Computed flux and aux terms (normalized), and with `f1` the new
+        solution after them
     """
     return _normalized_fluxes(
         yancc_moments,
@@ -181,7 +209,43 @@ def compute_dke_sol(
         speedgrid,
         params,
         evolveDensity,
+        f1,
     )
+
+
+class WarmFlux(eqx.Module):
+    """A flux with `compute_dke_sol`'s signature, warm-started.
+
+    Takes the previous drift-kinetic solution at the point as one more
+    argument, last, and returns `((fluxes, aux), f1_new)`: the value the plain
+    flux returns, and the carry `vmap_batched(..., has_carry=True)` keeps.
+    """
+
+    flux: Callable
+
+    def __call__(self, *args):
+        *args, f1 = args
+        fluxes, aux, f1_new = self.flux(*args, f1=f1)
+        return (fluxes, aux), f1_new
+
+
+class WarmJac(eqx.Module):
+    """`filter_jacrev(flux)` over the state, warm-started like `WarmFlux`.
+
+    The new solution comes out as jacrev's aux, so it is not differentiated --
+    the forward solve inside the jacrev is the one it keeps.
+    """
+
+    flux: Callable
+
+    def __call__(self, state, *args):
+        *args, f1 = args
+
+        def value(s):
+            fluxes, aux, f1_new = self.flux(s, *args, f1=f1)
+            return (fluxes, aux), f1_new
+
+        return eqx.filter_jacrev(value, has_aux=True)(state)
 
 
 def dke_field_jac(
@@ -232,8 +296,11 @@ def test_flux(
     speedgrid: MaxwellSpeedGrid,
     params: StellaratorParams,
     evolveDensity=False,
+    f1=None,
 ):
-
+    # f1 is handed back unchanged, so reuseF1's plumbing runs under
+    # TEST_STELLARATOR too
+    warm = () if f1 is None else (f1,)
     state = StellaratorState.from_state(_state, x, vp, vpp, params)
 
     def ambipolar(state, x, t, field, vp, vpp, *args):
@@ -256,11 +323,12 @@ def test_flux(
         return [vp * _TEST_D * state.dTidrho], []
 
     if evolveDensity:
-        return ambipolar(state, x, t, field, vp, vpp, pitchgrid, speedgrid, params)
+        out = ambipolar(state, x, t, field, vp, vpp, pitchgrid, speedgrid, params)
     else:
-        return constant_density(
+        out = constant_density(
             state, x, t, field, vp, vpp, pitchgrid, speedgrid, params
         )
+    return (*out, *warm)
 
 
 def test_flux_field_jac(
@@ -330,7 +398,9 @@ _MOCK_BOOTSTRAP = 0.5
 _ELEMENTARY_CHARGE = 1.60217663e-19
 
 
-def physical_test_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity):
+def physical_test_moments(
+    species, Erho, field, pitchgrid, speedgrid, evolveDensity, f1=None
+):
     # state.Er is the one-entry aux vector; yancc reduces it to a scalar itself
     Erho = jnp.reshape(Erho, ())
     B = field.Bmag_fsa
@@ -358,7 +428,8 @@ def physical_test_moments(species, Erho, field, pitchgrid, speedgrid, evolveDens
         for s in species
     )
     bootstrap = -_MOCK_BOOTSTRAP * dpdrho / field.a_minor
-    return particle, heat, jnp.sum(charges * particle), bootstrap
+    out = (particle, heat, jnp.sum(charges * particle), bootstrap)
+    return out if f1 is None else out + (f1,)
 
 
 def physical_test_flux(
@@ -372,6 +443,7 @@ def physical_test_flux(
     speedgrid: MaxwellSpeedGrid,
     params: StellaratorParams,
     evolveDensity=False,
+    f1=None,
 ):
     return _normalized_fluxes(
         physical_test_moments,
@@ -385,6 +457,7 @@ def physical_test_flux(
         speedgrid,
         params,
         evolveDensity,
+        f1,
     )
 
 

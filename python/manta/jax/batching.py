@@ -24,7 +24,7 @@ def tree_unstack(tree):
 
 
 # None of the other options for chunked vmap work (too slow, need chunks to be too small) so we literally split the arguments and do a for loop
-def _wrap_vmap_maybe_chunk(func, vmap_axes, chunk_size, nchunks, sharding):
+def _wrap_vmap_maybe_chunk(func, vmap_axes, chunk_size, nchunks, sharding, has_carry):
     def wrapper(*args):
 
         def _wrap_shard(*args):
@@ -91,12 +91,19 @@ def _wrap_vmap_maybe_chunk(func, vmap_axes, chunk_size, nchunks, sharding):
             )
         # whole and local on every process when the mesh spans several, so the
         # caller can unpad and hand it to MaNTA as in a single process
+        if has_carry:
+            # the carry goes back in on the next call, sharded as it came out:
+            # gathering it would move every point's copy to every process
+            out, carry = out
+            return gather_to_host(out), carry
         return gather_to_host(out)
 
     return wrapper
 
 
-def vmap_batched(func, vmap_axes, chunk_size=0, nchunks=0, sharding=None):
+def vmap_batched(
+    func, vmap_axes, chunk_size=0, nchunks=0, sharding=None, has_carry=False
+):
     """
     Wrapper for vmap that allows for splitting the input pytrees into chunks
 
@@ -113,6 +120,12 @@ def vmap_batched(func, vmap_axes, chunk_size=0, nchunks=0, sharding=None):
         number of chunks to split arrays into
     sharding: jax.sharding
         sharding to apply to inputs
+    has_carry: bool
+        `func` returns `(out, carry)`, carry being per point state the caller
+        hands back in on a later call (a solver's warm start, say). The wrapper
+        then returns `(out, carry)` too, with `out` gathered as usual and
+        `carry` left as the batched calls produced it: padded, and sharded
+        like the inputs, so it can be passed straight back.
 
     Returns
     -------
@@ -121,5 +134,10 @@ def vmap_batched(func, vmap_axes, chunk_size=0, nchunks=0, sharding=None):
         callable vmap wrapper
     """
     return _wrap_vmap_maybe_chunk(
-        func, vmap_axes, chunk_size=chunk_size, nchunks=nchunks, sharding=sharding
+        func,
+        vmap_axes,
+        chunk_size=chunk_size,
+        nchunks=nchunks,
+        sharding=sharding,
+        has_carry=has_carry,
     )
