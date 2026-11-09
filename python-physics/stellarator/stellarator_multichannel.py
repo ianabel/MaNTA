@@ -140,8 +140,13 @@ if "JAX_COMPILATION_CACHE_DIR" in os.environ:
 P = PartitionSpec
 devices = jax.devices()
 print(devices)
-mesh = jax.make_mesh(
-    (jax.device_count(),), ("axis",), axis_types=(jax.sharding.AxisType.Auto,)
+# A 1-D mesh over every device, built directly rather than with jax.make_mesh:
+# some jax versions refuse make_mesh when the devices span several slices,
+# which is what GPUs on several nodes under jax.distributed look like, and its
+# topology-aware ordering buys nothing on a single axis. jax.devices() is in
+# the same global order on every process, as a mesh spanning them requires.
+mesh = jax.sharding.Mesh(
+    np.array(jax.devices()), ("axis",), axis_types=(jax.sharding.AxisType.Auto,)
 )
 data_sharding = NamedSharding(
     mesh,
