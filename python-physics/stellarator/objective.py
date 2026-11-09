@@ -145,7 +145,7 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
 
         st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg)
         # st2 = StellaratorTransport(time_march_config, yancc_wrapper=yancc_wrapper)
-        with jax.default_device(jax.devices("cpu")[0]):
+        with jax.default_device(jax.local_devices(backend="cpu")[0]):
             ec = st.run()
 
             def true_fn():

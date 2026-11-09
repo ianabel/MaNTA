@@ -3,6 +3,8 @@ import jax.numpy as jnp
 import equinox as eqx
 import jax.tree_util as jtu
 
+from .multihost import gather_to_host
+
 
 @jax.jit
 def tree_unstack(tree):
@@ -80,13 +82,16 @@ def _wrap_vmap_maybe_chunk(func, vmap_axes, chunk_size, nchunks, sharding):
                 )
 
             # reassemble arrays
-            return jax.tree.map(
+            out = jax.tree.map(
                 lambda *chunks: jnp.concatenate(chunks, axis=0), *outputs
             )
         else:
-            return eqx.filter_jit(eqx.filter_vmap(func, in_axes=vmap_axes))(
+            out = eqx.filter_jit(eqx.filter_vmap(func, in_axes=vmap_axes))(
                 *_wrap_shard(*args)
             )
+        # whole and local on every process when the mesh spans several, so the
+        # caller can unpad and hand it to MaNTA as in a single process
+        return gather_to_host(out)
 
     return wrapper
 

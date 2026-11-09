@@ -4,6 +4,7 @@ from jaxtyping import Array, ArrayLike, Float, Int
 import jax.numpy as jnp
 import numpy as np
 from .integrator import Integrator, scalar_integrator
+from .multihost import to_numpy
 
 """
 Wrapper class for MaNTA State
@@ -97,12 +98,12 @@ class State(eqx.Module):
             # the pointwise State caster, which expects a 1-D Vector.
             Scalars_out = jnp.atleast_2d(self.Scalars)[0, :]
         return {
-            "Variable": np.asarray(self.Variable),
-            "Derivative": np.asarray(self.Derivative),
-            "Flux": np.asarray(self.Flux),
-            "Aux": np.asarray(self.Aux),
-            "Scalars": np.asarray(Scalars_out),
-            "VariableDot": np.asarray(self.VariableDot),
+            "Variable": to_numpy(self.Variable),
+            "Derivative": to_numpy(self.Derivative),
+            "Flux": to_numpy(self.Flux),
+            "Aux": to_numpy(self.Aux),
+            "Scalars": to_numpy(Scalars_out),
+            "VariableDot": to_numpy(self.VariableDot),
         }
 
     @staticmethod

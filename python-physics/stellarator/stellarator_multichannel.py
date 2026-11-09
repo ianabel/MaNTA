@@ -48,6 +48,15 @@ if "SLURM_NNODES" in os.environ:
     if int(os.environ["SLURM_NNODES"]) > 1:
         multinode = True
         jax.distributed.initialize()
+        # Every process runs its own copy of MaNTA, and they must make the same
+        # decisions step for step: one that takes an extra Newton iteration
+        # makes a collective call the others never make, and the job hangs
+        # without an error. A threaded MKL moves the last bits of the C++
+        # solve from run to run, so pin it -- before manta, and MKL with it,
+        # is imported below. setdefault, so a deterministic threaded setup
+        # (MKL_CBWR) can still be asked for.
+        os.environ.setdefault("MKL_NUM_THREADS", "1")
+        os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
         # Always print this to verify correct setup
         print(
@@ -109,6 +118,7 @@ import interpax
 from jax.sharding import PartitionSpec, NamedSharding
 from jax.experimental import multihost_utils
 import jax.numpy as jnp
+import numpy as np
 import equinox as eqx
 
 # os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".4"
@@ -155,6 +165,11 @@ def MaNTA_Decorator(func):
 
         # Empty arrays causes issues with jax.lax.map, other operations, so we remove them and then add them back after
         def _wrap_shard(self, *args):
+            if jax.process_count() > 1:
+                # the objective hooks this wraps slice and unstack their
+                # outputs, which a mesh spanning processes refuses (see
+                # manta.jax.multihost); they are cheap, so run them locally
+                return func(self, *args)
             args_s = tuple(
                 jax.device_put(arg, data_sharding)
                 if not jnp.isscalar(arg)
@@ -383,6 +398,69 @@ BATCHED = (
 )
 
 
+# STELLARATOR_CHECK_PROCESSES=1: compare every batch's input across processes
+CHECK_PROCESSES_AGREE = (
+    jax.process_count() > 1 and os.environ.get("STELLARATOR_CHECK_PROCESSES") == "1"
+)
+
+
+def check_batch_size(batch_size, use_batching, ndevices=None):
+    """Refuse a batch_size the device mesh cannot split evenly.
+
+    Each round of a batched evaluation is `batch_size` points sharded over
+    every device in the job -- on every node, not just this one -- so it has to
+    be a multiple of the global device count. Left alone, the first evaluation
+    dies in jax.device_put with a sharding error that names neither.
+    Without batching every point goes at once and is padded to a multiple of
+    the device count instead, so there is nothing to check.
+    """
+    if not use_batching:
+        return
+    n = len(jax.devices()) if ndevices is None else ndevices
+    if batch_size <= 0 or batch_size % n != 0:
+        lower = (batch_size // n) * n
+        upper = lower + n
+        options = " or ".join(
+            f"{b} ({b // n} per device per round)" for b in (lower, upper) if b > 0
+        )
+        raise ValueError(
+            f"batch_size = {batch_size} does not split over the {n} devices of "
+            f"this job ({jax.process_count()} process(es)): each round shards "
+            f"batch_size points over every device, so it must be a multiple of "
+            f"{n}. Use {options}."
+        )
+
+
+def per_process_files(solver_config):
+    """`solver_config` with each process past the first writing files of its
+    own: `name_p<i>.nc` and so on.
+
+    Every process runs MaNTA and writes its output, so on a shared filesystem
+    they would all write one file. Process 0 keeps the configured names, so
+    what a single-process run would write is where it always was. A restart
+    file is read from the process's own copy when it has one -- the primal
+    run it was written by was this process's -- and from the named file
+    otherwise, which every process can read at once.
+    """
+    i = jax.process_index()
+    if jax.process_count() == 1 or i == 0:
+        return solver_config
+    out = dict(solver_config)
+    if "OutputFilename" in out:
+        out["OutputFilename"] = f"{out['OutputFilename']}_p{i}"
+    restart = out.get("RestartFile")
+    if restart:
+        stem, suffix = (
+            (restart[: -len(".restart.nc")], ".restart.nc")
+            if restart.endswith(".restart.nc")
+            else os.path.splitext(restart)
+        )
+        own = f"{stem}_p{i}{suffix}"
+        if os.path.exists(own):
+            out["RestartFile"] = own
+    return out
+
+
 def _pad_state(tree, pad_width):
     """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
     dynamic, static = eqx.partition(tree, eqx.is_array)
@@ -407,7 +485,8 @@ class StellaratorTransport(MaNTA.TransportSystem):
         """`itg`, an `itg_wrapper.ITGFlux`, adds the NN ITG heat flux to the
         neoclassical one; it is required when the config sets `useITGProxy`
         and refused otherwise, so the config says what physics a run had."""
-        solver_config = config["Solver"]
+        solver_config = per_process_files(config["Solver"])
+        config = {**config, "Solver": solver_config}
         st_config = config["Stellarator"]
         normalization = config.get("Normalization", {})
         # what the adjoint differentiates: the name of one of the objective
@@ -446,6 +525,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         MaNTA.TransportSystem.__init__(self, buildSpec(self.params))
         self.batch_size = self.params.config.batch_size
+        check_batch_size(self.batch_size, self.params.config.useBatching)
 
         self.yancc_wrapper = yancc_wrapper
         self.points = MaNTA.getNodes(
@@ -512,7 +592,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         self.runner.configure(solver_config)
 
     def reconfigure(self, solver_config):
-        self.runner.configure(solver_config)
+        self.runner.configure(per_process_files(solver_config))
         return True
 
     def run(self, tFinal=None):
@@ -533,7 +613,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     "MaNTA returned steady-state outcome {val}", val=outcome
                 )
 
-                with jax.default_device(jax.devices("cpu")[0]):
+                with jax.default_device(jax.local_devices(backend="cpu")[0]):
 
                     # each branch returns the outcome, so the value leaving
                     # the cond exists only once finish_steady (where the
@@ -951,6 +1031,15 @@ class StellaratorTransport(MaNTA.TransportSystem):
         """
         m = len(_positions)
         rounds = self.nchunks
+        if CHECK_PROCESSES_AGREE:
+            # raises at the first evaluation where the processes' solvers have
+            # diverged, instead of hanging in the next collective
+            multihost_utils.assert_equal(
+                np.asarray(_positions), f"positions of a batch of {m}"
+            )
+            multihost_utils.assert_equal(
+                np.asarray(_states.Variable), f"state of a batch of {m}"
+            )
         if m not in self.layout:
             raise RuntimeError(
                 f"a batch of {m} points that the evaluation plan did not announce"

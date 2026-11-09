@@ -28,7 +28,9 @@ class Platform(enum.IntEnum):
     GPU = 1
 
 
-cpu_device = jax.devices("cpu")[0]
+# this process's own CPU: under jax.distributed, jax.devices("cpu")[0] is
+# process 0's, which no other process can run on
+cpu_device = jax.local_devices(backend="cpu")[0]
 
 # The FFI's floating-point width is fixed when the extension is built
 # (MANTA_FFI_FP64) and reported by it, so every buffer declared below follows the
