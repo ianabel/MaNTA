@@ -248,6 +248,26 @@ public:
         "respect to the parameters (zeros if they do not enter it).");
   }
 
+  // dR_f/dp for row f of an attached FieldModel's residual -- a coil current
+  // or a boundary flux that is both in the field constraint and in the
+  // parameter vector. Takes FieldResidual's arguments: psi and psi', the state
+  // on the k+1 basis nodes (carrying du/dt when the model's spec reads it), one
+  // quadrature weight per node. Shaped as dScalarG_dp: (np, 1), or
+  // (np, nPoints) with spatialParameters.
+  //
+  // The gradient gains -z_psi(f) times it, z_psi being the field block of the
+  // adjoint state. Unlike dScalarG_dp this has a default, an empty matrix,
+  // meaning the field rows do not read the parameters: a FieldModel has no
+  // notion of an adjoint parameter of its own, so a model that does read one
+  // is the exception, and the adjoint problem that knows it is the one place
+  // that can say so. field_adjoint_tests pins what an adjoint problem that
+  // leaves it out gets for such a parameter: zero.
+  virtual Matrix dFieldResidual_dp(Index f, Vector const &psi, Vector const &dpsidt,
+                                   GlobalState const &states, std::vector<Position> const &points,
+                                   Vector const &weights, Time t) {
+    return Matrix();
+  }
+
   virtual std::string getName(Index pIndex) const {
     return "p" + std::to_string(pIndex);
   };

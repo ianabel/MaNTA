@@ -331,9 +331,10 @@ Two things make this work, and both are easy to get wrong when adding a case:
   `LinearDiffSourceTest`'s was worse -- it read `useMMS` and never applied
   `MMS_Source`, so the option silently did nothing. Both are gone; the
   manufactured problems here are self-contained and never depended on them.
-  `AutodiffTransportSystem::MMS_Solution` is still there, but nothing overrides
-  it any more: the C++ `MirrorPlasma`, its only user, has been removed in favour
-  of `python-physics/mirror-plasma`.
+  `AutodiffTransportSystem::MMS_Solution` is still there, and no physics case
+  overrides it; `AutodiffSigmaTests.cpp` checks `MMS_Source` against closed
+  forms, with the geometry `MMS_Geometry` supplies, and runs a coupled case
+  forced by it.
 * **The time-integration tolerance must be well below the spatial error, but not
   so tight that IDA cannot start.** At 1e-12 it fails at `t = 0` for `k >= 2`
   with "the error test failed repeatedly or with |h| = hmin"; 1e-9 leaves three
@@ -1212,9 +1213,10 @@ These are deliberate and tracked, not oversights:
   `manta.jax` objective reading `B` against central differences, with a guard:
   without the `"Geometry"` rows of its `dg` the gradient is 0.85% out.
 
-  One limit of the coupled adjoint itself is structural rather than untested,
-  and is recorded in `TODO`: a `FieldModel` cannot depend on an adjoint
-  parameter at all, so `d(field residual)/dp` is zero by construction. An
+  A field row may read an adjoint parameter, through the adjoint problem's
+  `dFieldResidual_dp`; `a_parameter_in_the_field_row_reaches_the_gradient` checks
+  it against a closed form and a finite difference, and its companion records
+  that an adjoint problem leaving the hook out gets zero for such a parameter. An
   objective may read `State::geom`; its `dG/dpsi` is covered in
   `ThetaPinchRunTests.cpp`.
 

@@ -1259,8 +1259,8 @@ FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec con
         if (fieldHasDynamics)
             throw std::invalid_argument(
                 "FieldCoupling = \"reduced\" runs the field as an equilibrium of the transport "
-                "state, and this field has dynamics (a differential field unknown). Use "
-                "\"coupled\".");
+                "state, and this field has dynamics (a differential field unknown, or a field row "
+                "reading du/dt). Use \"coupled\".");
         return FieldCouplingMode::Reduced;
     }
 
@@ -1268,7 +1268,8 @@ FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec con
     // carry a field with dynamics of its own nor differentiate through one.
     std::vector<std::string> needs;
     if (fieldHasDynamics)
-        needs.emplace_back("the field has dynamics (a differential field unknown)");
+        needs.emplace_back(
+            "the field has dynamics (a differential field unknown, or a field row reading du/dt)");
     if (config.solveAdjoint || config.SteadyStateTest == "Objective")
         needs.emplace_back("an adjoint is solved (solveAdjoint, or SteadyStateTest = \"Objective\")");
 

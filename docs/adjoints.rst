@@ -51,6 +51,11 @@ What you implement
    * - ``dScalarG_dp(s, y, ydot, abscissae, weights, phiBoundary, t)``
      - How global scalar constraint ``s`` depends on each parameter. Required
        whenever the transport system has scalars; see below.
+   * - ``dFieldResidual_dp(f, psi, dpsidt, states, points, weights, t)``
+     - How row ``f`` of an attached field model's residual depends on each
+       parameter, shaped as ``dScalarG_dp``. Optional: the default, an empty
+       matrix, says the field rows read no parameter. C++ only, like
+       ``FieldModel``. See :doc:`field_coupling`.
    * - ``getName(pIndex)``
      - The parameter's name, used to label it in the output file.
 

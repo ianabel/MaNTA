@@ -19,7 +19,9 @@ GeometrySource geometrySourceFor(SolverConfig const &config, SystemSpec const &s
     GeometrySource source;
     if (field)
     {
-        bool dynamics = false;
+        // A differential field unknown, or a row reading du/dt: either way the
+        // field is not a function of the transport state.
+        bool dynamics = field->getSpec().readsTransportTimeDerivatives;
         for (Index i = 0; i < field->nFieldDOF(); ++i)
             dynamics = dynamics || field->isFieldDOFDifferential(i);
         // The consistent and reduced modes run the same model as an

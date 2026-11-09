@@ -58,6 +58,11 @@ FieldModelEquilibrium::FieldModelEquilibrium(std::shared_ptr<FieldModel> model_,
                 "' is differential, so its field is not an instantaneous function of the "
                 "transport state and cannot be run as an equilibrium (FieldCoupling = "
                 "\"consistent\"). Couple it instead.");
+    if (model->getSpec().readsTransportTimeDerivatives)
+        throw std::invalid_argument(
+            "The field model's rows read the transport time derivatives, so its field is not a "
+            "function of the transport state and cannot be run as an equilibrium (FieldCoupling = "
+            "\"consistent\" or \"reduced\"). Couple it instead.");
 }
 
 Vector const &FieldModelEquilibrium::psi(Equilibrium const &e) { return asState(e).psi; }

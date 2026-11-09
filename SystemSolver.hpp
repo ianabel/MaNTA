@@ -2293,6 +2293,13 @@ class SystemSolver
         // nothing for it.
         Matrix variableTimeDerivatives(DGSoln const &Ydot) const;
 
+        // The transport state a field model's hooks are handed: Y on the k+1
+        // basis nodes, and du/dt from Ydot on the same nodes when the model's
+        // spec says a row reads it (FieldModelSpec::readsTransportTimeDerivatives).
+        // Every call into the model goes through this, so the value, its
+        // derivative and the adjoint's dR/dp all see the same state.
+        GlobalState fieldStatesAt(DGSoln const &Y, DGSoln const &Ydot) const;
+
         // Size and fill the derivative blocks at the state Y and time tEval, and
         // report the nodes they were evaluated on.
         //

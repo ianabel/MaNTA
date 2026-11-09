@@ -361,6 +361,25 @@ BOOST_AUTO_TEST_CASE(psi_converges_too)
     checkNoFallbacks(r);
 }
 
+BOOST_AUTO_TEST_CASE(a_field_row_reading_du_dt_converges_like_any_other)
+{
+    // ManufacturedRateField: psi = Int u_t dx, so the field row reads the
+    // transport time derivative. Handed no du/dt, the row would hold psi at
+    // zero and g at 1 against a source derived for g = 1 + (2/pi) cos(pi x) --
+    // an O(1) error in u at every resolution.
+    const Index k = 2;
+    const Rates r = solveCoupledAndMeasure<ManufacturedRateField>(
+        k, kCells, false, SystemSolver::FieldSolveMode::Exact);
+    BOOST_TEST_MESSAGE("field row reading du/dt, k = 2: local orders in u "
+                       << format(r.localU) << ", errors in u " << format(r.coupledU)
+                       << ", in psi " << format(r.coupledExtra) << r.detail);
+
+    for (double o : r.localU)
+        BOOST_CHECK_GT(o, k + 1 - 0.25);
+    BOOST_TEST(r.coupledU.back() < 1e-4);
+    BOOST_TEST(r.coupledExtra.back() < 1e-6);
+}
+
 BOOST_AUTO_TEST_CASE(the_multi_dof_field_converges_the_same_way)
 {
     // Five field DOFs, a tridiagonal B and a dense dGeometry/dpsi, so the whole

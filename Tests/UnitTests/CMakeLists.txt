@@ -36,6 +36,7 @@ set(MANTA_TEST_SOURCES
   AdjointProblemTests.cpp
   AdjointTests.cpp
   AutodiffAuxTests.cpp
+  AutodiffSigmaTests.cpp
   AutodiffTest.cpp
   ConfigSchemaTests.cpp
   ConfigSourceTests.cpp

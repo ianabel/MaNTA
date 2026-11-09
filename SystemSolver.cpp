@@ -445,7 +445,7 @@ SystemSolver::evaluateFieldCoupling(DGSoln const &Y, DGSoln const &Ydot,
     // that is actually evaluated is simply a different matrix.
     fieldModel->FieldResidualPrime(d.dR, d.dRdot, d.dRdpsi, d.dRddpsidt,
                                    Vector(Y.getField()), Vector(Ydot.getField()),
-                                   Y.evalOnNodes(), Y.getPoints(),
+                                   fieldStatesAt(Y, Ydot), Y.getPoints(),
                                    integrator.integrationWeights(Y.getBasis(), grid),
                                    tEval);
 
@@ -477,19 +477,15 @@ void SystemSolver::applyFieldCoupling(FieldCouplingDerivatives const &d, double 
     // omission: GlobalState has no trace slot, so a field residual has no way to
     // depend on lambda, and its dependence on psi is B rather than A2.
     //
-    // The `alphaValue * dRdot` term mirrors what the scalar `w` vectors carry,
-    // and is *currently unreachable*: FieldResidual is handed `states` but no
-    // `states_dot` -- unlike ScalarG, which takes both -- so a field row cannot
-    // depend on the transport time derivatives in the first place and dRdot
-    // comes back zero for every model that can exist today. It is written this
-    // way because FieldResidualPrime declares the slot, so the day the value
-    // hook gains ydot the derivative is already right rather than silently one
-    // term short. Nothing tests it, and nothing can until then.
+    // The `alphaValue * dRdot` term mirrors what the scalar `w` vectors carry:
+    // a field row reading du/dt (FieldModelSpec::readsTransportTimeDerivatives)
+    // reports d(row)/d(u') there, and IDA's Jacobian weights it by alpha. It is
+    // invisible at alpha = 0, so field_jacobian_tests checks it at cj = 3.7.
     //
-    // The hazard is not here but at the declaration -- a model author who finds
-    // dRdot unfillable and writes d/d(psi') into it instead of into dRddpsidt
-    // corrupts this row silently. FieldModel.hpp says so where that mistake
-    // would be made; TODO carries the interface fix.
+    // Only its u entries can be nonzero, since du/dt is all the model is
+    // handed. A model writing d(row)/d(psi') here instead of into dRddpsidt
+    // corrupts this row silently -- A2 is only ever applied, never assembled or
+    // printed -- which FieldModel.hpp says at the declaration.
     for (Index f = 0; f < nField; ++f)
     {
         DGSoln row(nVars, grid, k, N_VGetArrayPointer(a2[f]), nScalars, nAux, nField);
@@ -2221,6 +2217,15 @@ Matrix SystemSolver::variableTimeDerivatives(DGSoln const &Ydot) const
     return dotStates.Variable();
 }
 
+// See the declaration.
+GlobalState SystemSolver::fieldStatesAt(DGSoln const &Y, DGSoln const &Ydot) const
+{
+    GlobalState states = Y.evalOnNodes();
+    if (fieldModel && fieldModel->getSpec().readsTransportTimeDerivatives)
+        states.setVariableDot(Ydot.evalOnNodes().Variable());
+    return states;
+}
+
 SystemSolver::PhysicsNodes SystemSolver::physicsNodesAt(DGSoln const &Y, Time tEval)
 {
     if (superconvergent)
@@ -3831,7 +3836,7 @@ int SystemSolver::residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector
         // `weights` is the interpolatory quadrature of *that* basis and a field
         // row's integrals are taken against it. The star nodes are a device for
         // the transport residual's projection, not a different set of unknowns.
-        const GlobalState fieldStates = Y_h.evalOnNodes();
+        const GlobalState fieldStates = fieldStatesAt(Y_h, dYdt_h);
         const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
 
         Vector fieldRes = Vector::Zero(nField);
@@ -3964,7 +3969,7 @@ void SystemSolver::explicitTimeDerivative(DGSoln const &Y_h, DGSoln const &dYdt_
 
     if (fieldModel)
     {
-        const GlobalState fieldStates = Y_h.evalOnNodes();
+        const GlobalState fieldStates = fieldStatesAt(Y_h, dYdt_h);
         const Vector &weights = integrator.integrationWeights(Y_h.getBasis(), grid);
         Vector dRdt = Vector::Zero(nField);
         fieldModel->dFieldResidual_dt(dRdt, Vector(Y_h.getField()), Vector(dYdt_h.getField()), fieldStates,
@@ -5423,13 +5428,11 @@ void SystemSolver::computeAdjointGradients()
     G_p.setZero();
     
     // The gradient is dG/dp = dG/dp|explicit - z^T dF/dp, and with a field model
-    // attached both halves of z exist. Only z_x appears below, and that is not
-    // an omission: dF/dp splits as ( F_p ; dR/dp ), and dR/dp is identically
-    // zero because a FieldModel has no notion of an adjoint parameter to depend
-    // on -- there is no hook a model author could fill and therefore no term to
-    // drop. The coupling reaches the gradient entirely through z_x, which
-    // solveAdjointState has already solved coupled: the field block changes the
-    // adjoint *state*, not the contraction below.
+    // attached both halves of z exist: dF/dp splits as ( F_p ; dR/dp ), the
+    // second being AdjointProblem::dFieldResidual_dp, contracted with z_psi at
+    // the end of accumulateAdjointGradients. A parameter the field rows do not
+    // read still reaches the gradient through the coupling, by way of z_x, which
+    // solveAdjointState has already solved coupled.
     //
     //Index np = adjointProblem->areParametersSpatial() ? np_internal * nCells * (k + 1) + adjointProblem->getNpBoundary() : adjointProblem->getNp();
     // One adjoint state per objective, and the loop has to be outside pIndex for
@@ -5683,6 +5686,38 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
                 G_p.block(gIndex * nPoints, 0, nPoints, np) -= adjoint_mu(s) * dGsdp.transpose();
             else
                 G_p.row(gIndex) -= adjoint_mu(s) * dGsdp.transpose();
+        }
+    }
+
+    // The field rows' share, -z_psi^T dR/dp, the same way. An empty matrix is
+    // the default and means the rows do not read the parameters. Only with the
+    // field's unknowns in the state: an equilibrium model's own parameters are
+    // its response's business.
+    if (fieldModel)
+    {
+        const GlobalState fieldStates = fieldStatesAt(y, dydt);
+        const Vector &weights = integrator.integrationWeights(y.getBasis(), grid);
+        const Vector psi = y.getField(), dpsidt = dydt.getField();
+        const Index np = adjointProblem->getNp();
+        const Index cols = spatial ? nPoints : 1;
+
+        for (Index f = 0; f < nField; ++f)
+        {
+            const Matrix dRdp =
+                adjointProblem->dFieldResidual_dp(f, psi, dpsidt, fieldStates, y.getPoints(), weights, jt);
+            if (dRdp.size() == 0)
+                continue;
+            if (dRdp.rows() != np || dRdp.cols() != cols)
+                throw std::runtime_error(
+                    "Adjoint hook \"dFieldResidual_dp\" returned a (" + std::to_string(dRdp.rows()) + ", " +
+                    std::to_string(dRdp.cols()) + ") array for field row " + std::to_string(f) +
+                    "; it must be (np, " + (spatial ? "nPoints" : "1") + ") = (" + std::to_string(np) + ", " +
+                    std::to_string(cols) + "), or empty if the row does not read the parameters.");
+
+            if (spatial)
+                G_p.block(gIndex * nPoints, 0, nPoints, np) -= adjoint_field(f) * dRdp.transpose();
+            else
+                G_p.row(gIndex) -= adjoint_field(f) * dRdp.transpose();
         }
     }
 }
