@@ -58,6 +58,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
+from objective import ObjectiveFromUserWithParams, make_objective
 import numpy as np  # noqa: E402
 
 RHO_UPPER = 0.9
@@ -123,8 +124,15 @@ def solver_config(name, nodes, restart):
     if restart:
         cfg.update({"RestartFile": restart, "restart": True})
     else:
-        cfg.update({"restart": False, "SteadyStateSolver": "PseudoTransient",
-                    "initialTimestep": 0.1, "delta_t": 1.0, "MaxRejectedSteps": 10})
+        cfg.update(
+            {
+                "restart": False,
+                "SteadyStateSolver": "PseudoTransient",
+                "initialTimestep": 0.1,
+                "delta_t": 1.0,
+                "MaxRejectedSteps": 10,
+            }
+        )
     return cfg
 
 
@@ -144,17 +152,25 @@ def jacobian_at(res, args, eq, V0, nodes, restart, name):
     import yancc
     from desc.grid import Grid
     from desc.objectives import (
-        FixBoundaryR, FixBoundaryZ, FixCurrent, FixPsi, ForceBalance,
-        LinearObjectiveFromUser, ObjectiveFromUser, ObjectiveFunction, Volume,
+        FixBoundaryR,
+        FixBoundaryZ,
+        FixCurrent,
+        FixPsi,
+        ForceBalance,
+        LinearObjectiveFromUser,
+        ObjectiveFromUser,
+        ObjectiveFunction,
+        Volume,
     )
     from desc.optimize.optimizer import (
-        _parse_x_scale, _project_x_scale, get_combined_constraint_objectives,
+        _parse_x_scale,
+        _project_x_scale,
+        get_combined_constraint_objectives,
     )
     from desc.profiles import SplineProfile
     import manta as MaNTA
     from config import field_norm_from_eq
     from itg_wrapper import make_itg_builder, with_itg
-    from objective import ObjectiveFromUserWithParams, make_objective
 
     na, nx, nt, nz = res
     points = MaNTA.getNodes(nodes, DEGREE)
@@ -166,8 +182,9 @@ def jacobian_at(res, args, eq, V0, nodes, restart, name):
         "Solver": solver_config(name, nodes, restart),
         "Normalization": normalization,
     }
-    manta_objective = make_objective(config, yancc_res={"na": na, "nx": nx},
-                                     normalization=normalization)
+    manta_objective = make_objective(
+        config, yancc_res={"na": na, "nx": nx}, normalization=normalization
+    )
     itg_builder = make_itg_builder(st_config, eq, RHO_UPPER)
     G_seen = []
 
@@ -185,8 +202,9 @@ def jacobian_at(res, args, eq, V0, nodes, restart, name):
             "sqrtg": data["sqrt(g)"],
         }
         yancc_dat = {k: grid.meshgrid_reshape(v, "rtz") for k, v in yancc_dat.items()}
-        yancc_dat["Psi"] = grid.compress(data["Psi"] / grid.nodes[:, 0] ** 2,
-                                         surface_label="rho")
+        yancc_dat["Psi"] = grid.compress(
+            data["Psi"] / grid.nodes[:, 0] ** 2, surface_label="rho"
+        )
         yancc_dat["a_minor"] = jnp.full(grid.num_rho, data["a"])
         yancc_dat["R_major"] = jnp.full(grid.num_rho, data["R0"])
         yancc_dat["iota"] = grid.compress(data["iota"], surface_label="rho")
@@ -204,14 +222,25 @@ def jacobian_at(res, args, eq, V0, nodes, restart, name):
     assert grid.num_theta == nt and grid.num_zeta == nz, (grid.num_theta, grid.num_zeta)
     terms = [
         (ObjectiveFromUserWithParams if itg_builder is not None else ObjectiveFromUser)(
-            objective_from_user_fun, eq, target=0.0, weight=20.0, grid=grid,
-            deriv_mode="fwd", name="MaNTA stored energy"),
+            objective_from_user_fun,
+            eq,
+            target=0.0,
+            weight=20.0,
+            grid=grid,
+            deriv_mode="fwd",
+            name="MaNTA stored energy",
+        ),
     ]
     if args.all_terms:
         terms += [
-            ObjectiveFromUser(lambda grid, data: grid.compress(data["mirror ratio"]),
-                              thing=eq, grid=grid, bounds=(0.0, 0.2), weight=10.0,
-                              name="mirror ratio"),
+            ObjectiveFromUser(
+                lambda grid, data: grid.compress(data["mirror ratio"]),
+                thing=eq,
+                grid=grid,
+                bounds=(0.0, 0.2),
+                weight=10.0,
+                name="mirror ratio",
+            ),
             Volume(eq=eq, target=V0, weight=100.0),
         ]
     objective = ObjectiveFunction(terms)
@@ -227,30 +256,48 @@ def jacobian_at(res, args, eq, V0, nodes, restart, name):
         return jnp.array([dp0, p1]).squeeze()
 
     k = args.fix_modes_above
-    R_modes = np.vstack(([0, 0, 0], eq.surface.R_basis.modes[
-        np.max(np.abs(eq.surface.R_basis.modes), 1) > k, :]))
-    Z_modes = eq.surface.Z_basis.modes[np.max(np.abs(eq.surface.Z_basis.modes), 1) > k, :]
+    R_modes = np.vstack(
+        (
+            [0, 0, 0],
+            eq.surface.R_basis.modes[
+                np.max(np.abs(eq.surface.R_basis.modes), 1) > k, :
+            ],
+        )
+    )
+    Z_modes = eq.surface.Z_basis.modes[
+        np.max(np.abs(eq.surface.Z_basis.modes), 1) > k, :
+    ]
     constraints = [
         ForceBalance(eq=eq),
         FixCurrent(eq=eq),
         FixBoundaryR(eq=eq, modes=R_modes),
         FixBoundaryZ(eq=eq, modes=Z_modes),
         FixPsi(eq=eq),
-        LinearObjectiveFromUser(pressure_constraint_fun, eq, target=jnp.array([0.0, 0.0])),
+        LinearObjectiveFromUser(
+            pressure_constraint_fun, eq, target=jnp.array([0.0, 0.0])
+        ),
     ]
     # exactly what Optimizer.optimize builds for "proximal-lsq-exact"
     options = {}
     x_scale = _parse_x_scale("ess", [eq], options)
     proj, _ = get_combined_constraint_objectives(
-        eq, constraints, objective, [eq], "proximal-lsq-exact", "lsq-exact", 1, options)
+        eq, constraints, objective, [eq], "proximal-lsq-exact", "lsq-exact", 1, options
+    )
     x0 = proj.x(eq)
     x_scale = _project_x_scale(jnp.concatenate(x_scale), proj)
     f = np.asarray(proj.compute_scaled_error(x0, proj.constants))
     J = np.asarray(proj.jac_scaled_error(x0, proj.constants))
     names = [t.name for t in terms]
     dims = [t.dim_f for t in terms]
-    return dict(f=f, J=J, x_scale=np.asarray(x_scale), G=np.array(G_seen[-1:]),
-                term_dims=np.array(dims), term_names=np.array(names), x0=np.asarray(x0))
+    return dict(
+        f=f,
+        J=J,
+        x_scale=np.asarray(x_scale),
+        G=np.array(G_seen[-1:]),
+        term_dims=np.array(dims),
+        term_names=np.array(names),
+        x0=np.asarray(x0),
+    )
 
 
 @contextlib.contextmanager
@@ -288,14 +335,34 @@ def solver_stats(log):
     for block in log.split("Steady solve:")[1:]:
         lines = [line.strip() for line in block.splitlines()]
         steps = re.search(r"after (\d+) steps", block)
-        outcome = next((line for line in lines[1:] if any(
-            w in line for w in ("converged", "nothing to do", "fail", "Fail", "out of",
-                                "Stalled", "rror"))), "?")
-        solves.append({
-            "solver": lines[0],
-            "outcome": outcome,
-            "steps": int(steps.group(1)) if steps else (0 if "nothing to do" in block else None),
-        })
+        outcome = next(
+            (
+                line
+                for line in lines[1:]
+                if any(
+                    w in line
+                    for w in (
+                        "converged",
+                        "nothing to do",
+                        "fail",
+                        "Fail",
+                        "out of",
+                        "Stalled",
+                        "rror",
+                    )
+                )
+            ),
+            "?",
+        )
+        solves.append(
+            {
+                "solver": lines[0],
+                "outcome": outcome,
+                "steps": int(steps.group(1))
+                if steps
+                else (0 if "nothing to do" in block else None),
+            }
+        )
     return solves
 
 
@@ -307,14 +374,18 @@ def cosine(a, b):
 def compare(lo, hi, top):
     """What the optimizer would do with each, side by side."""
     out = {}
-    for space, s_lo, s_hi in (("scaled", lo["x_scale"], hi["x_scale"]),
-                              ("unscaled", 1.0, 1.0)):
+    for space, s_lo, s_hi in (
+        ("scaled", lo["x_scale"], hi["x_scale"]),
+        ("unscaled", 1.0, 1.0),
+    ):
         g_lo = (lo["J"] * s_lo).T @ lo["f"]
         g_hi = (hi["J"] * s_hi).T @ hi["f"]
         out[f"gradient_{space}"] = {
             "cosine": cosine(g_lo, g_hi),
             "low_is_descent_for_high": bool(g_lo @ g_hi > 0),
-            "norm_ratio_low_over_high": float(np.linalg.norm(g_lo) / np.linalg.norm(g_hi)),
+            "norm_ratio_low_over_high": float(
+                np.linalg.norm(g_lo) / np.linalg.norm(g_hi)
+            ),
         }
     # Gauss-Newton steps in the scaled variables (lsq-exact without the trust
     # region), and the MaNTA term's gradient alone
@@ -338,12 +409,18 @@ def compare(lo, hi, top):
     # the parameters that matter most at high resolution
     order = np.argsort(-np.abs(gm_hi))[:top]
     out["top_parameters"] = [
-        {"index": int(i), "high": float(gm_hi[i]), "low": float(gm_lo[i]),
-         "same_sign": bool(np.sign(gm_hi[i]) == np.sign(gm_lo[i]))}
-        for i in order]
+        {
+            "index": int(i),
+            "high": float(gm_hi[i]),
+            "low": float(gm_lo[i]),
+            "same_sign": bool(np.sign(gm_hi[i]) == np.sign(gm_lo[i])),
+        }
+        for i in order
+    ]
     w = np.abs(gm_hi)
     out["sign_agreement_weighted_by_high"] = float(
-        w[np.sign(gm_hi) == np.sign(gm_lo)].sum() / w.sum())
+        w[np.sign(gm_hi) == np.sign(gm_lo)].sum() / w.sum()
+    )
     out["G"] = {"low": lo["G"].tolist(), "high": hi["G"].tolist()}
     out["f_manta"] = {"low": lo["f"][:n0].tolist(), "high": hi["f"][:n0].tolist()}
     return out
@@ -351,27 +428,50 @@ def compare(lo, hi, top):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--eq", required=True, help="an Equilibrium or EquilibriaFamily .h5 "
-                   "(a family's last member is used, its first sets the Volume target)")
-    p.add_argument("--restart", help="MaNTA restart file both resolutions start from; "
-                   "cold start (pseudo-transient) if omitted")
+    p.add_argument(
+        "--eq",
+        required=True,
+        help="an Equilibrium or EquilibriaFamily .h5 "
+        "(a family's last member is used, its first sets the Volume target)",
+    )
+    p.add_argument(
+        "--restart",
+        help="MaNTA restart file both resolutions start from; "
+        "cold start (pseudo-transient) if omitted",
+    )
     p.add_argument("--low", type=parse_res, required=True, help="na,nx,ntheta,nzeta")
     p.add_argument("--high", type=parse_res, required=True, help="na,nx,ntheta,nzeta")
-    p.add_argument("--all-terms", action="store_true",
-                   help="include the driver's mirror-ratio and volume terms")
-    p.add_argument("--fix-modes-above", type=int, default=5,
-                   help="boundary modes with |m| or |n| above this are fixed (driver: 5)")
+    p.add_argument(
+        "--all-terms",
+        action="store_true",
+        help="include the driver's mirror-ratio and volume terms",
+    )
+    p.add_argument(
+        "--fix-modes-above",
+        type=int,
+        default=5,
+        help="boundary modes with |m| or |n| above this are fixed (driver: 5)",
+    )
     p.add_argument("--Spi", type=float, default=600.0)
     p.add_argument("--Sn", type=float, default=1.2)
-    p.add_argument("--keep-pressure", action="store_true",
-                   help="keep the file's pressure profile; the driver resets it to zero")
+    p.add_argument(
+        "--keep-pressure",
+        action="store_true",
+        help="keep the file's pressure profile; the driver resets it to zero",
+    )
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--recompute", action="store_true")
-    p.add_argument("--refine", action="store_true",
-                   help="also restart the high resolution from the low one's converged "
-                        "state with Newton, and compare")
-    p.add_argument("--skip-full", action="store_true",
-                   help="with --refine, leave out the full high-resolution run")
+    p.add_argument(
+        "--refine",
+        action="store_true",
+        help="also restart the high resolution from the low one's converged "
+        "state with Newton, and compare",
+    )
+    p.add_argument(
+        "--skip-full",
+        action="store_true",
+        help="with --refine, leave out the full high-resolution run",
+    )
     p.add_argument("--out", default="graddir")
     args = p.parse_args()
     if args.skip_full and not args.refine:
@@ -389,8 +489,9 @@ def main():
     family = loaded if isinstance(loaded, EquilibriaFamily) else [loaded]
     eq = family[-1].copy()
     V0 = family[0].compute("V")["V"]
-    nodes = np.concatenate(([0.0], np.linspace(0.05, 0.99 * RHO_UPPER, NPOINTS - 1),
-                            [RHO_UPPER]))
+    nodes = np.concatenate(
+        ([0.0], np.linspace(0.05, 0.99 * RHO_UPPER, NPOINTS - 1), [RHO_UPPER])
+    )
     if not args.keep_pressure:
         rho = jnp.array(MaNTA.getNodes(nodes, DEGREE))
         pressure_rho = jnp.concatenate([jnp.zeros(1), rho, jnp.ones(1)])
@@ -403,8 +504,14 @@ def main():
     runs = [("low", args.low, args.restart, low_name)]
     if args.refine:
         # the low run's converged steady state: its primal's restart file
-        runs.append(("refined", args.high, os.path.abspath(low_name + ".restart.nc"),
-                     f"{args.out}_{tag(args.high)}_refined"))
+        runs.append(
+            (
+                "refined",
+                args.high,
+                os.path.abspath(low_name + ".restart.nc"),
+                f"{args.out}_{tag(args.high)}_refined",
+            )
+        )
     if not args.skip_full:
         runs.append(("high", args.high, args.restart, f"{args.out}_{tag(args.high)}"))
 
@@ -416,10 +523,15 @@ def main():
             results[label] = dict(np.load(path, allow_pickle=True))
             continue
         if restart is not None and not os.path.isfile(restart):
-            sys.exit(f"{label}: no restart file {restart} (rerun the low resolution "
-                     "with --recompute if only its .npz survived)")
-        print(f"{label} {res}: from {restart or 'a cold start'}; MaNTA output in "
-              f"{name}.log", flush=True)
+            sys.exit(
+                f"{label}: no restart file {restart} (rerun the low resolution "
+                "with --recompute if only its .npz survived)"
+            )
+        print(
+            f"{label} {res}: from {restart or 'a cold start'}; MaNTA output in "
+            f"{name}.log",
+            flush=True,
+        )
         from stellarator_multichannel import StellaratorTransport
 
         counts0 = dict(StellaratorTransport.evaluation_counts)
@@ -427,39 +539,58 @@ def main():
         with captured(name + ".log"):
             r = jacobian_at(res, args, eq, V0, nodes, restart, name)
         r["wall_seconds"] = np.array(time.time() - t0)
-        r["evaluations"] = np.array([
-            StellaratorTransport.evaluation_counts[k] - counts0[k]
-            for k in ("ComputePhysics", "ComputePhysicsDerivatives")])
+        r["evaluations"] = np.array(
+            [
+                StellaratorTransport.evaluation_counts[k] - counts0[k]
+                for k in ("ComputePhysics", "ComputePhysicsDerivatives")
+            ]
+        )
         r["stats"] = np.array(json.dumps(solver_stats(open(name + ".log").read())))
         np.savez(path, **r)
         results[label] = r
 
     for label, r in results.items():
-        if not (np.allclose(r["x0"], results["low"]["x0"])
-                and np.allclose(r["x_scale"], results["low"]["x_scale"])):
-            sys.exit(f"x0 or x_scale differs between low and {label}: not the same point")
+        if not (
+            np.allclose(r["x0"], results["low"]["x0"])
+            and np.allclose(r["x_scale"], results["low"]["x_scale"])
+        ):
+            sys.exit(
+                f"x0 or x_scale differs between low and {label}: not the same point"
+            )
 
-    pairs = [(a, b) for a, b in (("low", "high"), ("refined", "high"), ("low", "refined"))
-             if a in results and b in results]
-    report = {"resolutions": {"low": list(args.low), "high": list(args.high)},
-              "runs": {}, "comparisons": {}}
+    pairs = [
+        (a, b)
+        for a, b in (("low", "high"), ("refined", "high"), ("low", "refined"))
+        if a in results and b in results
+    ]
+    report = {
+        "resolutions": {"low": list(args.low), "high": list(args.high)},
+        "runs": {},
+        "comparisons": {},
+    }
     print(f"\n{results['low']['J'].shape[1]} free parameters after the projections")
     print(f"\n{'run':8s} {'G':>12s} {'wall':>8s}   steady solves (primal first)")
     for label, r in results.items():
         stats = json.loads(str(r["stats"]))
         n_res, n_jac = (int(v) for v in r["evaluations"])
-        report["runs"][label] = {"G": np.ravel(r["G"]).tolist(),
-                                 "wall_seconds": float(r["wall_seconds"]),
-                                 "yancc_residual_evaluations": n_res,
-                                 "yancc_jacobian_evaluations": n_jac,
-                                 "steady_solves": stats}
+        report["runs"][label] = {
+            "G": np.ravel(r["G"]).tolist(),
+            "wall_seconds": float(r["wall_seconds"]),
+            "yancc_residual_evaluations": n_res,
+            "yancc_jacobian_evaluations": n_jac,
+            "steady_solves": stats,
+        }
         G = np.ravel(r["G"])
-        print(f"{label:8s} {G[0] if G.size else float('nan'):12.6g} "
-              f"{float(r['wall_seconds']):7.0f}s   yancc evaluations: {n_res} residual, "
-              f"{n_jac} Jacobian (forward Jacobian only; the adjoint's are separate)")
+        print(
+            f"{label:8s} {G[0] if G.size else float('nan'):12.6g} "
+            f"{float(r['wall_seconds']):7.0f}s   yancc evaluations: {n_res} residual, "
+            f"{n_jac} Jacobian (forward Jacobian only; the adjoint's are separate)"
+        )
         for st in stats:
-            print(f"           {st['solver'][:60]:60s}  steps {st['steps']}"
-                  f"  | {st['outcome'][:50]}")
+            print(
+                f"           {st['solver'][:60]:60s}  steps {st['steps']}"
+                f"  | {st['outcome'][:50]}"
+            )
     for a, b in pairs:
         cmp = compare(results[a], results[b], args.top)
         report["comparisons"][f"{a}_vs_{b}"] = cmp
@@ -473,22 +604,32 @@ def print_comparison(a, b, cmp):
     print(f"\n{a} vs {b} ({b} as the reference)")
     print(f"  G: {a} {cmp['G']['low']}  {b} {cmp['G']['high']}")
     m = cmp["manta_term_gradient_scaled"]
-    print(f"  MaNTA-term gradient (scaled):  cos = {m['cosine']:+.4f}   "
-          f"{a}'s descent is descent for {b}: {m['low_is_descent_for_high']}")
+    print(
+        f"  MaNTA-term gradient (scaled):  cos = {m['cosine']:+.4f}   "
+        f"{a}'s descent is descent for {b}: {m['low_is_descent_for_high']}"
+    )
     for space in ("scaled", "unscaled"):
         g = cmp[f"gradient_{space}"]
-        print(f"  full gradient ({space:8s}):     cos = {g['cosine']:+.4f}   "
-              f"|g_{a}|/|g_{b}| = {g['norm_ratio_low_over_high']:.3f}")
+        print(
+            f"  full gradient ({space:8s}):     cos = {g['cosine']:+.4f}   "
+            f"|g_{a}|/|g_{b}| = {g['norm_ratio_low_over_high']:.3f}"
+        )
     gn = cmp["gauss_newton_step_scaled"]
-    print(f"  Gauss-Newton step (scaled):    cos = {gn['cosine']:+.4f}   d(0.5|f_{b}|^2) "
-          f"along {a}'s step {gn['high_objective_change_along_low_step']:+.3e}, along "
-          f"its own {gn['high_objective_change_along_high_step']:+.3e}")
-    print(f"  sign agreement, weighted by |g_{b}|: "
-          f"{cmp['sign_agreement_weighted_by_high']:.1%}")
+    print(
+        f"  Gauss-Newton step (scaled):    cos = {gn['cosine']:+.4f}   d(0.5|f_{b}|^2) "
+        f"along {a}'s step {gn['high_objective_change_along_low_step']:+.3e}, along "
+        f"its own {gn['high_objective_change_along_high_step']:+.3e}"
+    )
+    print(
+        f"  sign agreement, weighted by |g_{b}|: "
+        f"{cmp['sign_agreement_weighted_by_high']:.1%}"
+    )
     print(f"  largest {b} MaNTA-gradient components:")
     for t in cmp["top_parameters"]:
-        print(f"    [{t['index']:4d}]  {b} {t['high']:+.3e}  {a} {t['low']:+.3e}"
-              f"{'' if t['same_sign'] else '   <-- sign differs'}")
+        print(
+            f"    [{t['index']:4d}]  {b} {t['high']:+.3e}  {a} {t['low']:+.3e}"
+            f"{'' if t['same_sign'] else '   <-- sign differs'}"
+        )
 
 
 if __name__ == "__main__":

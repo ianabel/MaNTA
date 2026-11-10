@@ -60,7 +60,7 @@ def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity, f1=
         rtol=rtol,
         throw=False,
         verbose=0,
-        multigrid_options={"smooth_solver": "banded", "max_grids": max_grids},
+        multigrid_options={"smooth_solver": "dense", "max_grids": max_grids},
         f1=f1,
     )
     moments = (
@@ -140,9 +140,10 @@ def _normalized_fluxes(
 
     # the bootstrap current is carried, not solved for: its row only sets the
     # aux to what the solve gives, so it feeds nothing back
-    bootstrap_g_out = StellaratorState.bootstrap_of(
-        _state, params
-    ) - bootstrap / c.BootstrapCurrentNormalization()
+    bootstrap_g_out = (
+        StellaratorState.bootstrap_of(_state, params)
+        - bootstrap / c.BootstrapCurrentNormalization()
+    )
 
     return (
         [particle_flux, heat_flux[0], heat_flux[1]],
