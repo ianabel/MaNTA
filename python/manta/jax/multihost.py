@@ -5,10 +5,13 @@ solver included -- and a jitted call over a mesh of several processes is a
 collective that each computes its own shards of. Two directions of transfer
 follow, and only one of them needs anything:
 
-* host to device works as it is: ``jax.device_put`` of a numpy array, or of a
-  process-local ``jax.Array``, onto a sharding that spans processes keeps the
-  local shards, provided every process passes the same data. MaNTA hands every
-  process the same state, so that holds.
+* host to device works for a numpy array or an *uncommitted* process-local
+  ``jax.Array``: ``jax.device_put`` onto a sharding that spans processes keeps
+  the local shards, provided every process passes the same data. MaNTA hands
+  every process the same state, so that holds. A *committed* local array -- one
+  ``device_put`` to a device, or computed from one -- is refused ("device_put's second argument must be
+  a Device or a Sharding which represents addressable devices"), and
+  `put_global` exists for that case.
 * device to host does not. ``np.asarray`` of an array with shards on another
   process raises ("spans non-addressable devices"), and so does slicing it to
   a length the device count does not divide, which is what unpadding a batch
@@ -31,6 +34,27 @@ def _gather_leaf(x):
     if isinstance(x, jax.Array) and not x.is_fully_addressable:
         return jnp.asarray(np.asarray(multihost_utils.process_allgather(x, tiled=True)))
     return x
+
+
+def put_global(x, sharding):
+    """`jax.device_put(x, sharding)`, also when `x` is a committed array local
+    to this process and `sharding` spans several.
+
+    `device_put` takes such an array only if it is uncommitted, and which
+    arrays are committed depends on how the caller made them -- the solver's
+    state is numpy, but a module's arrays, or anything a jit computed from a
+    committed input, need not be. Built from the host copy instead, every
+    process contributing the shards it addresses; like `device_put`, every
+    process must pass the same value.
+    """
+    if (
+        jax.process_count() == 1
+        or sharding.is_fully_addressable
+        or (isinstance(x, jax.Array) and not x.is_fully_addressable)
+    ):
+        return jax.device_put(x, sharding)
+    host = np.asarray(x)
+    return jax.make_array_from_callback(host.shape, sharding, lambda idx: host[idx])
 
 
 def gather_to_host(tree):

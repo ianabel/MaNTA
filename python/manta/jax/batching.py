@@ -4,7 +4,7 @@ import equinox as eqx
 import jax.tree_util as jtu
 from jax.sharding import NamedSharding, PartitionSpec
 
-from .multihost import gather_to_host
+from .multihost import gather_to_host, put_global
 
 
 @jax.jit
@@ -51,7 +51,7 @@ def _place(args, vmap_axes, mesh, axis):
     return jax.tree.unflatten(
         treedef,
         [
-            jax.device_put(leaf, NamedSharding(mesh, spec))
+            put_global(leaf, NamedSharding(mesh, spec))
             if eqx.is_array(leaf)
             else leaf
             for leaf, spec in zip(leaves, specs)
@@ -110,11 +110,27 @@ def _wrap_vmap_maybe_chunk(
 
     def _wrap_shard(*args):
         if sharding is not None:
-            args_s = tuple(
-                eqx.filter_shard(arg, sharding) if ax is not None else arg
+            # put_global rather than eqx.filter_shard, which is a device_put
+            # and refuses a committed local array when the mesh spans
+            # processes. Unmapped leaves go on the mesh replicated there: one
+            # committed to a local device would leave jit two device sets.
+            def put(arg, s):
+                return jax.tree.map(
+                    lambda leaf: put_global(leaf, s) if eqx.is_array(leaf) else leaf,
+                    arg,
+                )
+
+            replicated = (
+                NamedSharding(sharding.mesh, PartitionSpec())
+                if jax.process_count() > 1 and isinstance(sharding, NamedSharding)
+                else None
+            )
+            return tuple(
+                put(arg, sharding)
+                if ax is not None
+                else (arg if replicated is None else put(arg, replicated))
                 for arg, ax in zip(args, vmap_axes)
             )
-            return args_s
         else:
             return args
 
