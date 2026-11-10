@@ -45,10 +45,12 @@ def put_global(x, sharding):
     state is numpy, but a module's arrays, or anything a jit computed from a
     committed input, need not be. Built from the host copy instead, every
     process contributing the shards it addresses; like `device_put`, every
-    process must pass the same value.
+    process must pass the same value. A tracer goes to `device_put` as it
+    is: under a trace there is no value to copy.
     """
     if (
         jax.process_count() == 1
+        or isinstance(x, jax.core.Tracer)
         or sharding.is_fully_addressable
         or (isinstance(x, jax.Array) and not x.is_fully_addressable)
     ):

@@ -74,8 +74,16 @@ class yancc_data(eqx.Module):
         self.Vpp = Vpp
         self.rho = rho
 
-        self.speedgrid = MaxwellSpeedGrid(nx)
-        self.pitchgrid = UniformPitchAngleGrid(na)
+        # Built under a jit so their arrays are concrete wherever this runs.
+        # DESC computes the objective's JVP under a vmap over tangents, and
+        # MaxwellSpeedGrid calls jnp.linalg.pinv, a custom_jvp function that
+        # comes out of a vmap trace as a BatchTracer even with no batched
+        # input. The physics case then carries that tracer into MaNTA's
+        # callbacks, long after the trace, where it cannot be placed on the
+        # mesh. (jax.ensure_compile_time_eval would also do, but orthax's
+        # error_if trips when the recurrence is evaluated eagerly.)
+        self.speedgrid = eqx.filter_jit(lambda: MaxwellSpeedGrid(nx))()
+        self.pitchgrid = eqx.filter_jit(lambda: UniformPitchAngleGrid(na))()
 
         self.na = na
         self.nx = nx
