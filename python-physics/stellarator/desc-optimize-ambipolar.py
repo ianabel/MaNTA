@@ -79,6 +79,7 @@ st_config = {
     "T0": 1.0,
     "FusionFactor": 0.01,
     "evolveDensity": True,
+    "reuseF1": True,
     "useBatching": True,
     # NN ITG heat flux on top of the neoclassical one; needs torch and the
     # itg-proxy model data (ITG_MODEL_DIR)
@@ -150,10 +151,10 @@ points = MaNTA.getNodes(
 yancc_rho = jnp.array(points)
 
 yancc_rho = jnp.array(points)
-yancc_ntheta = 17
-yancc_nzeta = 25
+yancc_ntheta = 25
+yancc_nzeta = 33
 
-yancc_res = {"na": 45, "nx": 7}
+yancc_res = {"na": 75, "nx": 7}
 
 
 # %%

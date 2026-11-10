@@ -95,22 +95,24 @@ def make_config(Spi=300.0, Sn=1.2):
         # ErInertia keeps tau's stabilisation (an added diffusivity ~ ErInertia *
         # tau * h) below D_E on the widest cell; see DiffusiveErFlux.
         # "ErModel": "Diffusive",
+        "reuseF1": False,
+        "useShardMap": True,
         "ErDiffusion": 1e-6,
         "ErInertia": 5e-6,
         "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
         "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
         "useBatching": True,
-        "batch_size": 16,
-        "nchunks": 3,
+        "batch_size": 24,
+        "nchunks": 2,
     }
 
 
 # st_config and the solver settings are written in the default normalisation.
 # True converts them (rescale_config) so only the units change, not the physics;
-# False reads them as numbers in the new units.
-keep_physics = False
+# False reads them as numbers in the new units. keep_physics = False
 
-append = True
+keep_physics = False
+append = False
 
 rho_upper = 0.9
 rtol = 1e-2
@@ -162,7 +164,7 @@ solver_config = {
     "NewtonJacobianReuse": 4,
     "NewtonMaxIterations": 25,
     "MaxRejectedSteps": 10,
-    "restart": True,
+    "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 0.5,
@@ -170,7 +172,7 @@ solver_config = {
 }
 
 
-st_config = make_config(600, 1.2)
+st_config = make_config(250, 1.2)
 config = {
     "Stellarator": st_config,
     "Solver": solver_config,
@@ -182,10 +184,10 @@ points = MaNTA.getNodes(
 
 
 yancc_rho = jnp.array(points)
-yancc_ntheta = 17
-yancc_nzeta = 27
+yancc_ntheta = 27
+yancc_nzeta = 33
 
-yancc_res = {"na": 45, "nx": 7}
+yancc_res = {"na": 65, "nx": 7}
 
 
 # %%
@@ -285,7 +287,7 @@ itg_builder = make_itg_builder(config["Stellarator"], eq_init, rho_upper)
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
 )
-# st.run()
+st.run()
 # Sns = [1.1, 0.9]
 # Spis = [350.0, 400.0]
 
@@ -360,7 +362,6 @@ st = StellaratorTransport(
 #     "Solver": solver_config,
 # }
 # pi = []
-fig, ax = plt.subplots()
 #
 solver_config = {
     "OutputFilename": fname,
@@ -402,6 +403,7 @@ config = normalized(
 )
 
 
+# fig, ax = plt.subplots()
 # eq2 = eq.copy()
 # fam2 = EquilibriaFamily(eq2)
 # niters = 3
