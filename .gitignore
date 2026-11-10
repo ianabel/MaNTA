@@ -46,6 +46,7 @@ gmon.out
 slurm-*.out
 
 *.out
+*.log
 
 # Compiler-generated header dependency files (-MMD -MP)
 *.d
