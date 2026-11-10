@@ -515,8 +515,14 @@ def objective_from_user_fun(grid, data, params=None):
     return 1 / g  # jnp.append(pressure_error, 1 / stored_energy)
 
 
+# The surface resolution yancc solves on during the optimisation, which has to
+# be the one the standalone run uses (yancc_data.from_eq with yancc_ntheta and
+# yancc_nzeta). Built from M_grid/N_grid instead, this was 17 x 17 for an
+# M = N = 4 equilibrium against 27 x 33: a different, cheaper objective. With
+# point counts, LinearGrid places its nodes exactly where Field.from_desc does
+# (theta on [0, 2 pi), zeta on [0, 2 pi / NFP), no endpoint).
 yancc_desc_grid = desc.grid.LinearGrid(
-    rho=yancc_rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP
+    rho=yancc_rho, theta=yancc_ntheta, zeta=yancc_nzeta, NFP=eq.NFP
 )
 # yancc_desc_grid = yancc_wrapper.grid
 
