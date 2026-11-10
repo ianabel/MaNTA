@@ -417,7 +417,7 @@ def objective_from_user_fun(grid, data, params=None):
 
 
 yancc_desc_grid = desc.grid.LinearGrid(
-    rho=yancc_rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP
+    rho=yancc_rho, theta=yancc_ntheta, zeta=yancc_nzeta, NFP=eq.NFP
 )
 # yancc_desc_grid = yancc_wrapper.grid
 

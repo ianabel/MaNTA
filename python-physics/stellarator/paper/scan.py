@@ -315,7 +315,7 @@ for S0 in S0s:
         return 1 / stored_energy
 
     yancc_desc_grid = desc.grid.LinearGrid(
-        rho=yancc_rho, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP
+        rho=yancc_rho, theta=yancc_ntheta, zeta=yancc_nzeta, NFP=eq.NFP
     )
     # domain_boundary_rho = rho_from_normalized_volume(0.9)
     domain_boundary_rho = 1.0
