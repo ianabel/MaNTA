@@ -594,6 +594,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         and refused otherwise, so the config says what physics a run had."""
         solver_config = per_process_files(config["Solver"])
         config = {**config, "Solver": solver_config}
+        config_in = config
         st_config = config["Stellarator"]
         normalization = config.get("Normalization", {})
         # what the adjoint differentiates: the name of one of the objective
@@ -670,6 +671,27 @@ class StellaratorTransport(MaNTA.TransportSystem):
         if objective == "ITGHeatFlux" and self.itg is None:
             raise ValueError("Objective = ITGHeatFlux needs the ITG term (useITGProxy)")
         g = [objectives[objective]]
+        # PressureObjectives: one more objective per physics node, whose value
+        # is the pressure there, so the adjoint returns d p(x_j) / d(geometry)
+        # beside dG/d(geometry). objective.py contracts those rows with the
+        # tangent, which is what gives the pressure profile a derivative.
+        self.pressure_objectives = bool(config_in.get("PressureObjectives", False))
+        if self.pressure_objectives:
+            if self.params.config.adaptiveGrid or solver_config.get("Superconvergent"):
+                raise ValueError(
+                    "PressureObjectives needs a fixed grid and the plain scheme: "
+                    "its objectives pick out the physics nodes by position"
+                )
+            weights = np.asarray(
+                MaNTA.getPhysicsWeights(
+                    list(solver_config["GridPoints"]), solver_config["PolynomialDegree"]
+                )
+            ).ravel()
+            assert len(weights) == len(self.points)
+            g += [
+                partial(self.PressureAtNode, float(xj), float(wj))
+                for xj, wj in zip(self.points, weights)
+            ]
 
         self.levels = []  # (cells, k) of each plan MaNTA handed over
         ### for adaptive grid problems ###
@@ -701,7 +723,7 @@ class StellaratorTransport(MaNTA.TransportSystem):
         )
 
         self.runner = FFIRunner(
-            self, self.points, 1, self.adjointProblem.np, spatialParameters=True
+            self, self.points, len(g), self.adjointProblem.np, spatialParameters=True
         )
 
         self.runner.configure(solver_config)
@@ -905,6 +927,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
             Ti = 2.0 / 3.0 * state.Variable[0] / n
 
         return n * Ti * self.tauE(field, vp, vpp, geometry, state, x, params)
+
+    def PressureAtNode(self, xj, wj, field, vp, vpp, geometry, state, x, params):
+        """The ion pressure at the physics node x_j, in units of n0 T0, as an
+        objective: MaNTA reports sum_m w_m g(x_m), so g is p / w_j at x_j and
+        zero at every other node. Physics nodes are interior, so V' > 0."""
+        channel = Channel.IonEnergy if params.config.evolveDensity else 0
+        p = 2.0 / 3.0 * state.Variable[channel] / vp
+        return jnp.where(jnp.abs(x - xj) < 1e-12, p / wj, 0.0 * p)
 
     def ITGHeatFlux(self, field, vp, vpp, geometry, state, x, params):
         """V' <q_ITG . grad rho>, the NN ITG ion heat flux, in the units MaNTA

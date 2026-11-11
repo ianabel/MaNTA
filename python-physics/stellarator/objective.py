@@ -215,7 +215,9 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
             ec = st.run()
 
             def true_fn():
-                return st.G()[0]
+                # the objective alone: with PressureObjectives the runner
+                # carries the node pressures after it
+                return st.G()[0][:1]
 
             def false_fn():
                 return jnp.array([failure_value], dtype=cpu_fp_dtype)
@@ -248,19 +250,18 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
 
         # columns: the field's (np_field, incl. V' and V''), the ITG geometry's
         # (n_itg, zero without the ITG term), then one upper-boundary
-        # sensitivity per variable
+        # sensitivity per variable. Rows: npoints per objective, G's first,
+        # then (PressureObjectives) one objective per node's pressure.
         adj = st.adjointProblem
         np_field, np_cell = adj.np_field, adj.np_cell
-        G_p_field = G_p[:, :np_field]
-        G_p_itg = G_p[:, np_field:np_cell]
-        G_p_boundary = G_p[:, np_cell:]
+        npts = adj.npoints
 
         ntheta = fields.ntheta
         nzeta = fields.nzeta
         pad_width = 1 + 2 * (nzeta) + 2 * (ntheta)
         # no field tangent at all when only the ITG geometry moves (a
         # perturbation of what the builder sees with the fields held fixed)
-        dp_field = jnp.zeros(())
+        v_unstack = None
         if jax.tree.leaves(v):
             v_unstack = jax.vmap(
                 lambda x: jnp.pad(
@@ -269,29 +270,49 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
                     mode="constant",
                 )
             )(v)
-            dp_field = jnp.dot(G_p_field.flatten(), v_unstack.flatten())
-
-        # the ITG geometry at each node, through the table it is interpolated from
-        dp_itg = jnp.zeros(())
+        v_itg_nodes = None
         if itg is not None and v_itg is not None:
             v_itg_nodes = _itg_node_tangent(itg, v_itg, st.points, adj.n_itg)
-            dp_itg = jnp.dot(G_p_itg.flatten(), v_itg_nodes.flatten())
-
-        # the Dirichlet edge data depend on V': chain dG/dg_D (carried by the
-        # edge cell's rows, so summed over rows) through g_D(V')
-        dp_boundary = jnp.zeros(())
+        dgD = None
         Vp_tangent = v[1]
         if Vp_tangent is not None:
             _, dgD = jax.jvp(st.upper_boundary_values, (Vp,), (Vp_tangent,))
-            dp_boundary = jnp.dot(G_p_boundary.sum(axis=0), dgD)
 
+        def contract(rows):
+            """One objective's directional derivative from its rows of G_p."""
+            dp_field = jnp.zeros(())
+            if v_unstack is not None:
+                dp_field = jnp.dot(rows[:, :np_field].flatten(), v_unstack.flatten())
+            # the ITG geometry at each node, through the table it is interpolated from
+            dp_itg = jnp.zeros(())
+            if v_itg_nodes is not None:
+                dp_itg = jnp.dot(rows[:, np_field:np_cell].flatten(), v_itg_nodes.flatten())
+            # the Dirichlet edge data depend on V': chain dG/dg_D (carried by the
+            # edge cell's rows, so summed over rows) through g_D(V')
+            dp_boundary = jnp.zeros(())
+            if dgD is not None:
+                dp_boundary = jnp.dot(rows[:, np_cell:].sum(axis=0), dgD)
+            return dp_field, dp_itg, dp_boundary
+
+        dp_field, dp_itg, dp_boundary = contract(G_p[:npts])
         jax.debug.callback(_record_jvp_parts, dp_field, dp_itg, dp_boundary)
         dp = jnp.asarray(dp_field + dp_itg + dp_boundary, dtype=cpu_fp_dtype)
 
-        # what was read from the runner; dp is a tracer whenever the tangent
-        # is (DESC's Jacobian), and says nothing about the runner
+        dpi = None
+        if st.pressure_objectives:
+            # node j's pressure is objective 1 + j; getPressure's units
+            dpi = jnp.stack(
+                [
+                    sum(contract(G_p[(1 + j) * npts : (2 + j) * npts]))
+                    for j in range(npts)
+                ]
+            ) * st.pnorm
+            dpi = jnp.asarray(dpi, dtype=cpu_fp_dtype)
+
+        # what was read from the runner; dp and dpi are tracers whenever the
+        # tangent is (DESC's Jacobian), and say nothing about the runner
         _release_if_concrete(st, (G, G_p, pi))
-        return (G, pi), (dp, None)
+        return (G, pi), (dp, dpi)
 
     return _objective_base
 
