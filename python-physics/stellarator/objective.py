@@ -37,6 +37,72 @@ def _record_jvp_parts(field, itg, boundary):
         print(f"objective JVP: field {field}  itg {itg}  boundary {boundary}")
 
 
+def _release_if_concrete(st, outputs):
+    """Free an evaluation's StellaratorTransport once its results exist.
+
+    Each evaluation builds its own case, and a case is never collected unless
+    released (StellaratorTransport.release), so an optimisation kept every
+    one: a solver, a set of fields and an adjoint problem per evaluation.
+    `outputs` are the values read from the runner. Under a trace they are
+    tracers and the compiled program still calls the runner by address, so
+    the case has to stay.
+    """
+    if any(isinstance(leaf, jax.core.Tracer) for leaf in jax.tree.leaves(outputs)):
+        return
+    jax.block_until_ready(outputs)
+    st.release()
+    # A concrete evaluation is between Jacobians (DESC's trust region
+    # evaluates each trial point before differentiating at it), so at most
+    # one Jacobian's eager compilations are ever held
+    _drop_eager_compilations()
+
+
+def _drop_eager_compilations():
+    """Empty JAX's cache of eagerly executed primitives.
+
+    DESC evaluates this objective's Jacobian eagerly (the objective is built
+    with use_jit=False), and in eager mode JAX compiles each control-flow and
+    FFI primitive it meets -- the scan over tangent chunks, the conds, the
+    ffi_calls -- into a small program kept in `xla_primitive_callable`. Those
+    programs never come back: each evaluation's runner address is an ffi_call
+    attribute and each case is closed over by the conds, so every Jacobian
+    compiled ~240 new ones and kept them, 330-430 MB per Jacobian here at
+    na=45, nx=7. Nothing is lost by dropping them, since nothing can hit them
+    again; measured, the Jacobian takes as long with the clear as without.
+
+    Private JAX API, so a JAX that moves it gets a warning, not a crash. The
+    real fix is a traced program with no per-evaluation identities in it: the
+    address as an operand rather than an attribute, and conds that close over
+    nothing per case.
+    """
+    try:
+        from jax._src import dispatch
+
+        dispatch.xla_primitive_callable.cache_clear()
+    except (ImportError, AttributeError) as e:
+        import warnings
+
+        warnings.warn(f"could not clear JAX's eager primitive cache: {e!r}")
+    _return_freed_memory()
+
+
+def _return_freed_memory():
+    """Hand memory glibc is holding free back to the OS.
+
+    Not a leak, but it grows like one: XLA's worker threads spread a
+    Jacobian's ~2 GB of temporaries over many malloc arenas, and the freed
+    space was neither returned nor reused, so the resident set rose ~1.5 GB
+    per Jacobian with nothing live behind it. malloc_trim returns it; glibc
+    only, so anywhere else this does nothing.
+    """
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
 def abstract_eval(yin):
     boundary_field = yin.fields_unstacked[-1]
 
@@ -160,6 +226,7 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
             G = jax.lax.cond(ec, true_fn, false_fn)
 
         pi = jnp.array(st.getPressure())
+        _release_if_concrete(st, (G, pi))
         return G, pi
 
     @_objective_base.def_jvp
@@ -221,6 +288,9 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
         jax.debug.callback(_record_jvp_parts, dp_field, dp_itg, dp_boundary)
         dp = jnp.asarray(dp_field + dp_itg + dp_boundary, dtype=cpu_fp_dtype)
 
+        # what was read from the runner; dp is a tracer whenever the tangent
+        # is (DESC's Jacobian), and says nothing about the runner
+        _release_if_concrete(st, (G, G_p, pi))
         return (G, pi), (dp, None)
 
     return _objective_base

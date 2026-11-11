@@ -706,6 +706,21 @@ class StellaratorTransport(MaNTA.TransportSystem):
 
         self.runner.configure(solver_config)
 
+    def release(self):
+        """Drop the runner and the adjoint problem, so this case can be freed.
+
+        The case holds its runner and the runner's C++ side holds the case
+        through a shared_ptr, a cycle Python's collector cannot see: without
+        this a StellaratorTransport -- its solver, its fields, the adjoint
+        problem -- is never freed. Call it once every value read from the
+        runner is concrete (jax.block_until_ready them first: the reads are
+        FFI calls on the runner's address, and CPU dispatch can be
+        asynchronous). Not under a trace, where the compiled program still
+        refers to the runner. The case is unusable afterwards.
+        """
+        self.runner = None
+        self.adjointProblem = None
+
     def reconfigure(self, solver_config):
         self.runner.configure(per_process_files(solver_config))
         return True
@@ -904,17 +919,23 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # local's sign follows compute_dke_sol's, where the flux enters negated
         return -flux[channel]
 
-    # vp_interp is an argument, never read off self inside the trace: jit keys
-    # its cache on self alone, so arrays closed over that way are captured
-    # from whichever call compiled first, and JAX >= 0.9 hoists them into
-    # hidden executable arguments the cached fast path then fails to supply
-    # ("Execution supplied 2 arguments but compiled program expected 4").
+    # Nothing is read off self inside the trace. params and vp_interp are
+    # arguments: arrays closed over are captured from whichever call compiled
+    # first, and JAX >= 0.9 hoists them into hidden executable arguments the
+    # cached fast path then fails to supply ("Execution supplied 2 arguments
+    # but compiled program expected 4"). And self is not a static argument
+    # either: jit keeps its static arguments in its cache, so that compiled
+    # once per case and kept every case alive. index and x go in as arrays,
+    # since filter_jit would otherwise compile per value.
     def InitialValue(self, index, x):
-        return self._initial_value_jit(index, x, self.vp_interp)
+        return self._initial_value_jit(
+            self.params, jnp.asarray(index), jnp.asarray(x), self.vp_interp
+        )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _initial_value_jit(self, index, x, vp_interp):
-        return self._initial_value(index, x, vp_interp)
+    @staticmethod
+    @eqx.filter_jit
+    def _initial_value_jit(params, index, x, vp_interp):
+        return StellaratorTransport._initial_value(params, index, x, vp_interp)
 
     def upper_boundary_values(self, Vp):
         """The Dirichlet data at x_R, as a function of V' on the field's rho.
@@ -929,29 +950,33 @@ class StellaratorTransport(MaNTA.TransportSystem):
         vp = interpax.interp1d(self.points, self.yancc_wrapper.rho, Vp, extrap=True)
         vp_interp = interpax.Akima1DInterpolator(self.points, vp, check=False)
         return jnp.stack(
-            [self._initial_value(i, self.xR, vp_interp) for i in range(self.nDirichlet)]
+            [
+                self._initial_value(self.params, i, self.xR, vp_interp)
+                for i in range(self.nDirichlet)
+            ]
         )
 
-    def _initial_value(self, index, x, vp_interp):
+    @staticmethod
+    def _initial_value(params, index, x, vp_interp):
         def constant_density(index, x):
             n = StellaratorState.initial_profile(
                 x,
-                self.params.config.EdgeDensity,
-                self.params.config.n0,
-                self.params.config.rhoUpper,
-                self.params.config.alpha,
+                params.config.EdgeDensity,
+                params.config.n0,
+                params.config.rhoUpper,
+                params.config.alpha,
             )
 
-            return 1.5 * self.params.config.EdgeTemperature * n * vp_interp(x)
+            return 1.5 * params.config.EdgeTemperature * n * vp_interp(x)
 
         def ambipolar(index, x):
             def n0(x):
                 return StellaratorState.initial_profile(
                     x,
-                    self.params.config.EdgeDensity,
-                    self.params.config.n0,
-                    self.params.config.rhoUpper,
-                    self.params.config.alpha,
+                    params.config.EdgeDensity,
+                    params.config.n0,
+                    params.config.rhoUpper,
+                    params.config.alpha,
                 ) * vp_interp(x)
 
             def ui0(x):
@@ -961,10 +986,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     * n0(x)
                     * StellaratorState.initial_profile(
                         x,
-                        self.params.config.EdgeTemperature,
-                        self.params.config.T0,
-                        self.params.config.rhoUpper,
-                        self.params.config.alpha,
+                        params.config.EdgeTemperature,
+                        params.config.T0,
+                        params.config.rhoUpper,
+                        params.config.alpha,
                     )
                 )
 
@@ -975,10 +1000,10 @@ class StellaratorTransport(MaNTA.TransportSystem):
                     * n0(x)
                     * StellaratorState.initial_profile(
                         x,
-                        self.params.config.EdgeTemperature,
-                        self.params.config.T0,
-                        self.params.config.rhoUpper,
-                        self.params.config.alpha,
+                        params.config.EdgeTemperature,
+                        params.config.T0,
+                        params.config.rhoUpper,
+                        params.config.alpha,
                     )
                 )
 
@@ -991,15 +1016,20 @@ class StellaratorTransport(MaNTA.TransportSystem):
             return jax.lax.switch(index, [n0, ui0, ue0, Er0], x)
 
         return jax.lax.cond(
-            self.params.config.evolveDensity, ambipolar, constant_density, index, x
+            params.config.evolveDensity, ambipolar, constant_density, index, x
         )
 
     def InitialDerivative(self, index, x):
-        return self._initial_derivative_jit(index, x, self.vp_interp)
+        return self._initial_derivative_jit(
+            self.params, jnp.asarray(index), jnp.asarray(x, dtype=float), self.vp_interp
+        )
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _initial_derivative_jit(self, index, x, vp_interp):
-        return jax.grad(self._initial_value, argnums=1)(index, x, vp_interp)
+    @staticmethod
+    @eqx.filter_jit
+    def _initial_derivative_jit(params, index, x, vp_interp):
+        return jax.grad(StellaratorTransport._initial_value, argnums=2)(
+            params, index, x, vp_interp
+        )
 
     def InitialAuxValue(self, index, x):
         return 0.0
@@ -1206,6 +1236,21 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return self.adjointProblem
 
 
+def _sources_of_tree(tree, states, x, params):
+    return StellaratorTransport.compute_sources(
+        states, x, 0, tree[0], tree[1], tree[2], params
+    )
+
+
+# Module level, not a closure built per call: filter_jit keys its cache on the
+# function, so a fresh closure compiled on every adjoint solve.
+_sources_field_jac = eqx.filter_jit(
+    eqx.filter_vmap(
+        eqx.filter_jacrev(_sources_of_tree), in_axes=(0, State.vmap_axes(), 0, None)
+    )
+)
+
+
 class StellaratorAdjointProblem(MaNTA.AdjointProblem):
     def __init__(
         self,
@@ -1383,16 +1428,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
 
         tree_in = (self.field, self.vp, self.vpp)
 
-        def sources(tree, states, x):
-            return self.compute_sources(
-                states, x, 0, tree[0], tree[1], tree[2], self.params
-            )
-
-        dsources = eqx.filter_jit(
-            eqx.filter_vmap(
-                eqx.filter_jacrev(sources), in_axes=(0, State.vmap_axes(), 0)
-            )
-        )(tree_in, states, positions)
+        dsources = _sources_field_jac(tree_in, states, positions, self.params)
         report_memory(f"adjoint sources jacobian m={self.npoints}")
 
         def unravel(grad_out):

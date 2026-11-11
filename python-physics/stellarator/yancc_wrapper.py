@@ -1,3 +1,4 @@
+import functools
 import os
 import jax
 
@@ -20,6 +21,16 @@ from typing import Optional
 
 import desc
 import interpax
+
+
+@functools.lru_cache(maxsize=None)
+def _speedgrid(nx):
+    return eqx.filter_jit(lambda: MaxwellSpeedGrid(nx))()
+
+
+@functools.lru_cache(maxsize=None)
+def _pitchgrid(na):
+    return eqx.filter_jit(lambda: UniformPitchAngleGrid(na))()
 
 
 class yancc_data(eqx.Module):
@@ -82,8 +93,10 @@ class yancc_data(eqx.Module):
         # callbacks, long after the trace, where it cannot be placed on the
         # mesh. (jax.ensure_compile_time_eval would also do, but orthax's
         # error_if trips when the recurrence is evaluated eagerly.)
-        self.speedgrid = eqx.filter_jit(lambda: MaxwellSpeedGrid(nx))()
-        self.pitchgrid = eqx.filter_jit(lambda: UniformPitchAngleGrid(na))()
+        # Cached per resolution: a yancc_data is built at every objective
+        # evaluation, and a fresh lambda under jit compiled again each time.
+        self.speedgrid = _speedgrid(nx)
+        self.pitchgrid = _pitchgrid(na)
 
         self.na = na
         self.nx = nx
