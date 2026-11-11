@@ -238,6 +238,10 @@ class StellaratorState(eqx.Module):
         variables."""
         if params.config.diffusiveEr:
             return StellaratorState.Vp_u_to_u(Channel.Er, state, x, vp, vpp)
+        if state.Aux is None:
+            # constant density: no aux variables, so Er is the config's
+            # constant (both branches of from_state's cond trace this)
+            return jnp.full((1,), params.config.Er)
         # sliced rather than indexed: Er has always reached yancc as a
         # one-entry vector
         return state.Aux[AuxChannel.Er : AuxChannel.Er + 1]
