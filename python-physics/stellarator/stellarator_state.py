@@ -10,8 +10,8 @@ separate particle and heat sources and adds `evolveDensity`. A config written
 for one will not construct the other, which is why the drivers come in two sets.
 
 `StellaratorDecorator` assumes the hook signature
-`(self, state, x, t, field, vp, vpp, params)`, which is
-`stellarator_multichannel.py`'s, not `stellarator2.py`'s.
+`(state, x, t, field, vp, vpp, params)`, a plain function's: `sources.py`'s
+`compute_sources`, not `stellarator2.py`'s.
 
 `Channel` is the variable order, and `stellarator_multichannel.buildSpec` names
 its fields to match. The two have to agree: `from_state` indexes the solution by
@@ -46,9 +46,13 @@ class AuxChannel(enum.IntEnum):
 
 
 def StellaratorDecorator(func):
-    def wrapper(self, state, x, t, field, vp, vpp, params):
+    # No `self`: the wrapped hook is a plain function of its arguments, so the
+    # object handed to jit is the same one for every case instance. A bound
+    # method is a new static argument per instance -- a recompile each, and a
+    # cache entry that keeps the instance alive.
+    def wrapper(state, x, t, field, vp, vpp, params):
         _state = StellaratorState.from_state(state, x, vp, vpp, params)
-        res = func(self, _state, x, t, field, vp, vpp, params)
+        res = func(_state, x, t, field, vp, vpp, params)
         return res
 
     return wrapper

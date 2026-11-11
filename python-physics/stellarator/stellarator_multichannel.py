@@ -140,9 +140,9 @@ from dke_sol import WarmFlux, WarmJac
 from itg_wrapper import ITGFlux, SumFlux
 
 from manta.jax import State, Physics_Decorator, vmap_batched
+from sources import compute_sources as _compute_sources
 from stellarator_state import (
     StellaratorState,
-    StellaratorDecorator,
     Channel,
 )
 from config import StellaratorParams, StellaratorConfig, normalization_args
@@ -827,56 +827,14 @@ class StellaratorTransport(MaNTA.TransportSystem):
         """The variables with Dirichlet edge data: all but a diffusive Er."""
         return self.nVars - 1 if self.params.config.diffusiveEr else self.nVars
 
-    @StellaratorDecorator
-    def compute_sources(
-        self, state: StellaratorState, x, t, field, vp, vpp, params: StellaratorParams
-    ):
-
-        if self.params.config.evolveDensity:
-            sn = self.Sn(state, x, t, vp, params)
-            spi = self.Spi(state, x, t, vp, params)
-            spe = self.Spe(state, x, t, vp, params)
-            return [sn, spi, spe]
-
-        else:
-            return [self.Spi(state, x, t, vp, params)]
-
-    def Sn(self, state: StellaratorState, x, t, vp, params: StellaratorParams):
-        return vp * (
-            params.config.ParticleSourceHeight
-            * jnp.exp(
-                -((x - params.config.ParticleSourceCenter) ** 2)
-                / (2 * params.config.ParticleSourceWidth**2)
-            )
-            - params.constants.FusionRate(state.n, state.Ti)
-            / params.constants.DensityEquationNormalization()
-        )
-
-    def Spi(self, state: StellaratorState, x, t, vp, params: StellaratorParams):
-        return vp * (
-            params.config.NBIPower
-            * jnp.exp(
-                -((x - params.config.NBICenter) ** 2) / (2 * params.config.NBIWidth**2)
-            )
-            + self.CollisionalEnergyExchange(state, params)
-        )
-
-    def Spe(self, state: StellaratorState, x, t, vp, params: StellaratorParams):
-        return vp * (
-            params.config.ECHPower
-            * jnp.exp(
-                -((x - params.config.ECHCenter) ** 2) / (2 * params.config.ECHWidth**2)
-            )
-            - self.CollisionalEnergyExchange(state, params)
-            + params.config.FusionFactor
-            * params.constants.AlphaHeating(state.n, state.Ti)
-            / params.constants.HeatEquationNormalization()
-        )
-
-    def CollisionalEnergyExchange(
-        self, state: StellaratorState, params: StellaratorParams
-    ):
-        return params.constants.IonElectronEnergyExchange(state.n, state.pe, state.pi)
+    # The sources live in sources.py, as pure functions registered per
+    # channel; this is the loop over them. A static method, so the callable
+    # _evaluate hands to filter_jit is one module-level function for every
+    # case: a bound method would compile again for each StellaratorTransport
+    # and leave it alive in JAX's cache.
+    @staticmethod
+    def compute_sources(state, x, t, field, vp, vpp, params: StellaratorParams):
+        return _compute_sources(state, x, t, field, vp, vpp, params)
 
     def StoredEnergy(self, field, vp, vpp, geometry, state, x, params: StellaratorParams):
 
