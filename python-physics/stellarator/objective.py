@@ -232,7 +232,11 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
                 if not bootstrap:
                     return G_all[:1]
                 jnorm = st.params.constants.BootstrapCurrentNormalization()
-                return jnp.concatenate([G_all[:1], G_all[b0 : b0 + n_nodes] * jnorm])
+                # lax.cond needs both branches in one dtype, and jnorm can
+                # promote the product past false_fn's cpu_fp_dtype
+                return jnp.concatenate(
+                    [G_all[:1], G_all[b0 : b0 + n_nodes] * jnorm]
+                ).astype(dtype=cpu_fp_dtype)
 
             def false_fn():
                 out = jnp.array([failure_value], dtype=cpu_fp_dtype)
