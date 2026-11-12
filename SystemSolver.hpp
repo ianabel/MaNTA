@@ -17,6 +17,7 @@
 
 #include "Logging.hpp"
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -48,6 +49,10 @@
 // as long as its destructor is instantiated where the type is complete, which
 // is ~SystemSolver in SystemSolver.cpp.
 class FieldModel;
+// Likewise, for symmetry with FieldModel rather than for toml11: a tier-0 model
+// and the opaque answer the solver caches from it.
+class EquilibriumModel;
+class Equilibrium;
 
 class SystemSolver
 {
@@ -84,7 +89,8 @@ class SystemSolver
         void setSteadyStateTermination(bool on) { TerminateOnSteadyState = on; };
 
         // How a steady state is reached. TimeMarch is the original behaviour --
-        // integrate until dY/dt is small -- and is kept because it is the only
+        // integrate until an output time passes the steady test
+        // (timeMarchIsSteady) -- and is kept because it is the only
         // one that picks a branch by physics rather than by wherever Newton
         // lands. The other two are one algorithm: pseudo-transient continuation
         // keeps the 1/dt mass term purely as damping and grows dt from the
@@ -423,6 +429,11 @@ class SystemSolver
             OutOfSteps,
             SolverFailed,
             Stalled,
+            // Returned only by a driver that changes the level between slices:
+            // PyRunner's sliced solve under DegreeAdaptation, when a level has
+            // converged and the next degree is built and ready to continue.
+            // Last, so the values above keep the numbers the FFI ops return.
+            Refined,
         };
 
         // The discretisation error of each objective at a state: an estimate of
@@ -581,9 +592,12 @@ class SystemSolver
         // The estimate at the state the solver is in now. One residual, one
         // Jacobian build and one solve, plus a dot product per objective; the
         // Jacobian work is at alpha = 0, the steady operator, whatever the solve
-        // was damped with. Leaves alpha and the factorised blocks as it found
-        // them, so it is safe to call from inside a continuation loop.
+        // was damped with. Leaves alpha as it found it, but not the factorised
+        // blocks, which are this alpha = 0 build: a caller that solves again
+        // afterwards needs a build of its own first. At t0, a steady solve's
+        // frozen time, unless given another -- a TimeMarch run's stop.
         ObjectiveEstimate estimateObjective();
+        ObjectiveEstimate estimateObjective(Time t);
 
         // What estimateObjective() last reported, filled at the end of a steady
         // solve. Invalid when the run had no AdjointProblem.
@@ -695,9 +709,31 @@ class SystemSolver
         // derivative of the objective GFn reports. With global scalars, dG/dmu
         // -- dg's Scalars entry, already integrated -- goes into *dGdmu when one
         // is passed; it is the scalar rows' share of the same right-hand side.
+        //
+        // With a field model, dG/dpsi goes into *dGdpsi when one is passed: dg's
+        // geometry rows contracted with the weights G is summed with and the
+        // model's dGeometry_dpsi at the same nodes. It is the field rows' share
+        // of the adjoint right-hand side, G_field. Empty without a field model.
+        //
+        // At tier 1, the same weighted geometry rows uncontracted go into
+        // *dGdgeom: G_geometry, w_j dg/dgeom at each physics node, node by node.
+        // Empty otherwise.
         std::vector<Vector> assembleObjectiveGradient(AdjointProblem &objective, Index gIndex,
                                                       DGSoln const &state, Time tEval,
-                                                      Vector *dGdmu = nullptr);
+                                                      Vector *dGdmu = nullptr,
+                                                      Vector *dGdpsi = nullptr,
+                                                      Vector *dGdgeom = nullptr);
+
+        // G for objective gIndex at `state`, as the run reports it. With a field
+        // model attached, on the physics nodes physicsNodesAt fills with geometry,
+        // since only the solver can; otherwise through the case's own GFn, u*-based
+        // under the superconvergent scheme. Either way the functional dg
+        // differentiates.
+        double objectiveValue(AdjointProblem &objective, Index gIndex, DGSoln &state, Time tEval);
+
+        // One weight per physics node: the star weights b1 under the
+        // superconvergent scheme, the interpolatory basis weights otherwise.
+        Vector objectiveWeights(DGSoln const &state) const;
 
         // w = dG/dGamma: how the objective moves with the physics outputs Gamma
         // at each physics node -- the flux sigma_hat the case returns, and its
@@ -800,8 +836,11 @@ class SystemSolver
         // test and this one stay the identical quantity rather than decoupling by
         // whatever the normalisation is worth. See residualWeights().
         //
-        // Costs one residual evaluation, and counts as one.
+        // Costs one residual evaluation, and counts as one. At t0 unless told
+        // otherwise: a steady solve's time is frozen there, and only the
+        // TimeMarch test (timeMarchIsSteady) asks at another.
         double steadyResidualNorm();
+        double steadyResidualNorm(Time t);
         void setNOutput(int nO)
         {
             if (nO <= 0)
@@ -815,10 +854,59 @@ class SystemSolver
             min_step_size = dt_min;
         };
 
+        // The absolute part of IDA's error weights, class by class; the
+        // relative part is rtol |y_i| pointwise in every scheme. These are the
+        // weights of IDA's error test *and* its Newton test, of the field
+        // sweep's stopping test and of the NewtonStep steady test.
+        //
+        //   Pointwise          atol for every unknown -- the weights before
+        //                      this option existed.
+        //   AlgebraicMax       sigma, q and aux floored at rtol times that
+        //                      variable's largest magnitude on the grid; u and
+        //                      lambda as Pointwise. The default.
+        //   AllMax             AlgebraicMax, and u and lambda floored too.
+        //   Derivative         q held to u's tolerance over the cell width,
+        //                      sigma to q's times max|sigma| / max|q|.
+        //   DerivativeLocal    Derivative with sigma's from the last Jacobian
+        //                      build's local dsigma/dq and dsigma/du.
+        //   Hybrid(Local)      the stricter of Derivative(Local) and AlgebraicMax.
+        //
+        // Taking the algebraic unknowns out of the error test altogether is the
+        // separate, orthogonal setSuppressAlgebraicError; it composes with any
+        // of these.
+        //
+        // Why AlgebraicMax: pointwise weights hold sigma and q, wherever they
+        // pass near zero, to ~atol absolutely, and next to a Dirichlet wall --
+        // where the Chebyshev nodes crowd and the diffusive mode is stiff --
+        // backward Euler's lag behind the slow manifold, ~ h dg/dt, shows up in
+        // them amplified by the node spacing. IDA reads that as local error that
+        // jumps when h doubles and holds order one indefinitely: the "crawl" on
+        // the coupled theta pinch, ~25000 steps for ~200, under either field
+        // solve and at any FieldSolveTolerance. docs/running.rst has the study.
+        enum class ErrorWeights
+        {
+            Pointwise,
+            AlgebraicMax,
+            AllMax,
+            Derivative,
+            DerivativeLocal,
+            Hybrid,
+            HybridLocal
+        };
+        void setErrorWeights(ErrorWeights w) { errorWeights = w; };
+        ErrorWeights getErrorWeightScheme() const { return errorWeights; };
+
         void setTolerances(std::vector<double> a, double r)
         {
             if (r <= 0)
                 throw std::logic_error("Cannot set tolerance to non-positive value");
+            // One absolute tolerance for every variable, or one each. Any other
+            // length used to fall through getErrorWeights to a hard-coded 1e-8,
+            // silently -- a far tighter solve than was asked for.
+            if (a.size() != 1 && a.size() != static_cast<size_t>(nVars))
+                throw std::invalid_argument("AbsoluteTolerance has " + std::to_string(a.size()) +
+                                            " entries; it takes one, or one per variable (" +
+                                            std::to_string(nVars) + ").");
             atol = a;
             rtol = r;
         };
@@ -858,18 +946,22 @@ class SystemSolver
         void assembleBoundaryData(double t, bool timeDerivative);
 
         // The algebraic components of dYdt at a consistent state (Yc, dYdt) at
-        // time tc, solving G_y y' = -G_t exactly; the differential components are
-        // left as they are. See Solver.cpp. Used after IDACalcIC on a projected
+        // time tc, from the total time derivative of every residual row
+        // vanishing; the differential components are left as they are. See
+        // Solver.cpp. Used after IDACalcIC on a cold start and on a projected
         // restart.
         void consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, Time tc);
-        // alpha in that solve is consistentDerivativeAlpha / delta_t. It sets how
-        // fast the refinement converges, not what it converges to.
+        // The alpha that solve starts from; it is raised until a pass contracts
+        // fast enough. alpha sets how fast the solve converges, not what it
+        // converges to.
         double consistentDerivativeAlpha = 1e8;
-        double alphaLarge() const { return consistentDerivativeAlpha / (dt > 0.0 ? dt : 1.0); }
-        // What the last solve took: correction solves, and the final relative
-        // defect of the differential rows, which converged means round-off.
-        int consistentDerivativeRefinements = -1;
-        double consistentDerivativeDefect = -1.0;
+        // What the last solve took: passes, Jacobian builds, the alpha it
+        // finished at, and how far its last pass moved the algebraic y',
+        // relative, which converged means round-off.
+        int consistentDerivativePasses = -1;
+        int consistentDerivativeBuilds = -1;
+        double consistentDerivativeAlphaUsed = -1.0;
+        double consistentDerivativeChange = -1.0;
 
         // Solves the Jy = g equation. Dispatches on whether a field model is
         // attached: without one this *is* solveTransportJac, bit for bit.
@@ -892,14 +984,33 @@ class SystemSolver
         // Block Gauss-Seidel between the transport and field blocks, with
         // Irons-Tuck acceleration: one transport solve and one field solve per
         // sweep, against the exact path's nField + 1 transport solves. Stops
-        // once the relative change in psi between sweeps is below
-        // FieldSolveTolerance, up to FieldSolveMaxSweeps.
+        // once a sweep changes the whole increment -- transport and field -- by
+        // less than FieldSolveTolerance in the run's own error-weighted RMS
+        // norm, or by less than a millionth of the increment when that is
+        // larger, up to FieldSolveMaxSweeps.
         //
         // Reaching that cap **escalates to solveCoupledJacExact** rather than
         // returning the last iterate, so this mode can no longer be wrong, only
         // slower -- which is what makes it a safe default. The escalation is
         // counted in fieldSweepFallbacks and reported once per run.
         void solveCoupledJacIterative(N_Vector g, N_Vector delY);
+
+        // GMRES on the coupled Jacobian with psi eliminated (FieldSolve =
+        // krylov): see couplingKrylov. Escalates to solveCoupledJacExact if it
+        // does not converge, as the sweep does.
+        void solveCoupledJacKrylov(N_Vector g, N_Vector delY);
+
+        // Tier 1 (FieldCoupling = "reduced"): the coupled Jacobian with no psi,
+        //
+        //     J_red = A + A_g G' P,
+        //
+        // A the transport operator, P dx the increment at the basis nodes, G'
+        // the equilibrium's response (EquilibriumModel::applyResponse) and A_g
+        // d(residual)/d(geometry) at the physics nodes, built per Jacobian build
+        // (reducedBlocks). Dispatches on FieldSolve: iterative is the shared
+        // sweep, escalating to krylov at its cap; krylov is GMRES; exact
+        // assembles the reduced system densely and is verification only.
+        void solveReducedJac(N_Vector g, N_Vector delY);
 
         // Solves the HDG part of Jy = g
         void solveHDGJac(N_Vector g, N_Vector delY);
@@ -1140,11 +1251,21 @@ class SystemSolver
         void setAggressiveTimesteps(bool in) { aggressiveTimesteps = in; };
 
         // IDASetSuppressAlg: take sigma, q, lambda and phi out of IDA's local
-        // error test, leaving only u and the differential scalars in it. Off by
-        // default, and the default is load-bearing rather than conservative --
-        // turning it on is measurably not answer-preserving. See
-        // setSuppressAlgebraicError's use in Solver.cpp and docs/running.rst.
-        void setSuppressAlgebraicError(bool in) { suppressAlgebraicError = in; };
+        // error test, leaving only u and the differential scalars in it. Unset,
+        // it is on for a run with a field -- a FieldModel or an EquilibriumModel
+        // -- and off otherwise; std::nullopt restores that default. Neither
+        // choice is answer-preserving: see suppressesAlgebraicError, its use in
+        // Solver.cpp, and docs/running.rst.
+        void setSuppressAlgebraicError(std::optional<bool> in) { suppressAlgebraicError = in; };
+
+        // What IDA will do: the setting if one was made, else whether a field
+        // is attached. Read at initialize(), so the field has to be attached by
+        // then, which every path does. The NewtonStep steady test masks its
+        // norm only on an explicit setting -- see errorWeightedNorm.
+        bool suppressesAlgebraicError() const
+        {
+            return suppressAlgebraicError.value_or(fieldModel != nullptr || equilibriumModel != nullptr);
+        };
 
         // Run IDACalcIC on a run that would otherwise skip it.
         //
@@ -1250,6 +1371,45 @@ class SystemSolver
         Index getFieldDOF() const { return nField; };
         Index getGeometrySlots() const { return nGeom; };
 
+        // Couple this solver to a magnetic equilibrium evaluated as a black box
+        // (tier 0, FieldCoupling = "consistent"): its geometry reaches the
+        // physics through State::geom exactly as a field model's does, but it
+        // adds no unknowns, no rows and no Jacobian coupling. The solver keeps
+        // the last equilibrium as a cache keyed on the transport state, solves
+        // a new one only when that state changes, and warm-starts it from the
+        // last; see equilibriumAt.
+        //
+        // The same refusals as setFieldModel, and one of the two at most: a
+        // solver has one source of geometry. Before initialize(), and nullptr
+        // detaches.
+        //
+        // `Reduced` couples it (tier 1, FieldCoupling = "reduced"): the Jacobian
+        // then carries the equilibrium's response G' through the case's
+        // d(physics)/d(geometry) -- see solveReducedJac -- so, like
+        // setFieldModel, it refuses a case declaring no geometry derivatives.
+        enum class EquilibriumCoupling
+        {
+            Consistent,
+            Reduced,
+        };
+        void setEquilibriumModel(std::shared_ptr<EquilibriumModel> model,
+                                 EquilibriumCoupling coupling = EquilibriumCoupling::Consistent);
+        EquilibriumModel *getEquilibriumModel() const { return equilibriumModel.get(); };
+        EquilibriumCoupling getEquilibriumCoupling() const { return equilibriumCoupling; };
+        // An equilibrium attached and coupled: tier 1.
+        bool reducedCoupling() const
+        {
+            return equilibriumModel != nullptr && equilibriumCoupling == EquilibriumCoupling::Reduced;
+        };
+
+        // Equilibrium solves this run: one per distinct transport input.
+        long getEquilibriumSolves() const { return equilibriumSolves; };
+
+        // The geometry slots at x for the state Y, from whichever of the field
+        // model and the equilibrium is attached; empty with neither. What the
+        // case's diagnostics and the netCDF field group read.
+        void geometryAt(VectorRef out, DGSoln const &Y, Position x, Time t);
+
         // How the coupled Jacobian is solved once a field model is attached.
         // Iterative is block Gauss-Seidel and is the default; Exact is the
         // Schur complement onto psi, and is a verification tool rather than a
@@ -1264,6 +1424,7 @@ class SystemSolver
         {
             Iterative,
             Exact,
+            Krylov,
         };
 
         void setFieldSolveMode(FieldSolveMode m) { fieldSolveMode = m; };
@@ -1276,6 +1437,17 @@ class SystemSolver
             fieldSolveTolerance = tol;
         };
         double getFieldSolveTolerance() const { return fieldSolveTolerance; };
+
+        // The adjoint sweep's tolerance, on a relative backward error rather than
+        // a weighted change: the adjoint solves at cj = 0 for a gradient, with no
+        // error test to measure against. See solveCoupledAdjointIterative.
+        void setFieldSolveAdjointTolerance(double tol)
+        {
+            if (tol <= 0)
+                throw std::logic_error("Field solve adjoint tolerance cannot be zero or negative.");
+            fieldSolveAdjointTolerance = tol;
+        };
+        double getFieldSolveAdjointTolerance() const { return fieldSolveAdjointTolerance; };
 
         void setFieldSolveMaxSweeps(int n)
         {
@@ -1299,15 +1471,25 @@ class SystemSolver
 
         // What the coupled sweeps cost, and whether either had to escalate.
         // Zeroed per run by initialize(); nothing here feeds the answer.
+        //
+        // `responses` counts applications of the equilibrium's response at tier
+        // 1 (each one equilibrium solve under the differenced default); the
+        // krylov counts are GMRES solves and their iterations, at either tier.
+        // A fallback is the sweep's escalation -- to the exact solve at tier 2,
+        // to GMRES at tier 1 -- or GMRES's to the exact solve at tier 2.
         struct FieldSweepStats
         {
             long solves, iterations, fallbacks, adjointSweeps;
             bool adjointFellBack;
+            long responses, krylovSolves, krylovIterations;
+            long adjointKrylovIterations, adjointResponses;
         };
         FieldSweepStats getFieldSweepStats() const
         {
             return {fieldSweepSolves, fieldSweepIterations, fieldSweepFallbacks,
-                    fieldAdjointSweeps, fieldAdjointFellBack};
+                    fieldAdjointSweeps, fieldAdjointFellBack,
+                    reducedResponses, krylovSolves, krylovIterations,
+                    adjointKrylovIterations, adjointResponses};
         };
 
         // The solution as it stands. `y` is a non-owning view over memory
@@ -1316,8 +1498,9 @@ class SystemSolver
         // condition, so this is meaningful between the two phases as well.
         DGSoln const &getSolution() const { return yJac; };
 
-        // Fill the geometry rows of `states` from the field model, at the points
-        // those states were sampled on. A no-op with no model attached.
+        // Fill the geometry rows of `states` from the field model or the
+        // equilibrium, at the points those states were sampled on. A no-op with
+        // neither attached.
         //
         // Called once per residual and once per Jacobian update, never once per
         // variable: geometry does not depend on which equation is being
@@ -1393,6 +1576,48 @@ class SystemSolver
         // strictly stronger: the caller gets a correct gradient rather than an
         // exception. Warned once, and recorded in fieldAdjointFellBack.
         void solveCoupledAdjointIterative();
+
+        // ---- The transposed coupled solves, written once for both tiers.
+        //
+        // The forward solve's block system in (dx, c), transposed:
+        //
+        //     A^T z = g_x + L^T zeta,     zeta = g_c - C^T z,
+        //
+        // with z the transport adjoint, zeta the coupling variable's and g_c its
+        // share of the right-hand side. Tier 1: C^T = A_g^T, L^T = P^T G'^T,
+        // g_c = G_geometry. Tier 2: C^T = A1^T, L^T = -A2^T B^-T,
+        // g_c = G_field, and z_psi = B^-T zeta (`finish`). The residual of a
+        // pair (z, zeta) with z solved against zeta's predecessor is
+        // L^T (zeta_prev - zeta) in row one and exactly zero in row two, so
+        // every solve below stops on a relative backward error, as
+        // solveCoupledAdjointIterative does.
+        struct AdjointCouplingOperator
+        {
+            Index n = 0;
+            Vector gc;
+            std::function<std::vector<Vector>(Vector const &)> applyLT;
+            std::function<Vector(std::vector<Vector> const &)> applyCT;
+            std::function<void(Vector const &)> finish;
+        };
+        AdjointCouplingOperator fieldAdjointCouplingOperator();
+        AdjointCouplingOperator reducedAdjointCouplingOperator();
+
+        // Transposed block Gauss-Seidel with Irons-Tuck on zeta, to
+        // FieldSolveAdjointTolerance in FieldSolveMaxAdjointSweeps.
+        bool adjointCouplingSweep(AdjointCouplingOperator const &op);
+        // GMRES on (I + C^T A^-T L^T) zeta = g_c - C^T A^-T g_x, whose residual
+        // is the pair's backward error; Krylov dimension
+        // FieldSolveMaxAdjointSweeps, krylovRestarts restarts.
+        bool adjointCouplingKrylov(AdjointCouplingOperator const &op);
+        // The same system assembled densely, column by column: n transposed
+        // transport solves and n applications of L^T.
+        void adjointCouplingExact(AdjointCouplingOperator const &op);
+
+        // Tier 1's J_red^T z = G_y + P^T G'^T G_geometry. Under FieldSolve =
+        // iterative, the sweep, then GMRES, then the exact solve; under
+        // krylov, GMRES then exact; under exact, exact. A gradient is never
+        // returned from an unconverged solve.
+        void solveReducedAdjoint();
 
         void computeAdjointGradients();
 
@@ -1502,6 +1727,39 @@ class SystemSolver
         std::vector<Matrix> adjoint_SQU_0;
 
 
+        // Tier 1's Jacobian blocks at one state: the equilibrium there (held,
+        // so the cache moving on cannot free it), the input it was solved for,
+        // where it is read, and A_g per cell. Nothing here depends on alpha.
+        // The forward solve reads reducedBlocks, the last build's; a
+        // PhysicsDerivatives record carries its own, which is what the adjoint
+        // transposes (buildReducedBlocks).
+        struct ReducedBlocks
+        {
+            bool valid = false;
+            std::shared_ptr<Equilibrium const> eq;
+            // Built once and shared, never assigned: GlobalState's assignment
+            // copies Aux only into an object already sized for it, so assigning
+            // into a default-constructed one dropped the pressure and handed
+            // the model a state with no aux rows. A blocks object is copied into
+            // every record and every adjoint, and this keeps each of those a
+            // pointer copy.
+            std::shared_ptr<GlobalState const> states;
+            std::vector<Position> inputPoints;
+            Vector weights;
+            std::vector<Position> physicsPoints;
+            // Error weights for the geometry increment, node by node and slot
+            // by slot: the AlgebraicMax rule, 1 / (rtol (|g| + max |g_slot|)),
+            // at the build's geometry. A geometry slot has units of its own, so
+            // there is no atol to floor it with.
+            Vector geometryWeights;
+            Time t = 0.0;
+            std::vector<Matrix> Ag;
+            Index nPerCell() const
+            {
+                return Ag.empty() ? 0 : static_cast<Index>(Ag.front().cols());
+            }
+        };
+
         // The coupling blocks as the adjoint needs them: transposed, stored,
         // and used only from here.
         //
@@ -1519,15 +1777,28 @@ class SystemSolver
         std::vector<Matrix> A1_transpose_cellwise;
         std::vector<Matrix> A2_transpose_cellwise;
 
+        // Tier 1's, beside them for the same reason:
+        //
+        //   Ag_transpose_cellwise[i]  (nGeom * nPhys, localDOF)  -- A_g^T
+        //
+        // and the blocks the transposed response G'^T is applied at, copied
+        // from the record the operator was assembled from, so a later Jacobian
+        // build cannot move them under an adjoint in progress.
+        std::vector<Matrix> Ag_transpose_cellwise;
+        ReducedBlocks adjointReducedBlocks;
+
+        // The objective's explicit sensitivity to the geometry at tier 1,
+        // w_j dg/dgeom at the physics nodes, flattened node by node as the
+        // geometry increment is: the coupling variable's share of the adjoint
+        // right-hand side, as G_field is psi's at tier 2. Empty otherwise.
+        Vector G_geometry;
+
         // The field block of the adjoint state, z_psi, and of the adjoint
         // right-hand side, dG/dpsi.
         //
-        // G_field is identically zero and that is a *limit*, not a fact about
-        // the discretisation: AdjointProblem reports dg/du, dg/dq, dg/dsigma and
-        // dg/dphi and has no geometry hook, so an objective whose integrand
-        // reads State::geom directly loses that term. It cannot be detected from
-        // here, so it is named here and in TODO rather than left as an
-        // unremarked zero.
+        // G_field is dG/dpsi: what an objective reading State::geom contributes
+        // through dg's geometry rows (assembleObjectiveGradient), and zero for
+        // one that reads none.
         Vector adjoint_field;
         Vector G_field;
 
@@ -1576,6 +1847,25 @@ class SystemSolver
         // of these vectors -- becomes known. Null with no model attached.
         std::vector<Matrix> A1_cellwise;
         N_Vector *a2 = nullptr;
+
+        // Scratch for the coupled Jacobian solves, which run once per Newton
+        // iteration -- nField + 1 times that under the exact solve -- and used
+        // to N_VClone and destroy each of these on every call: nField + 2 full-
+        // length vectors per exact solve, 518 at the theta pinch's nField = 516.
+        // Each routine has slots of its own, so no two that run in one solve can
+        // share one, and every slot is written before it is read, so a reused
+        // vector computes exactly what a fresh clone did. Allocated on first use
+        // and again whenever the solution vector's length changes (workVector),
+        // freed with the solver.
+        struct CouplingWork
+        {
+            N_Vector exactCol = nullptr, exactAinvR1 = nullptr; // solveCoupledJacExact
+            std::vector<N_Vector> exactAinvA1;                  // ... one per field DOF
+            N_Vector sweepWork = nullptr, sweepEwt = nullptr,   // couplingSweep
+                sweepPrev = nullptr, sweepChange = nullptr;
+            N_Vector krylovEwt = nullptr, krylovWork = nullptr, krylovZ = nullptr; // couplingKrylov
+            N_Vector genericWork = nullptr, genericZ = nullptr; // couplingExact
+        } couplingWork;
 
         // ---- state of one run, owned between initialize() and destroySundials()
         //
@@ -1703,11 +1993,34 @@ class SystemSolver
         int steadyNewtonSolve(SteadyStepStats &rec);
 
         // ||J0^-1 F(Y)||_WRMS(ewt(Y)): one residual, one build at alpha = 0, one
-        // solve. What SteadyStateMeasureCorrection reports.
+        // solve. What SteadyStateMeasureCorrection reports. At t0 unless told
+        // otherwise, as steadyResidualNorm.
         double steadyCorrectionNorm();
+        double steadyCorrectionNorm(Time t);
 
-        // N_VWrmsNorm, masked to the differential components under
-        // SuppressAlgebraicError exactly as IDA masks its own norm.
+        // SteadyStateSolver = "TimeMarch"'s stopping test, made at each output
+        // time with the steady solvers' own SteadyStateTest, so a tolerance means
+        // the same thing whichever solver reaches the steady state: under
+        // Residual, the weighted ||F|| at the state IDA returned, with du/dt
+        // taken as zero, against SteadyStateTolerance; under NewtonStep, the
+        // undamped Newton correction from it in the error weights against
+        // SteadyStateStepTolerance. That correction is the first-order distance
+        // to the fixed point, so it is taken as it stands, s = 1, where a steady
+        // solve scales it by the distance a contraction rate implies -- there is
+        // no Newton sequence here to have a rate. Objective is refused with
+        // TimeMarch at configuration.
+        //
+        // The NewtonStep test builds and factorises the Jacobian at alpha = 0,
+        // over the factorisation IDA is reusing -- IDA calls its setup only when
+        // cj drifts or Newton fails. So the build IDA last made is rebuilt
+        // before returning, at its own state, time and alpha: an integration
+        // that checks is bit for bit one that does not
+        // (a_time_march_check_does_not_perturb_the_integration). One residual,
+        // two builds and a solve per output time; Residual, one residual.
+        bool timeMarchIsSteady(Time t);
+
+        // N_VWrmsNorm, masked to the differential components when
+        // SuppressAlgebraicError was set explicitly.
         double errorWeightedNorm(N_Vector v, N_Vector ewt) const;
 
         SUNNonlinearSolver steadyNLS = nullptr;
@@ -1888,6 +2201,7 @@ class SystemSolver
             GlobalStateMatrix dSigma{0}, dSource{0}, dAux{0};
             FieldCouplingDerivatives field;
             ScalarCouplingDerivatives scalar;
+            ReducedBlocks reduced;
 
             bool isAt(DGSoln const &Y, Time tEval) const;
         };
@@ -1978,6 +2292,13 @@ class SystemSolver
         // not carry them", and is how a case that never asked for this pays
         // nothing for it.
         Matrix variableTimeDerivatives(DGSoln const &Ydot) const;
+
+        // The transport state a field model's hooks are handed: Y on the k+1
+        // basis nodes, and du/dt from Ydot on the same nodes when the model's
+        // spec says a row reads it (FieldModelSpec::readsTransportTimeDerivatives).
+        // Every call into the model goes through this, so the value, its
+        // derivative and the adjoint's dR/dp all see the same state.
+        GlobalState fieldStatesAt(DGSoln const &Y, DGSoln const &Ydot) const;
 
         // Size and fill the derivative blocks at the state Y and time tEval, and
         // report the nodes they were evaluated on.
@@ -2096,6 +2417,62 @@ class SystemSolver
         // its own; the lambda, scalar and field segments of work are untouched.
         void subtractA1Times(Vector const &dpsi, N_Vector work) const;
 
+        // ---- The coupled solves, written once for both tiers.
+        //
+        // A coupled Jacobian solve eliminates a *coupling variable* c through
+        // the transport operator A:
+        //
+        //     A dx = r - C c,     c = c0 + L dx,
+        //
+        // with c = dpsi at tier 2 (C = A1, c0 + L dx = B^-1 (r2 - A2 dx)) and
+        // c = dg, the geometry increment at the physics nodes, at tier 1
+        // (C = A_g, c0 = 0, L = G' P). `subtractRows` does work -= C c on the
+        // cellwise rows; `affine` is c0 + L dx and `linear` L dx alone, each for
+        // a full-length dx, and `constant` c0; `writeField` puts c into an increment's own entries
+        // (the field block at tier 2, nothing at tier 1). The transposed solve
+        // step 5 needs is the same shape with C^T, L^T and A^T.
+        struct CouplingOperator
+        {
+            Index n = 0;
+            std::function<void(Vector const &, N_Vector)> subtractRows;
+            std::function<Vector(N_Vector)> affine;
+            std::function<Vector(N_Vector)> linear;
+            std::function<Vector()> constant;
+            std::function<void(Vector const &, N_Vector)> writeField;
+            // The error weights of c, for GMRES, given the run's ewt over the
+            // increment: psi's own entries of it at tier 2; at tier 1 the run's
+            // rule for an algebraic variable applied to the geometry
+            // (ReducedBlocks).
+            std::function<Vector(N_Vector)> weights;
+            // Whether c is part of the increment N_Vector (tier 2's field
+            // block) and reaches IDA itself, or is only implied by dx (tier 1).
+            bool inIncrement = false;
+        };
+        CouplingOperator fieldCouplingOperator(N_Vector res_g);
+        CouplingOperator reducedCouplingOperator();
+
+        // Block Gauss-Seidel with Irons-Tuck on c, and the stopping test
+        // solveCoupledJacIterative documents. Returns whether it converged; on
+        // success delY holds the whole increment, field entries included -- and
+        // where c is not in it (tier 1), dx re-solved against the accepted c.
+        bool couplingSweep(N_Vector res_g, N_Vector delY, CouplingOperator const &op);
+
+        // GMRES (SUNDIALS SPGMR) on the coupling variable,
+        // (I + L A^-1 C) c = c0 + L A^-1 r, scaled by c's error weights, so
+        // what it minimises is the WRMS change one more sweep would make to c
+        // -- the part of the sweep's stopping test that binds. Returns whether
+        // it converged; on success delY is written as couplingSweep's.
+        bool couplingKrylov(N_Vector res_g, N_Vector delY, CouplingOperator const &op);
+        static constexpr int krylovRestarts = 4;
+
+        // (I + L A^-1 C) c = c0 + L A^-1 r, assembled column by column -- n
+        // transport solves and n applications of L -- and solved densely. The
+        // tier-1 oracle, as solveCoupledJacExact is tier 2's.
+        void couplingExact(N_Vector res_g, N_Vector delY, CouplingOperator const &op);
+
+        // The run's error weights at yJac, the norm both iterative solves stop in.
+        void jacobianErrorWeights(N_Vector ewt);
+
         // Allocate (or reallocate) the two buffers yJac and dydtJac map. Called
         // from the constructor, and again from setFieldModel, which changes how
         // long they have to be.
@@ -2104,6 +2481,13 @@ class SystemSolver
         // Free the a2 vectors, using the *current* nField as the count -- so
         // call it before changing nField, not after.
         void freeFieldWorkVectors();
+
+        // The slot, as a vector as long as `like`: allocated on first use, and
+        // reallocated if a field model has since changed the length. The
+        // contents are whatever the last use left; every caller writes before
+        // reading, as it did with a fresh N_VClone.
+        N_Vector workVector(N_Vector &slot, N_Vector like);
+        void freeCouplingWorkVectors();
 
         // Where trace node `node` of variable `var` sits in the *band form's*
         // ordering, which is not the solution vector's. See K_banded.
@@ -2204,43 +2588,68 @@ class SystemSolver
         void dSources_dScalars_StarMat(Matrix &, GlobalState const &,
                                        std::vector<Position> const &, Index, Time);
 
+        // d(sigma_hat_i, S_i, G_a)/d(geometry) at every physics node of the
+        // grid: one (nGeom, nNodes) matrix per variable in `sigma` and
+        // `sources`, and per aux variable in `aux`, column j the derivative at
+        // node j of PhysicsNodes::points. The transport factor of A1, taken once
+        // per Jacobian build in the way SystemSpec::geometryDerivatives says.
+        struct GeometryResponse
+        {
+            std::vector<Matrix> sigma, sources, aux;
+        };
+
+        // Analytic: the case's three pointwise hooks, at every node.
+        // Differenced: a forward difference of one batched ComputePhysics per
+        // geometry slot against one at the nodes as they stand -- nGeom + 1
+        // calls, the evaluation plan's FieldCoupling site -- with the
+        // unperturbed call last, so the case's source cache is left holding
+        // the sources at the state rather than at a perturbed geometry.
+        //
+        // `nodes` must be the ones evaluatePhysicsDerivatives filled: they carry
+        // geometry, and a hook may read it (d/dg of g^2 q is 2 g q). A State
+        // built from DGSoln::evalOnNode has no geometry rows at all.
+        GeometryResponse geometryResponse(PhysicsNodes const &nodes, Time tEval);
+        GeometryResponse differencedGeometryResponse(PhysicsNodes const &nodes, Time tEval);
+
         // One cell's block of A1: d(sigma, u and aux residual rows)/d(psi), by
         // the chain rule
         //
         //     d(row)/d(psi_m) = sum_g d(row)/d(geometry_g) . d(geometry_g)/d(psi_m)
         //
-        // The first factor is the case's, the second the field model's. The q
+        // The first factor is `response`, the second the field model's. The q
         // rows and the trace rows have no geometry dependence and stay zero.
         //
         // Shape ( (3 nVars + nAux)(k+1), nField ), laid out [ sigma | q | u | aux ]
         // to match assembleCellMatrix's rows.
-        //
-        // `states` must be the ones evaluatePhysicsDerivatives filled -- they
-        // carry geometry, and a hook may read it (d/dg of g^2 q is 2 g q). That
-        // is why this takes them rather than calling DGSoln::evalOnNode the way
-        // dSources_dScalars_Mat does: a State built from a DGSoln has no
-        // geometry rows at all.
-        void dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+        void dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
                                  std::vector<Position> const &points, Index intervalIndex,
                                  Time tEval);
 
         // Superconvergent counterpart: the k+2 star nodes and A9 in place of
         // InterpolateOntoBasis. There is no chain matrix -- geometry is a
         // function of (psi, x), and u* does not enter it.
-        void dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+        void dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
                                      std::vector<Position> const &points, Index intervalIndex,
                                      Time tEval);
 
+        // One cell's block of A_g: d(sigma, u and aux rows)/d(geometry slot s at
+        // physics node j), column j * nGeom + s, projected exactly as
+        // dPhysics_dField_Mat projects A1 -- which is A_g times dGeometry/dpsi.
+        void dPhysics_dGeometry_Mat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
+                                    Index intervalIndex);
+
+        // The model's dGeometry/dpsi, (nGeom, nField), at each node of one cell.
+        std::vector<Matrix> geometryJacobianOnNodes(Vector const &psi,
+                                                    std::vector<Position> const &points,
+                                                    Index intervalIndex, Index nNodes, Time tEval);
+
         // d(one physics value)/d(psi_m) at each node of one cell, (nField, nNodes):
-        // the case's dX/dgeometry there contracted with the model's
+        // dX/dgeometry, a row of `response`, contracted with the model's
         // dGeometry/dpsi. The part the two functions above share; they differ
         // only in how they project the result onto the test space.
-        void fieldChainOnNodes(Matrix &nodal, Index XVar,
-                               void (TransportSystem::*dX_dGeom)(Index, VectorRef, const State &,
-                                                                 Position, Time),
-                               Vector const &psi, GlobalState const &states,
-                               std::vector<Position> const &points, Index intervalIndex,
-                               Index nNodes, Time tEval);
+        static void fieldChainOnNodes(Matrix &nodal, Matrix const &dXdG,
+                                      std::vector<Matrix> const &dGdPsi, Index intervalIndex,
+                                      Index nNodes);
 
         void dSourcedPhi_Mat(Matrix &, DGSoln const &, Index );
         void dPhi_Mat(Matrix &, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &, Index );
@@ -2312,7 +2721,7 @@ class SystemSolver
         bool aggressiveTimesteps = false;
 
         // IDASetSuppressAlg. See setSuppressAlgebraicError.
-        bool suppressAlgebraicError = false;
+        std::optional<bool> suppressAlgebraicError;
 
         double alpha = 1.0;
         bool testing = false;
@@ -2330,11 +2739,54 @@ class SystemSolver
         // need to reach it and neither owns the solver.
         std::shared_ptr<FieldModel> fieldModel = nullptr;
 
+        // Tier 0: null unless setEquilibriumModel attached one, and never set
+        // together with fieldModel.
+        std::shared_ptr<EquilibriumModel> equilibriumModel = nullptr;
+        EquilibriumCoupling equilibriumCoupling = EquilibriumCoupling::Consistent;
+
+        ReducedBlocks reducedBlocks;
+
+        // G' P dx: the response to an increment, (nGeom x physics nodes)
+        // flattened node by node. One applyResponse.
+        Vector reducedResponse(N_Vector dx);
+
+        // Tier 1's blocks at Y, whose physics nodes and geometry are `nodes`:
+        // the equilibrium (equilibriumAt), the geometry response and A_g, and
+        // the geometry's error weights. The case's coupling evaluation
+        // (geometryResponse), so a physics call at the FieldCoupling site.
+        ReducedBlocks buildReducedBlocks(DGSoln const &Y, PhysicsNodes const &nodes, Time tEval);
+
+        // The equilibrium for the transport state last asked about. `input` is
+        // that state's cell DOF -- sigma, q, u and aux, the prefix of the
+        // solution vector, which is everything the model is handed -- and `t`
+        // its time, so a repeat is recognised byte for byte. `eq` is also the
+        // next Solve's warm start. Cleared in initialize()'s unconditional part.
+        struct EquilibriumCache
+        {
+            std::vector<double> input;
+            Time t = 0.0;
+            std::shared_ptr<Equilibrium const> eq;
+        } equilibriumCache;
+        long equilibriumSolves = 0;
+
+        // The cached equilibrium if Y and t are the ones it was solved for, and
+        // a new one -- solved, cached and returned -- if not.
+        Equilibrium const &equilibriumAt(DGSoln const &Y, Time t);
+
+        // The refusals setFieldModel and setEquilibriumModel share: scalars,
+        // a case that reads no geometry, an output group colliding with a name
+        // the file already holds, and a second source of geometry.
+        void checkGeometrySource(std::string const &modelName, bool otherSourceAttached) const;
+
         // Iterative to match the FieldSolve default, so there is one default
         // rather than two that can drift. Read by solveJacEq and by
         // initialize(), which reports what the choice costs.
         FieldSolveMode fieldSolveMode = FieldSolveMode::Iterative;
-        double fieldSolveTolerance = 1e-8;
+        // Absolute, in the error-weighted RMS norm IDA's Newton test is in; see
+        // solveCoupledJacIterative for what looser and differently-measured
+        // tests cost. Matching ConfigSchema.
+        double fieldSolveTolerance = 1e-4;
+        double fieldSolveAdjointTolerance = 1e-8;
         int fieldSolveMaxSweeps = 20;
         // Larger than the forward cap, and for the reason the setter gives: the
         // adjoint runs at cj = 0, where the coupling is stiffest. One default,
@@ -2351,6 +2803,11 @@ class SystemSolver
         long fieldSweepFallbacks = 0;
         long fieldAdjointSweeps = 0;
         bool fieldAdjointFellBack = false;
+        long reducedResponses = 0;
+        long krylovSolves = 0;
+        long krylovIterations = 0;
+        long adjointKrylovIterations = 0;
+        long adjointResponses = 0;
 
         // Irons-Tuck vector acceleration: Aitken's Delta^2 generalised to
         // vectors.
@@ -2518,8 +2975,11 @@ class SystemSolver
         void assembleTauBlocks(Index i, Matrix const &tau, Matrix &D, Matrix &E,
                                Matrix &G, Matrix &H) const;
 
-        double rtol;
-        std::vector<double> atol;
+        // The schema's defaults, so a solver no configuration reached -- the
+        // test fixtures that build a Jacobian directly -- still has error weights.
+        double rtol = 1e-3;
+        std::vector<double> atol{1e-3};
+        ErrorWeights errorWeights = ErrorWeights::AlgebraicMax;
 
         NetCDFIO nc_output;
         NetCDFIO restart_file;
@@ -2556,6 +3016,12 @@ class SystemSolver
         bool restartWasProjected = false;
         double initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
         bool calcICRan = false;
+        // What IDA had counted when initialize() handed it the consistent
+        // algebraic derivatives: IDAReInit clears IDA's counters, so without
+        // these the run's totals -- and anything asking whether IDACalcIC did
+        // any work -- would leave out the IDACalcIC that ran before it.
+        long idaResidualEvalsBeforeReinit = 0;
+        long idaJacobianSetupsBeforeReinit = 0;
         double steady_state_tol = 1e-3;
 
 #ifdef PHYSICS_DEBUG

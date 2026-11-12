@@ -31,8 +31,9 @@ Value AutodiffAdjointProblem::nodalParameterDerivative(Index i, Index pIndex, Gl
             RealVector q(s.q());
             RealVector sigma(s.sigma());
             RealVector phi(s.phi());
+            RealVector geom(s.geom());
             PhysicsProblem->setPval(pIndex, pv);
-            return g[i](points[j], u, q, sigma, phi);
+            return g[i](points[j], u, q, sigma, phi, geom);
         };
         out += weights(j) * autodiff::derivative(g_wrapper, wrt(p), at(p));
     }
@@ -72,6 +73,12 @@ Matrix AutodiffAdjointProblem::dGFndp(Index i, DGSoln &y, Postprocessor const &p
     return nodalParameterDerivatives(i, pp.evalOnStarNodes(y), pp.starPoints(), weights);
 }
 
+Matrix AutodiffAdjointProblem::dGFndpAtNodes(Index i, GlobalState const &states, std::vector<Position> const &points,
+                                             Vector const &weights, Index, DGSoln &, Postprocessor const *) const
+{
+    return nodalParameterDerivatives(i, states, points, weights);
+}
+
 Vector AutodiffAdjointProblem::nodalWeights(DGSoln const &y)
 {
     const Index nCells = y.getGrid().getNCells();
@@ -84,69 +91,73 @@ Vector AutodiffAdjointProblem::nodalWeights(DGSoln const &y)
 
 Value AutodiffAdjointProblem::gFn(Index i, const State &s, Position x) const
 {
-    // Real p = PhysicsProblem->getPval(i);
     RealVector u(s.u());
     RealVector q(s.q());
     RealVector sigma(s.sigma());
     RealVector phi(s.phi());
-    return g[i](x, u, q, sigma, phi).val;
+    RealVector geom(s.geom());
+    return g[i](x, u, q, sigma, phi, geom).val;
+}
+
+// The gradient of objective i with respect to one of its vector arguments,
+// selected by `which`: 0 u, 1 q, 2 sigma, 3 phi, 4 the geometry slots.
+void AutodiffAdjointProblem::gradientOf(Index i, int which, VectorRef grad, const State &s, Position x) const
+{
+    RealVector u(s.u());
+    RealVector q(s.q());
+    RealVector sigma(s.sigma());
+    RealVector phi(s.phi());
+    RealVector geom(s.geom());
+    Real value;
+    auto f = [this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD,
+                       RealVector geomD)
+    { return g[i](X, uD, qD, sigmaD, phiD, geomD); };
+    switch (which)
+    {
+    case 0:
+        autodiff::gradient(f, wrt(u), at(x, u, q, sigma, phi, geom), value, grad);
+        break;
+    case 1:
+        autodiff::gradient(f, wrt(q), at(x, u, q, sigma, phi, geom), value, grad);
+        break;
+    case 2:
+        autodiff::gradient(f, wrt(sigma), at(x, u, q, sigma, phi, geom), value, grad);
+        break;
+    case 3:
+        autodiff::gradient(f, wrt(phi), at(x, u, q, sigma, phi, geom), value, grad);
+        break;
+    default:
+        autodiff::gradient(f, wrt(geom), at(x, u, q, sigma, phi, geom), value, grad);
+        break;
+    }
 }
 
 void AutodiffAdjointProblem::dgFn_du(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.u());
-    RealVector q(s.q());
-    RealVector sigma(s.sigma());
-    RealVector phi(s.phi());
-
-    Real uout;
-    // Real p = PhysicsProblem->getPval(i);
-
-    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                       { return g[i](X, uD, qD, sigmaD, phiD); }, wrt(u), at(x, u, q, sigma, phi), uout, grad);
+    gradientOf(i, 0, grad, s, x);
 }
 
 void AutodiffAdjointProblem::dgFn_dq(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.u());
-    RealVector q(s.q());
-    RealVector sigma(s.sigma());
-    RealVector phi(s.phi());
-
-    // Real p = PhysicsProblem->getPval(i);
-    Real uout;
-    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                       { return g[i](X, uD, qD, sigmaD, phiD); }, wrt(q), at(x, u, q, sigma, phi), uout, grad);
+    gradientOf(i, 1, grad, s, x);
 }
 
 void AutodiffAdjointProblem::dgFn_dsigma(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.u());
-    RealVector q(s.q());
-    RealVector sigma(s.sigma());
-    RealVector phi(s.phi());
-
-    // Real p = PhysicsProblem->getPval(i);
-
-    Real uout;
-
-    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                       { return g[i](X, uD, qD, sigmaD, phiD); }, wrt(sigma), at(x, u, q, sigma, phi), uout, grad);
+    gradientOf(i, 2, grad, s, x);
 }
 
 void AutodiffAdjointProblem::dgFn_dphi(Index i, VectorRef grad, const State &s, Position x)
 {
-    RealVector u(s.u());
-    RealVector q(s.q());
-    RealVector sigma(s.sigma());
-    RealVector phi(s.phi());
+    gradientOf(i, 3, grad, s, x);
+}
 
-    // Real p = PhysicsProblem->getPval(i);
-
-    Real uout;
-
-    autodiff::gradient([this, i](Position X, RealVector uD, RealVector qD, RealVector sigmaD, RealVector phiD)
-                       { return g[i](X, uD, qD, sigmaD, phiD); }, wrt(phi), at(x, u, q, sigma, phi), uout, grad);
+void AutodiffAdjointProblem::dgFn_dgeom(Index i, VectorRef grad, const State &s, Position x)
+{
+    // A state with no geometry rows -- no field model -- has nothing to
+    // differentiate, and grad has no rows to write.
+    if (s.geom().size() > 0)
+        gradientOf(i, 4, grad, s, x);
 }
 
 void AutodiffAdjointProblem::dSigmaFn_dp(Index i, Index pIndex, Value &grad, const State &s, Position x)

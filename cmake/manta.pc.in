@@ -7,7 +7,10 @@ Description: @PROJECT_DESCRIPTION@
 Version: @PROJECT_VERSION@
 # Both include paths: -I${prefix}/include so a case can write the namespaced
 # <manta/PhysicsCases.hpp>, and -I${includedir} so the headers' own quoted
-# includes of each other resolve when included from elsewhere.
+# includes of each other resolve when included from elsewhere. Then the
+# dependencies the headers include: the vendored toml11, installed beside them,
+# and SUNDIALS, Eigen, Boost and netCDF wherever the core found them -- written
+# at install time, less the compiler's own search directories.
 #
 # The ABI flags below are what a plugin MUST be compiled with, not merely may be.
 # Eigen aligns its fixed-size types to the widest vector unit the compiler knows
@@ -16,6 +19,7 @@ Version: @PROJECT_VERSION@
 # the first time the solver touches its state. -DEIGEN_USE_BLAS travels for the
 # same reason. The architecture is recorded concretely rather than as `native`,
 # so a plugin compiled on a different machine is a compile error here instead of
-# a run-time crash there.
-Cflags: -I${prefix}/@CMAKE_INSTALL_INCLUDEDIR@ -I${includedir} -std=@MANTA_PC_STD@ -DEIGEN_USE_BLAS @MANTA_PC_MARCH@
+# a run-time crash there. -DEIGEN_DONT_PARALLELIZE likewise: the core's Eigen
+# never threads, and a plugin's instantiations must be the same code.
+Cflags: -I${prefix}/@CMAKE_INSTALL_INCLUDEDIR@ -I${includedir} -isystem${includedir}/extern/toml11 @MANTA_PC_DEPENDENCY_CFLAGS@ -std=@MANTA_PC_STD@ -DEIGEN_USE_BLAS -DEIGEN_DONT_PARALLELIZE @MANTA_PC_MARCH@
 Libs: -L${libdir} -lmanta

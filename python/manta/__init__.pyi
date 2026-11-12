@@ -33,7 +33,11 @@ from ._manta import (
     EvaluationKind as EvaluationKind,
     EvaluationPlan as EvaluationPlan,
     EvaluationSite as EvaluationSite,
+    EquilibriumResponse as EquilibriumResponse,
+    EquilibriumSpec as EquilibriumSpec,
     Field as Field,
+    GeometryDerivatives as GeometryDerivatives,
+    GeometrySlot as GeometrySlot,
     Grid as Grid,
     Mixed as Mixed,
     Regrid as Regrid,
@@ -50,9 +54,11 @@ from ._manta import (
     load_physics_plugin as load_physics_plugin,
     numbered_spec as numbered_spec,
     physics_cases as physics_cases,
+    registerEquilibriumModel as registerEquilibriumModel,
     registerPhysicsCase as registerPhysicsCase,
     run as run,
 )
+from ._manta import EquilibriumModel as _EquilibriumModel
 from ._manta import TransportSystem as _TransportSystem
 
 Dirichlet: BoundaryKind
@@ -83,6 +89,8 @@ class TransportSystem(_TransportSystem):
     scalars: Sequence[Scalar]
     aux: Sequence[Aux]
     regrid: Regrid
+    readsGeometry: bool
+    geometryDerivatives: GeometryDerivatives
 
     def __init__(
         self,
@@ -140,6 +148,19 @@ class TransportSystem(_TransportSystem):
     # read geometry at all.
     def dSigmaFn_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
     def dSources_dGeometry(self, i: int, state: State, x: float, t: float) -> Any: ...  # type: ignore[override]
+
+    # The batched forms: one hook over every point at once, standing in for the
+    # pointwise ones it covers (docs/python.rst has the table). `states` is the
+    # GlobalState dict of (nPoints, n) arrays and `x` the points. The value hooks
+    # return one value per point, the derivative hooks a GlobalState dict where
+    # the bound base takes an out-parameter -- hence the ignores, for the reasons
+    # above.
+    def SigmaFn_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def Sources_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def AuxG_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def dSigma(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def dSources(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
+    def AuxGPrime_v(self, i: int, states: Any, x: Any, t: float) -> Any: ...  # type: ignore[override]
     def aFn(self, i: int, x: float) -> float: ...  # type: ignore[override]
     def LowerBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
     def UpperBoundary(self, i: int, t: float) -> float: ...  # type: ignore[override]
@@ -174,3 +195,23 @@ class TransportSystem(_TransportSystem):
     # a run whose plan is new to this instance. Optional. It matches the bound
     # base exactly, so it carries no ignore.
     def prepareEvaluation(self, plan: EvaluationPlan) -> None: ...
+
+
+class EquilibriumModel(_EquilibriumModel):
+    """Base class for a magnetic equilibrium written in Python: tiers 0 and 1.
+
+    Declares its geometry slots, label, output group and response as class
+    attributes; Solve and Geometry are required, the rest optional.
+    `states` is the GlobalState dict of (nPoints, nVars) arrays.
+    """
+
+    geometry: Sequence[GeometrySlot]
+    label: str
+    name: str
+    response: EquilibriumResponse
+
+    def __init__(self, spec: EquilibriumSpec | None = ...) -> None: ...
+    def Solve(self, states: Any, points: Any, weights: Any, t: float, warm: Any) -> Any: ...
+    def Geometry(self, equilibrium: Any, points: Any) -> Any: ...
+    def applyResponse(self, equilibrium: Any, states: Any, dp: Any, inputPoints: Any, weights: Any, t: float, geometryPoints: Any) -> Any: ...
+    def applyResponseTranspose(self, equilibrium: Any, states: Any, dg: Any, inputPoints: Any, weights: Any, t: float, geometryPoints: Any) -> Any: ...

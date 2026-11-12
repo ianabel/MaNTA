@@ -77,11 +77,16 @@ const std::vector<Entry> &table()
          "Time the integration starts from."},
         {"t_final", {}, Type::Double, Category::Solver, true, false, 0.0,
          "Time the integration ends at; Runner.run(tFinal) overrides it."},
-        {"Relative_tolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
+        {"RelativeTolerance", {"Relative_tolerance"}, Type::Double, Category::Solver, false, false, 1e-3,
          "IDA relative error tolerance."},
-        {"Absolute_tolerance", {}, Type::DoubleList, Category::Solver, false, false,
+        {"AbsoluteTolerance", {"Absolute_tolerance"}, Type::DoubleList, Category::Solver, false, false,
          std::vector<double>{1e-3},
-         "IDA absolute error tolerance; one value, or one per variable."},
+         "Absolute tolerance, one value or one per variable: the floor of IDA's error weights, "
+         "and so of the NewtonStep steady test."},
+        {"ErrorWeights", {}, Type::String, Category::Solver, false, false, std::string{"AlgebraicMax"},
+         "How IDA's error weights hold each class of unknown: AlgebraicMax (sigma, q and aux "
+         "floored at rtol times their largest magnitude), Pointwise, AllMax, Derivative, "
+         "DerivativeLocal, Hybrid or HybridLocal. See docs; SuppressAlgebraicError is separate."},
         {"MinStepSize", {}, Type::Double, Category::Solver, false, false, 1e-7,
          "Smallest timestep IDA may take before giving up."},
         {"initialTimestep", {}, Type::Double, Category::Solver, false, false, 0.0,
@@ -96,9 +101,9 @@ const std::vector<Entry> &table()
          "Write G, dG/dp and each objective's adjoint state z into the netCDF output at the "
          "end of the run; needs solveAdjoint. See docs/adjoints.rst."},
         {"SteadyStateTolerance", {}, Type::Double, Category::Solver, false, false, 1e-3,
-         "Arms steady-state termination by its presence. Its value is compared against dy/dt "
-         "under TimeMarch, and against a mesh-independent weighted norm of the steady residual "
-         "under SteadyStateTest = Residual; the default NewtonStep test does not read it."},
+         "Arms steady-state termination by its presence. Under SteadyStateTest = Residual its "
+         "value bounds a mesh-independent weighted norm of the steady residual, whichever "
+         "SteadyStateSolver reaches the state; the default NewtonStep test does not read it."},
         {"SteadyStateSolver", {}, Type::String, Category::Solver, false, false, std::string{"PseudoTransient"},
          "How a steady state is reached: PseudoTransient (default), TimeMarch (integrate to it), "
          "or Newton (pseudo-transient with an infinite first step). See docs/running.rst."},
@@ -113,7 +118,8 @@ const std::vector<Entry> &table()
          "Least the pseudo-time step may grow on a step that reduced the residual. "
          "1 means no floor. Must not be below 1."},
         {"EstimateObjectiveOnFinish", {}, Type::Bool, Category::Solver, false, false, true,
-         "Estimate the objective and its remaining error at the end of each steady solve. Costs "
+         "Estimate the objective and its remaining error at the end of each steady solve, or of "
+         "a TimeMarch run that stops on its steady test. Costs "
          "one residual, one Jacobian build and one solve, and needs solveAdjoint. Charged per "
          "solve, so a solve driven in slices pays it per slice."},
         {"EstimateDiscretisationError", {}, Type::Bool, Category::Solver, false, false, false,
@@ -293,14 +299,21 @@ const std::vector<Entry> &table()
          "Let IDA grow the step by 10x rather than 2x between steps."},
         {"SuppressAlgebraicError", {}, Type::Bool, Category::Solver, false, false, false,
          "Drop sigma, q, lambda and phi from IDA's local error test (IDASetSuppressAlg). "
-         "Costs restart fidelity and aux-variable accuracy; see docs/running.rst."},
+         "Absent: on for a run with a FieldModel or EquilibriumModel, off otherwise. "
+         "See docs/running.rst."},
         {"FieldSolve", {}, Type::String, Category::Solver, false, false, std::string{"iterative"},
-         "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default) "
-         "or exact (Schur complement onto the field block; a verification tool, see docs)."},
-        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
-         "Convergence tolerance for FieldSolve = iterative."},
+         "How the coupled Jacobian is solved: iterative (block Gauss-Seidel, the default), "
+         "krylov (GMRES on the system with the field eliminated) or exact (the eliminated "
+         "system solved directly; a verification tool, see docs)."},
+        {"FieldSolveTolerance", {}, Type::Double, Category::Solver, false, false, 1e-4,
+         "Convergence tolerance for FieldSolve = iterative: the change one sweep makes to the "
+         "Newton increment, in the error-weighted RMS norm IDA's tests use (where its Newton "
+         "iteration stops at 0.33); a millionth of the increment governs when larger."},
+        {"FieldSolveAdjointTolerance", {}, Type::Double, Category::Solver, false, false, 1e-8,
+         "Convergence tolerance for the coupled adjoint sweep: its backward error relative to "
+         "the right-hand side."},
         {"FieldSolveMaxSweeps", {}, Type::Int, Category::Solver, false, false, 20,
-         "Sweep cap for FieldSolve = iterative."},
+         "Sweep cap for FieldSolve = iterative, and the Krylov dimension for krylov."},
         {"FieldSolveMaxAdjointSweeps", {}, Type::Int, Category::Solver, false, false, 100,
          "Sweep cap for the coupled adjoint solve. Separate from FieldSolveMaxSweeps, and "
          "larger, because the adjoint always runs at cj = 0 where the coupling is stiffest. "
@@ -311,13 +324,27 @@ const std::vector<Entry> &table()
          "manifold. A cold time-marching run always runs it and this cannot turn that off."},
         {"TransportSystem", {}, Type::String, Category::ProblemSelection, true, false, std::string{},
          "Name of the registered physics case to run."},
-        // ProblemSelection, beside TransportSystem and for the same reason: it
-        // names a registered class that runManta instantiates with the parsed
-        // config and the grid. A dict has no equivalent -- a Runner is handed
-        // objects, not names -- so it is an *error* there rather than being
-        // accepted and ignored.
-        {"FieldModel", {}, Type::String, Category::ProblemSelection, false, false, std::string{},
+        // FieldSelection: a registered model's name, instantiated by whichever
+        // surface reads it -- runManta from the config file, PyRunner from the
+        // dict, whose nested tables become the model's own -- through
+        // geometrySourceFromConfig, so both resolve FieldCoupling alike.
+        {"FieldModel", {}, Type::String, Category::FieldSelection, false, false, std::string{},
          "Name of a registered magnetic-field model to couple to; absent means no coupling."},
+        // Exclusive with FieldModel: a run has one source of geometry.
+        {"EquilibriumModel", {}, Type::String, Category::FieldSelection, false, false, std::string{},
+         "Name of a registered equilibrium model -- C++, or Python through "
+         "manta.registerEquilibriumModel -- to take the geometry from, in place of a FieldModel; FieldCoupling chooses consistent or reduced for it (see "
+         "docs/field_coupling.rst)."},
+        // How the geometry source is attached, resolved with it.
+        {"FieldCoupling", {}, Type::String, Category::FieldSelection, false, false,
+         std::string{"auto"},
+         "How the FieldModel is coupled: coupled (its unknowns join the DAE and its "
+         "derivatives the Jacobian), reduced (solved to convergence at each transport state, "
+         "with its response in the Jacobian and no unknowns), consistent "
+         "(solved to convergence at each transport state, as a black box, with no Jacobian "
+         "coupling and no adjoint), or auto (the "
+         "default: coupled where the transport system supplies geometry derivatives, except "
+         "a steady solve with differenced ones; see docs/field_coupling.rst)."},
         {"PhysicsPlugins", {}, Type::StringList, Category::ProblemSelection, false, false,
          std::vector<std::string>{},
          "Shared objects to dlopen for their physics-case registrations."},

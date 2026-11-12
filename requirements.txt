@@ -1,12 +1,12 @@
 equinox==0.13.8
-jax==0.9.0
+jax==0.11.2
 jaxtyping==0.3.11
-matplotlib==3.10.8
+matplotlib==3.11.2
 mypy==2.3.0
 netcdf4==1.7.4
-numpy==2.4.2
+numpy==2.5.4
 pybind11-stubgen==2.5.5
 pytest==9.0.2
-scipy==1.17.0
+scipy==1.18.1
 setuptools==80.10.1
 toml==0.10.2

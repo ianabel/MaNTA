@@ -42,6 +42,8 @@ public:
     /// `states` and `points` are the transport solution sampled on the physics
     /// nodes -- the same GlobalState ScalarG receives -- and `weights` is one
     /// quadrature weight per node, so Int f dx is weights.dot(f_at_nodes).
+    /// With the spec's readsTransportTimeDerivatives set, `states` also
+    /// carries du/dt, read as states[j].udot(v); otherwise udot reads zero.
     ///
     /// A model that cannot evaluate at this state (no x-point, a boundary that
     /// has left the domain) must throw. static_residual catches and returns 1,
@@ -77,20 +79,17 @@ public:
     /// All four arrive zeroed. Reporting every row at once is deliberate: it is
     /// what lets a model that solves a coupled system internally do so once.
     ///
-    /// **dRdot cannot be filled today, and leaving it zero is correct.**
-    /// FieldResidual above receives `states` and no `states_dot` -- unlike
-    /// ScalarG, which takes both y and ydot -- so a field row has no way to
-    /// depend on the transport time derivatives in the first place. The slot is
-    /// here because the coupling assembly already weights it by alpha, so the
-    /// day the value hook gains ydot the derivative is right rather than
-    /// silently one term short.
+    /// dRdot is nonzero only for a model whose spec sets
+    /// readsTransportTimeDerivatives: its rows then read du/dt through the
+    /// states' udot, and dRdot[f].Variable() is d(row)/d(u') at each node. The
+    /// solver weights it by alpha, beside dRddpsidt.
     ///
-    /// What a model author must *not* do on finding it unfillable is put
-    /// d(row)/d(psi') there instead. That belongs in dRddpsidt, which is the
-    /// block IDA's alpha multiplies and which initialize() checks a
-    /// differential DOF against; written into dRdot it would land in the A2
-    /// coupling row at the wrong DOFs entirely, and nothing would say so --
-    /// A2 is only ever applied, never assembled or printed. See the TODO entry.
+    /// What must *not* go there is d(row)/d(psi'). That belongs in dRddpsidt,
+    /// the block IDA's alpha multiplies on the field's own unknowns and which
+    /// initialize() checks a differential DOF against; written into dRdot it
+    /// would land in the A2 coupling row at the wrong DOFs entirely, and
+    /// nothing would say so -- A2 is only ever applied, never assembled or
+    /// printed.
     virtual void FieldResidualPrime(GlobalStateMatrix &dR, GlobalStateMatrix &dRdot,
                                     MatrixRef dRdpsi, MatrixRef dRddpsidt,
                                     Vector const &psi, Vector const &dpsidt,

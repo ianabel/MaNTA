@@ -5,6 +5,7 @@
 #include <sunlinsol/sunlinsol_band.h> /* access to band SUNLinearSolver       */
 #include <sundials/sundials_types.h>  /* definition of type sunrealtype          */
 #include <toml.hpp>
+#include <algorithm>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -14,6 +15,7 @@
 
 #include "Types.hpp"
 #include "FieldModel.hpp"
+#include "EquilibriumModel.hpp"
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 // The field hooks are handed the same quadrature weights the scalar ones are,
@@ -67,6 +69,58 @@ void SystemSolver::initialize()
 	if (fieldModel)
 		fieldModel->resetForRun();
 
+	// The same for a tier-0 equilibrium, and for the solver's own cache of it,
+	// which is also the next Solve's warm start: a reused solver starts from the
+	// cold equilibrium a fresh one would.
+	equilibriumCache = {};
+	equilibriumSolves = 0;
+	// Tier 1's blocks hold an equilibrium of the last run's; nothing may read
+	// them before this run's first Jacobian build.
+	reducedBlocks = {};
+	adjointReducedBlocks = {};
+	if (equilibriumModel)
+	{
+		equilibriumModel->resetForRun();
+
+		// No adjoint through the field at tier 0. Run as a frozen-field gradient
+		// it would be wrong by the field's share -- a third of the closed-form
+		// gradient on the theta pinch -- so it is refused rather than run. Tier
+		// 1 transposes its response (applyResponseTranspose), so it has one.
+		if (!reducedCoupling() && (adjointProblem != nullptr || steadyTest == SteadyTest::Objective))
+		{
+			throw std::invalid_argument(
+				"An adjoint cannot be solved with FieldCoupling = \"consistent\": the equilibrium "
+				"supplies no derivatives, and a gradient with the field frozen would be wrong by "
+				"its share. Couple the field model to get gradients.");
+		}
+
+		// Well below the run's own tolerances: an equilibrium's error goes into
+		// every residual, where IDA reads it as local error.
+		const double absolute = 1e-3 * *std::min_element(atol.begin(), atol.end());
+		if (!equilibriumModel->setTolerances(1e-3 * rtol, absolute))
+			logmsg<LOG_LEVEL::WARNING>(
+				"The equilibrium model '{}' cannot resolve its geometry to {:g} relative, {:g} "
+				"absolute, a thousandth of the run's tolerances; its error will reach every residual.",
+				equilibriumModel->getSpec().name, 1e-3 * rtol, absolute);
+	}
+
+	// The case's route to geometry outside the residual (its diagnostics),
+	// installed by the solver that runs it and cleared by one with no field
+	// model, so a case reused under a different solver never keeps a stale one.
+	// Here rather than in setFieldModel or the constructor: the discretisation
+	// estimate builds a second solver on the same case that never initialises.
+	if (fieldModel || equilibriumModel)
+	{
+		std::vector<std::string> slots;
+		for (FieldSlot const &g : equilibriumModel ? equilibriumModel->getSpec().geometry
+		                                           : fieldModel->getSpec().geometry)
+			slots.push_back(g.name);
+		problem->setGeometryProvider(std::move(slots), [this](VectorRef out, DGSoln const &Y, Position x, Time t)
+		                             { geometryAt(out, Y, x, t); });
+	}
+	else
+		problem->setGeometryProvider({}, {});
+
 	// Nor does the kappa a held nodal tau took from the last run's final
 	// Jacobian build.
 	haveJacobianKappa = false;
@@ -98,6 +152,11 @@ void SystemSolver::initialize()
 	fieldSweepFallbacks = 0;
 	fieldAdjointSweeps = 0;
 	fieldAdjointFellBack = false;
+	adjointKrylovIterations = 0;
+	adjointResponses = 0;
+	reducedResponses = 0;
+	krylovSolves = 0;
+	krylovIterations = 0;
 
 	// Where and how this run will evaluate the case, said before the first
 	// evaluation -- and initialiseMatrices below is that, on a solver's first
@@ -125,7 +184,7 @@ void SystemSolver::initialize()
 	// was promised it would not get.
 	if (estimateDiscretisation && adjointProblem != nullptr)
 	{
-		if (nScalars > 0 || fieldModel || k < 1 || tauScaling != TauScaling::Constant)
+		if (nScalars > 0 || fieldModel || equilibriumModel || k < 1 || tauScaling != TauScaling::Constant)
 			throw std::invalid_argument(
 				"EstimateDiscretisationError cannot estimate this run: it needs "
 				"PolynomialDegree >= 1, a constant tau, and no global scalars or field model.");
@@ -210,7 +269,7 @@ void SystemSolver::initialize()
 
 		fieldModel->FieldResidualPrime(dR, dRdot, dRdpsi, dRddpsidt,
 									   Vector(yJac.getField()), Vector(dydtJac.getField()),
-									   yJac.evalOnNodes(), yJac.getPoints(),
+									   fieldStatesAt(yJac, dydtJac), yJac.getPoints(),
 									   integrator.integrationWeights(yJac.getBasis(), grid),
 									   t0);
 
@@ -242,7 +301,14 @@ void SystemSolver::initialize()
 		// homes for it are docs/running.rst and docs/field_coupling.rst, and
 		// what a release build reports about the sweep is the "Coupled field
 		// sweeps" line, which is measurement rather than description.
-		if (fieldSolveMode == FieldSolveMode::Exact)
+		if (fieldSolveMode == FieldSolveMode::Krylov)
+			logmsg<LOG_LEVEL::INFO>(
+				"FieldSolve = krylov: GMRES on the coupled Jacobian with the field eliminated, one "
+				"transport solve per iteration, stopping where FieldSolve = iterative would "
+				"(FieldSolveTolerance = {}); FieldSolveMaxSweeps = {} is its Krylov dimension. One "
+				"that does not converge falls back to the exact solve.",
+				fieldSolveTolerance, fieldSolveMaxSweeps);
+		else if (fieldSolveMode == FieldSolveMode::Exact)
 			logmsg<LOG_LEVEL::WARNING>(
 				"FieldSolve = exact forms the Schur complement onto the field block, which "
 				"costs one full transport solve per field degree of freedom: {} transport "
@@ -253,13 +319,13 @@ void SystemSolver::initialize()
 			logmsg<LOG_LEVEL::INFO>(
 				"FieldSolve = iterative: block Gauss-Seidel between the transport and field "
 				"blocks with Irons-Tuck acceleration, one transport solve per sweep against "
-				"exact's {} per Jacobian solve. Stops once the relative change in psi is below "
-				"FieldSolveTolerance = {}, up to FieldSolveMaxSweeps = {} sweeps ({} for the "
-				"adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
+				"exact's {} per Jacobian solve. Stops once a sweep changes the increment by less "
+				"than FieldSolveTolerance = {} in the error-weighted norm (or a millionth of the "
+				"increment), up to FieldSolveMaxSweeps = {} sweeps ({} for the adjoint); a sweep that reaches its cap falls back to the exact solve, so this "
 				"mode costs more than exact in the worst case and never less accuracy. It is "
 				"only *cheaper* than exact when the sweep converges in fewer than {} sweeps, "
-				"which no test fixture in this tree manages -- it is a bet on a field block "
-				"far larger than the transport one, not a free improvement. Watch the "
+				"which depends on the coupling: the theta pinch does it in ~3.7 at any "
+				"resolution, while a strongly divergent coupling may not at all. Watch the "
 				"\"Coupled field sweeps\" line at the end of the run.",
 				nField + 1, fieldSolveTolerance, fieldSolveMaxSweeps, fieldSolveMaxAdjointSweeps,
 				nField + 1);
@@ -324,26 +390,31 @@ void SystemSolver::initialize()
 	if (ErrorChecker::check_retval(&retval, "IDASetId", 1))
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 
-	// Optionally take the algebraic rows out of IDA's local error test. `id`
-	// above is what makes this meaningful: u and the differential scalars carry
-	// 1.0, everything else 0.0, and IDASetSuppressAlg drops exactly the zeros.
+	// Take the algebraic rows out of IDA's local error test, by default for a
+	// run with a field and otherwise only when asked. `id` above is what makes
+	// this meaningful: u and the differential scalars carry 1.0, everything
+	// else 0.0, and IDASetSuppressAlg drops exactly the zeros. sigma, q, lambda
+	// and phi stay in the Newton test, so they are converged at every step;
+	// what goes is the check of their local truncation error.
 	//
-	// It is off by default because it is *not* answer-preserving, however much
-	// the direct-run numbers suggest otherwise. On a single run to a steady
-	// state it reproduces the same answer to five significant figures for
-	// 13-44% fewer calls into the physics, and it dissolves the
-	// Absolute_tolerance cliff that otherwise makes atol <= 1e-7 fail on the
-	// first step. But sigma, q, lambda and phi are then controlled only by the
-	// Newton tolerance, and two things read them: a restart file serialises the
-	// whole DOF vector, and phi is a physics quantity in its own right when
-	// nAux > 0. Measured, a restart round trip degrades from 1.9e-6 to 8.6e-4,
-	// and on AuxVarTest q and sigma -- the fields the flag drops from the error
-	// test -- land 1.0e-6 from a converged solution against 4.1e-7 with it off.
-	// (This used to cite a 1.0% drift past a 0.84% tolerance on that case. It
-	// was measured when the case ran at rtol = atol = 1e-2, where its own answer
-	// is 4.1% from converged, so the drift was step-sequence noise rather than
-	// the flag.) Turning it on is a trade, not an improvement.
-	if (suppressAlgebraicError)
+	// Neither choice is answer-preserving, which is why the default depends on
+	// the run. Measured against runs 1000x tighter (docs/running.rst has the
+	// tables): at matched tolerance, suppression gives 1-5x the time error on
+	// most of the regression configs, for 4-52% less work; tightened tenfold to
+	// cost about the same, it is the more accurate on 11 of 15. Where it loses
+	// -- Nonlin2, nonlin, PIDTest, ld's q -- its error stops following the
+	// tolerance. And it costs restart fidelity on plain diffusion: a restart
+	// reads sigma and q back from the file, and LinearDiffusion's q lands 100x
+	// further from the uninterrupted run.
+	//
+	// A field changes the balance. With the algebraic rows in the test, IDA's
+	// order selection on the coupled theta pinch falls into a trap at order 2
+	// for 120-200 steps or does not, as round-off decides: 149-290 steps over a
+	// +-8% tolerance sweep, under either FieldSolve. Suppressed, it takes 99-101
+	// at every one of those tolerances, both field solves agree to ten digits,
+	// and its 5x larger time error is a millionth of the spatial one; restarts
+	// of both theta-pinch regression configs are as faithful either way.
+	if (suppressesAlgebraicError())
 	{
 		retval = IDASetSuppressAlg(IDA_mem, SUNTRUE);
 		if (ErrorChecker::check_retval(&retval, "IDASetSuppressAlg", 1))
@@ -526,6 +597,8 @@ void SystemSolver::initialize()
 	// was as consistent as a restart is supposed to be.
 	initial_residual_norm = std::numeric_limits<double>::quiet_NaN();
 	calcICRan = false;
+	idaResidualEvalsBeforeReinit = 0;
+	idaJacobianSetupsBeforeReinit = 0;
 
 	// A restart skips only on the *copy* path. The claim behind the default is
 	// that a restart resumes from a state the previous run had already driven onto
@@ -589,6 +662,19 @@ void SystemSolver::initialize()
 		//
 		// The first time integrate() actually asks for is t0 + dt: it sets `tout = t0`
 		// and the loop does `tout += dt` before the first IDASolve.
+		// Full Newton steps, with no line search, when the field is an
+		// equilibrium. The Jacobian then carries no coupling, so its Newton
+		// direction need not descend ||F|| at all where the coupling is strong,
+		// and IDACalcIC's backtracking cannot recover from that -- it fails with
+		// IDA_LINESEARCH_FAIL. Measured on the theta pinch at T = 0.9, 5 and 32
+		// cells: the line search fails, and full steps converge in IDACalcIC's
+		// default 10 iterations. At T = 0.3, where it succeeds, the full step
+		// was accepted every time and the run is bit for bit the same either way.
+		// Tier 1's Jacobian does carry the coupling, so it keeps the line
+		// search: on the theta pinch at T = 0.3 and 0.9, 5 and 32 cells, the
+		// runs take the same steps and residuals with it on or off.
+		if (equilibriumModel && !reducedCoupling())
+			IDASetLineSearchOffIC(IDA_mem, SUNTRUE);
 		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
 		if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
 		{
@@ -621,10 +707,8 @@ void SystemSolver::initialize()
 		//
 		// Note what this does *not* fix. dYdt's algebraic blocks stay zero: q, sigma
 		// and phi are algebraic, and IDA_YA_YDP_INIT computes algebraic values and
-		// differential derivatives, not the other way round. That is structural, not
-		// the old wrong id vector -- see at_t0_only_the_differential_part_of_dydt_exists
-		// -- and it stays that way, because dYdt is the state IDA takes its first
-		// step from.
+		// differential derivatives, not the other way round. They are solved for
+		// below, on every path that ran IDACalcIC except a copied restart.
 		//
 		// Checked, unlike every other use of it in this file's history: it fails
 		// with IDA_ILL_INPUT if IDA has already taken a step, and on failure it
@@ -636,15 +720,21 @@ void SystemSolver::initialize()
 		if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
 			throw std::runtime_error("Could not retrieve the corrected initial condition");
 
-		// A projected restart resumes mid-run, where the algebraic components are
-		// moving and its first step is the output cadence, so the zero algebraic
-		// y' above costs a run of error-test failures -- ten of them, i.e. the
-		// run, at a cadence of a fifth of the time already elapsed. A copied
-		// restart takes y' from the file instead (setInitialConditions), and a
-		// cold start lets IDA choose a first step small enough not to notice.
-		if (restarting && restartWasProjected)
+		// The zero algebraic y' above is wrong wherever the algebraic components
+		// move, and IDA's predictor then carries an error of h |y'| in sigma, q,
+		// lambda and phi -- first order, where the error test expects second. A
+		// projected restart resumes mid-run with its first step at the output
+		// cadence, and paid ten error-test failures, i.e. the run. A cold start
+		// paid in step size instead: at a tight tolerance the first step had to
+		// fall below MinStepSize's default before dsm, falling in proportion to h,
+		// passed -- 9 of the 17 regression configs at 1000x their own tolerance.
+		// So both get the exact algebraic derivatives. A copied restart takes
+		// y' from the file instead (setInitialConditions).
+		if (!restarting || restartWasProjected)
 		{
 			consistentAlgebraicDerivatives(Y, dYdt, t0);
+			IDAGetNumResEvals(IDA_mem, &idaResidualEvalsBeforeReinit);
+			IDAGetNumLinSolvSetups(IDA_mem, &idaJacobianSetupsBeforeReinit);
 			retval = IDAReInit(IDA_mem, t0, Y, dYdt);
 			if (ErrorChecker::check_retval(&retval, "IDAReInit", 1))
 				throw std::runtime_error("Could not hand IDA the consistent algebraic derivatives");
@@ -714,7 +804,7 @@ void SystemSolver::initialize()
 // The weights are the state's, not the residual's, which is the scaling IDA
 // itself uses for the quantity this stands in for -- IDACalcIC tests
 // ||J^-1 F||_WRMS, a correction to y, against epsNewt. So the threshold means
-// the same thing at every tolerance setting: tightening Absolute_tolerance
+// the same thing at every tolerance setting: tightening AbsoluteTolerance
 // tightens what counts as a consistent initial state, exactly as it tightens
 // everything else.
 //
@@ -737,40 +827,42 @@ double SystemSolver::weightedResidualNorm(double t, N_Vector Y_in, N_Vector dYdt
 	return norm;
 }
 
-// The algebraic components of y' at a consistent state, from differentiating the
-// algebraic rows G(t, y) = 0 along the trajectory: G_y y' = -G_t, i.e.
-// G_z z' = -G_t - G_u u' for the algebraic unknowns z given the differential
-// derivatives u'. IDA_YA_YDP_INIT computes algebraic values and differential
-// derivatives and leaves the algebraic derivatives where it found them, so a
-// state IDACalcIC has just made consistent still has z' = 0 -- which tells IDA's
-// predictor those components are not moving, and makes the first step's error
-// estimate h |z'| rather than h^2.
+// The algebraic components of y' at a consistent state. IDA_YA_YDP_INIT
+// computes algebraic values and differential derivatives and leaves the
+// algebraic derivatives where it found them, so a state IDACalcIC has just made
+// consistent still has z' = 0 -- which tells IDA's predictor those components
+// are not moving, and makes the first step's error estimate h |z'| rather than
+// h^2.
 //
-// Solved exactly, with the coupled Jacobian solve J(alpha) = F_y + alpha F_y' --
-// whose algebraic rows are exactly G_y, whatever the case couples them to (aux,
-// global scalars, a field model), since F_y' vanishes there -- and iterative
-// refinement on the differential rows:
+// What fixes z' is that every row of the residual stays zero along the
+// trajectory: d/dt F(t, y, y') = F_y y' + F_y' y'' + F_t = 0. The differential
+// derivatives u' are given, and nothing reads an algebraic y', so F_y' y'' is
+// F_y' u'' and the unknowns are u'' and z'. Where no algebraic row reads y' --
+// every case but a scalar constraint on du/dt -- the algebraic rows alone give
+// G_z z' = -G_t - G_u u', and u'' is a by-product. Where one does, as
+// ScalarTestLD3's controller reads dM/dt, its row reads u'' too, and u'' is
+// pinned by the differentiated differential rows; leaving them out, or setting
+// u'' to zero, gives a y' that contradicts its own constraint.
 //
-//   * J(alpha) w = [alpha M u' ; -G_t], M = F_y' on the differential rows. The
-//     algebraic rows hold exactly; the differential ones pin w_d to u' only up to
-//     the F_d,y w term the right-hand side leaves out.
-//   * That defect, delta = u' - w_d, is known exactly, because the solution
-//     sought has w_d = u'. J(alpha) c = [alpha M delta ; 0] corrects it while
-//     leaving the algebraic rows satisfied, so w + c is again an exact solution of
-//     them with a smaller defect -- by a factor of order 1 / (alpha tau), tau the
-//     fastest differential time scale.
+// The coupled Jacobian solve J(alpha) = F_y + alpha F_y' solves exactly this
+// system, up to O(1/alpha), with x_d = u' + u'' / alpha:
 //
-// Iterated to round-off, so alpha sets only how many corrections it takes, never
-// the answer. M v is F(t, Y, v) - F(t, Y, 0), exact for a residual affine in y'.
-// G_t is the case's own explicit time derivative (explicitTimeDerivative), so
-// it is exact, and identically zero for a case with no explicit time
-// dependence. The cost is one Jacobian build, one solve per refinement, and two
-// residuals plus one per refinement. Only the algebraic components are taken;
-// the differential ones stay as IDACalcIC computed them.
+//   J(alpha) x = alpha F_y' u' - F_t + F_y P_d (x_d - u'),
+//
+// P_d keeping the differential components. The last term is what the O(1/alpha)
+// is, and it is known once x is, so it is iterated: each pass takes one residual
+// difference for it and one solve, and contracts the error by about s / alpha, s
+// the fastest rate in the differential rows. F_y' u' is F(t, Y, u') - F(t, Y, 0),
+// exact for a residual affine in y'. F_t is the case's own explicit time
+// derivative on the algebraic rows (explicitTimeDerivative), checked against the
+// residual, and a forward difference of the residual on the differential ones,
+// where it enters only through u''. Only the algebraic components are taken; the
+// differential ones stay as IDACalcIC computed them.
 void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, Time tc)
 {
-	N_Vector ud = N_VClone(Yc), zero = N_VClone(Yc), F0 = N_VClone(Yc), Fv = N_VClone(Yc),
-			 rhs = N_VClone(Yc), w = N_VClone(Yc), c = N_VClone(Yc), delta = N_VClone(Yc);
+	N_Vector ud = N_VClone(Yc), zero = N_VClone(Yc), F0 = N_VClone(Yc), Fa = N_VClone(Yc),
+			 Fv = N_VClone(Yc), base = N_VClone(Yc), rhs = N_VClone(Yc), x = N_VClone(Yc),
+			 xPrevious = N_VClone(Yc), d = N_VClone(Yc), Yp = N_VClone(Yc), minusFt = N_VClone(Yc);
 
 	double const *isDiff = N_VGetArrayPointer(id);
 	const sunindextype n = N_VGetLength(Yc);
@@ -779,73 +871,196 @@ void SystemSolver::consistentAlgebraicDerivatives(N_Vector Yc, N_Vector dYdtc, T
 	N_VProd(dYdtc, id, ud);
 	N_VConst(0.0, zero);
 	residual(tc, Yc, zero, F0);
+	residual(tc, Yc, ud, Fa);
+	// F_y' u', on every row: M u' on the differential rows, and the du/dt an
+	// algebraic row reads, where one does.
+	N_VLinearSum(1.0, Fa, -1.0, F0, base);
+	double const *fy = N_VGetArrayPointer(base);
+	double readsYdot = 0.0;
+	for (sunindextype i = 0; i < n; ++i)
+		if (isDiff[i] == 0.0)
+			readsYdot = std::max(readsYdot, std::abs(fy[i]));
 
-	// alpha M v on the differential rows, rhsAlg on the algebraic ones.
-	auto assemble = [&](N_Vector v, N_Vector algebraic)
-	{
-		residual(tc, Yc, v, Fv);
-		N_VLinearSum(1.0, Fv, -1.0, F0, rhs);
-		N_VScale(alphaLarge(), rhs, rhs);
-		double *r = N_VGetArrayPointer(rhs);
-		double const *a = algebraic ? N_VGetArrayPointer(algebraic) : nullptr;
-		for (sunindextype i = 0; i < n; ++i)
-			if (isDiff[i] == 0.0)
-				r[i] = a ? a[i] : 0.0;
-	};
-
-	// -G_t on the algebraic rows, from the case's own d/dt hooks.
-	N_Vector minusGt = N_VClone(Yc);
-	N_VConst(0.0, minusGt);
+	// -F_t: the case's own d/dt hooks on the algebraic rows...
+	N_VConst(0.0, minusFt);
 	{
 		DGSoln Yh(nVars, grid, k, N_VGetArrayPointer(Yc), nScalars, nAux, nField);
 		DGSoln dYh(nVars, grid, k, N_VGetArrayPointer(ud), nScalars, nAux, nField);
-		DGSoln Gt(nVars, grid, k, N_VGetArrayPointer(minusGt), nScalars, nAux, nField);
+		DGSoln Gt(nVars, grid, k, N_VGetArrayPointer(minusFt), nScalars, nAux, nField);
 		explicitTimeDerivative(Yh, dYh, tc, Gt);
 	}
-	N_VScale(-1.0, minusGt, minusGt);
+
+	// ...checked against the residual itself. A case may make its data depend on
+	// t without declaring the d/dt hooks -- their defaults are zero -- and then
+	// G_t says the data stand still and y' contradicts them: MatrixDiffusionTest
+	// did, and at 1000x its tolerances a cold start that ran with z' = 0 failed
+	// its first step with this one. A forward difference in t at fixed (Y, u')
+	// is G_t to about 1e-8 for any case, so where the hooks disagree with it by
+	// more than that could explain, the difference is used and the case is
+	// named. Forward, so nothing is evaluated before t0. The differential rows
+	// take the difference whatever the hooks say: they reach z' only through u''
+	// and only where an algebraic row reads du/dt, and a source's explicit time
+	// dependence has no hook to compare with.
+	{
+		const double e = 1e-7 * std::max(1.0, std::abs(tc));
+		N_Vector Fb = N_VClone(Yc);
+		residual(tc + e, Yc, ud, Fb);
+		double *h = N_VGetArrayPointer(minusFt);
+		double const *fa = N_VGetArrayPointer(Fa), *fb = N_VGetArrayPointer(Fb);
+		double gap = 0.0, scale = 0.0, size = 0.0;
+		for (sunindextype i = 0; i < n; ++i)
+		{
+			size = std::max(size, std::abs(fa[i]));
+			const double fd = (fb[i] - fa[i]) / e;
+			if (isDiff[i] != 0.0)
+			{
+				h[i] = fd;
+				continue;
+			}
+			gap = std::max(gap, std::abs(fd - h[i]));
+			scale = std::max({scale, std::abs(fd), std::abs(h[i])});
+		}
+		// What the difference alone could get wrong: round-off in F over e, and
+		// its O(e) truncation, which the 1e-3 relative bound covers.
+		const double noise = 1e3 * std::numeric_limits<double>::epsilon() * std::max(size, 1.0) / e;
+		if (gap > 1e-3 * scale && gap > noise)
+		{
+			logmsg<LOG_LEVEL::WARNING>(
+				"The case's explicit time derivatives (dLowerBoundary_dt, dSigmaFn_dt, dAuxG_dt, ...) "
+				"disagree with its residual by {:g} against {:g}: its data move with t and a hook says "
+				"they do not. The consistent y' at t = {:g} uses a difference of the residual instead; "
+				"declaring the hooks makes it exact.",
+				gap, scale, tc);
+			for (sunindextype i = 0; i < n; ++i)
+				if (isDiff[i] == 0.0)
+					h[i] = (fb[i] - fa[i]) / e;
+		}
+		N_VDestroy(Fb);
+	}
+	N_VScale(-1.0, minusFt, minusFt);
+
+	// F_y v by a forward difference of the residual in y, at fixed y' = u'. v is
+	// x_d - u' = u'' / alpha, a small vector, and its product is an O(s / alpha)
+	// correction, so the difference's own ~1e-8 relative error is negligible.
+	const double yScale = std::max(1.0, N_VMaxNorm(Yc));
+	auto stateDirectional = [&](N_Vector v, N_Vector out)
+	{
+		const double vmax = N_VMaxNorm(v);
+		if (vmax == 0.0)
+		{
+			N_VConst(0.0, out);
+			return;
+		}
+		const double e = std::sqrt(std::numeric_limits<double>::epsilon()) * yScale / vmax;
+		N_VLinearSum(1.0, Yc, e, v, Yp);
+		residual(tc, Yp, ud, Fv);
+		N_VLinearSum(1.0 / e, Fv, -1.0 / e, Fa, out);
+	};
+
+	// alpha has to beat the problem's stiffness, which nothing here knows in
+	// advance and which the output cadence says nothing about: tied to
+	// 1 / delta_t, alpha was 1e5 on Shestakov's problem (delta_t = 1e3), and IDA
+	// started from an algebraic y' 4-18% out. So alpha starts at
+	// consistentDerivativeAlpha and is raised by what each pass shows: a
+	// contraction slower than 1e-3 asks for alpha times the shortfall against
+	// 1e-6, and a Jacobian rebuild. The iterate survives the rebuild, since the
+	// system it converges to does not involve alpha.
+	//
+	// It is capped, lower where an algebraic row reads du/dt: that row's
+	// alpha F_y' x_d and alpha F_y' u' cancel to its answer, which so carries an
+	// error of about alpha eps |F_y' u'| -- 1e-6 relative at 1e10, O(1) by 1e16.
+	constexpr double converged = 1e-14, roundOff = 1e-10, slow = 1e-3, wanted = 1e-6;
+	const double alphaMax = readsYdot > 0.0 ? 1e10 : 1e14;
+	constexpr int maxPasses = 32, maxBuilds = 6;
 
 	const double alphaOnEntry = alpha;
-	setAlpha(alphaLarge());
+	double a = consistentDerivativeAlpha;
 	setJacTime(tc);
 	updateBoundaryConditions(tc);
-	setJacEvalY(Yc, ud);
-	updateMatricesForJacSolve();
+	auto build = [&]()
+	{
+		setAlpha(a);
+		setJacEvalY(Yc, ud);
+		updateMatricesForJacSolve();
+	};
+	build();
 
-	assemble(ud, minusGt);
-	solveJacEq(rhs, w);
+	// One pass: rhs = alpha F_y' u' - F_t + F_y P_d (x_d - u'), solved for x.
+	auto pass = [&]()
+	{
+		N_VLinearSum(1.0, x, -1.0, ud, d);
+		N_VProd(d, id, d);
+		stateDirectional(d, rhs);
+		N_VLinearSum(a, base, 1.0, rhs, rhs);
+		N_VLinearSum(1.0, minusFt, 1.0, rhs, rhs);
+		N_VScale(1.0, x, xPrevious);
+		solveJacEq(rhs, x);
+	};
+	// How far a pass moved the algebraic components, relative to them or to u'.
+	auto change = [&]()
+	{
+		double moved = 0.0, size = N_VMaxNorm(ud);
+		double const *xv = N_VGetArrayPointer(x), *xp = N_VGetArrayPointer(xPrevious);
+		for (sunindextype i = 0; i < n; ++i)
+			if (isDiff[i] == 0.0)
+			{
+				moved = std::max(moved, std::abs(xv[i] - xp[i]));
+				size = std::max(size, std::abs(xv[i]));
+			}
+		return moved / std::max(size, 1e-300);
+	};
 
-	const double scale = std::max(N_VMaxNorm(ud), 1e-300);
-	double defect = 0.0;
-	int refinements = 0;
+	// The first pass starts from x_d = u', where the correction term vanishes.
+	// What the second moves the answer by, against a start of 1, is the first
+	// rate.
+	N_VScale(1.0, ud, x);
+	pass();
+	int passes = 1, builds = 1;
+	double moved = 1.0, rate = 1.0, rateBeforeRaise = -1.0;
+	bool raising = true;
 	for (;;)
 	{
-		// delta = u' - w_d on the differential components, zero elsewhere.
-		N_VLinearSum(1.0, ud, -1.0, w, delta);
-		N_VProd(delta, id, delta);
-		defect = N_VMaxNorm(delta) / scale;
-		if (defect <= 1e-14 || refinements == 8)
+		pass();
+		++passes;
+		const double previous = moved;
+		moved = change();
+		rate = moved / previous;
+		if (moved <= converged || passes == maxPasses)
 			break;
-		assemble(delta, nullptr);
-		solveJacEq(rhs, c);
-		N_VLinearSum(1.0, w, 1.0, c, w);
-		++refinements;
+		if (rate > 0.5 && moved <= roundOff)
+			break;
+		// A raise that did not buy a tenth of what it should have says the slow
+		// mode is not alpha's, and further raises would only cost round-off.
+		if (rateBeforeRaise > 0.0 && rate > 0.1 * rateBeforeRaise)
+			raising = false;
+		rateBeforeRaise = -1.0;
+		if (rate > slow && raising && builds < maxBuilds && a < alphaMax)
+		{
+			rateBeforeRaise = rate;
+			a = std::min(a * std::clamp(rate / wanted, 10.0, 1e8), alphaMax);
+			build();
+			++builds;
+		}
 	}
 	setAlpha(alphaOnEntry);
-	consistentDerivativeRefinements = refinements;
-	consistentDerivativeDefect = defect;
-	if (defect > 1e-14)
+	consistentDerivativePasses = passes;
+	consistentDerivativeBuilds = builds;
+	consistentDerivativeAlphaUsed = a;
+	consistentDerivativeChange = moved;
+	if (moved > roundOff)
 		logmsg<LOG_LEVEL::WARNING>(
-			"The algebraic derivatives at the restart were refined {} times and the differential "
-			"rows still miss u' by {:g} relative; the algebraic y' handed to IDA carries that error.",
-			refinements, defect);
+			"The algebraic derivatives at t = {:g} took {} passes over {} Jacobian builds, up to "
+			"alpha = {:g}, and the last still moved them by {:g} relative; the algebraic y' handed "
+			"to IDA carries that error.",
+			tc, passes, builds, a, moved);
 
 	double *dy = N_VGetArrayPointer(dYdtc);
-	double const *wv = N_VGetArrayPointer(w);
+	double const *xv = N_VGetArrayPointer(x);
 	for (sunindextype i = 0; i < n; ++i)
 		if (isDiff[i] == 0.0)
-			dy[i] = wv[i];
+			dy[i] = xv[i];
 
-	for (N_Vector v : {ud, zero, F0, Fv, rhs, w, c, delta, minusGt})
+	for (N_Vector v : {ud, zero, F0, Fa, Fv, base, rhs, x, xPrevious, d, Yp, minusFt})
 		N_VDestroy(v);
 }
 
@@ -855,10 +1070,6 @@ void SystemSolver::integrate(double tFinal)
 
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
-
-	// Steady-state stopping conditions
-	const sunrealtype dydt_rel_tol = steady_state_tol;
-	const sunrealtype dydt_abs_tol = 1e-3;
 
 	if (t0 > tFinal)
 	{
@@ -985,25 +1196,18 @@ void SystemSolver::integrate(double tFinal)
 		if (writeOutput)
 			WriteTimeslice(tret);
 
-		// Check if steady-state is achieved (test the lambda points)
-		if (TerminateOnSteadyState)
+		// The steady solvers' own SteadyStateTest, at the state IDA returned;
+		// see timeMarchIsSteady.
+		if (TerminateOnSteadyState && timeMarchIsSteady(tret))
 		{
-			sunrealtype dydt_norm = 0.0;
-			for (Index i = 0; i < nCells; i++)
-				for (Index v = 0; v < nVars; v++)
-				{
-					sunrealtype xi = dydt.lambda(v)[i] * dt;
-					sunrealtype wi = 1.0 / (y.lambda(v)[i] * dydt_rel_tol + dydt_abs_tol);
-					dydt_norm += xi * xi * wi * wi;
-				}
-			dydt_norm = sqrt(dydt_norm);
-			if (physics_debug)
-				std::println(" dy/dt norm inferred from lambdas is {:g}", dydt_norm);
-			if (dydt_norm < 1.0)
-			{
-				std::println("Steady State achieved at time t = {:g}", tret);
-				break;
-			}
+			std::println("Steady State achieved at time t = {:g}", tret);
+			// The objective estimate, as a steady solve makes it on finishing:
+			// a march that passed its steady test is as near the fixed point the
+			// correction extrapolates to (docs/adjoints.rst has the measurement).
+			// Made after the loop's last use of IDA's factorisation.
+			if (estimateObjectiveOnFinish && adjointProblem != nullptr)
+				objectiveEstimate = estimateObjective(tret);
+			break;
 		}
 
 		// Diagnostics go here
@@ -1013,11 +1217,35 @@ void SystemSolver::integrate(double tFinal)
 	IDAGetNumSteps(IDA_mem, &nsteps);
 	IDAGetNumResEvals(IDA_mem, &nresevals);
 	IDAGetNumLinSolvSetups(IDA_mem, &njacevals);
+	nresevals += idaResidualEvalsBeforeReinit;
+	njacevals += idaJacobianSetupsBeforeReinit;
 
 	std::println("Total Number of Timesteps             :{}", nsteps);
 	std::println("Total Number of Residual Evaluations  :{}", nresevals);
 	std::println("Total Number of Jacobian Computations :{}", njacevals);
 
+	if (reducedCoupling())
+	{
+		auto fs = getFieldSweepStats();
+		std::println("Reduced coupled solves                :{} sweeps over {} solves, {} GMRES "
+					 "iterations over {} solves, {} responses",
+					 fs.iterations, fs.solves, fs.krylovIterations, fs.krylovSolves, fs.responses);
+		if (fs.fallbacks > 0)
+			logmsg<LOG_LEVEL::INFO>(
+				"{} of {} reduced sweeps exhausted FieldSolveMaxSweeps = {} and went on to GMRES.",
+				fs.fallbacks, fs.solves, fieldSolveMaxSweeps);
+	}
+	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Krylov)
+	{
+		auto fs = getFieldSweepStats();
+		std::println("Coupled field GMRES                   :{} iterations over {} solves ({} exact fallbacks)",
+					 fs.krylovIterations, fs.krylovSolves, fs.fallbacks);
+		if (fs.fallbacks > 0)
+			logmsg<LOG_LEVEL::WARNING>(
+				"{} of {} coupled GMRES solves did not converge and fell back to the exact Schur "
+				"solve. The answers are correct; the run is paying for both.",
+				fs.fallbacks, fs.krylovSolves);
+	}
 	if (nField > 0 && getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative)
 	{
 		auto fs = getFieldSweepStats();
@@ -1268,14 +1496,10 @@ void SystemSolver::runAdjointSolve()
 	// here: the adjoint fills geometry before it evaluates anything
 	// (physicsNodesAt), assembleAdjointOperator stores A1^T and A2^T beside M^T,
 	// and solveAdjointState eliminates them exactly (FieldSolve = exact) or
-	// sweeps to a checked backward error that *throws* if it is not reached.
-	//
-	// Two limits survive the lifting and are deliberate rather than overlooked.
-	// An objective whose integrand reads State::geom directly loses its dG/dpsi
-	// term, because AdjointProblem reports four state derivatives and geometry
-	// is not among them; and a FieldModel cannot depend on an adjoint parameter
-	// at all, so dR/dp is zero by construction rather than by assumption. Both
-	// are recorded in SystemSolver.hpp beside G_field and in TODO.
+	// sweeps to a checked backward error that *throws* if it is not reached. An
+	// objective reading the geometry reaches dG/dpsi through dg's geometry rows,
+	// and a field row reading a parameter reaches dG/dp through the adjoint
+	// problem's dFieldResidual_dp.
 
 	if (solveAdjoint)
 	{

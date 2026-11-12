@@ -132,35 +132,22 @@ def test_absolute_tolerance_accepts_scalar_and_array_forms(tmp_path, atol):
     assert MaNTA.run(write_config(tmp_path, Absolute_tolerance=atol)) == 0
 
 
-def test_a_wrong_length_absolute_tolerance_is_silently_ignored(tmp_path):
-    """Pins current behaviour, which is a trap rather than a design.
+def test_a_wrong_length_absolute_tolerance_is_refused(tmp_path):
+    """AbsoluteTolerance takes one value, or one per variable, and anything else
+    is refused by name.
 
-    `getErrorWeights` reads
-
-        double absTol = 1e-8;
-        if (atol.size() == 1)          absTol = atol[0];
-        else if (atol.size() == nVars) absTol = atol[v];
-
-    -- so an Absolute_tolerance whose length is neither 1 nor nVars is
-    discarded and replaced by a hard-coded 1e-8, with nothing said. `runManta`
-    accepts the array happily (it only checks that the key appears once), so a
-    user who writes two tolerances for a one-variable problem gets a far
-    tighter solve than they asked for and no indication why.
-
-    Demonstrated by making the consequence visible: at MinStepSize = 1e-7 the
-    scalar form runs and the two-element form drives IDA into the step floor.
-    Both configs are otherwise identical.
-
-    If this ever starts failing because the mismatch is honoured or rejected,
-    that is an improvement -- update the test, do not loosen it.
+    It used to be discarded: the error weights fell through to a hard-coded 1e-8
+    when the length was neither 1 nor nVars, so a user who wrote two tolerances
+    for a one-variable problem got a far tighter solve than they asked for and no
+    indication why. The scalar form is the control.
     """
-    ok = write_config(tmp_path, "loose", Absolute_tolerance="1.0e-1", MinStepSize="1e-7")
+    ok = write_config(tmp_path, "loose", AbsoluteTolerance="1.0e-1", MinStepSize="1e-7")
     assert MaNTA.run(ok) == 0
 
     mismatched = write_config(
-        tmp_path, "mismatched", Absolute_tolerance="[1.0e-1, 1.0e-1]", MinStepSize="1e-7"
+        tmp_path, "mismatched", AbsoluteTolerance="[1.0e-1, 1.0e-1]", MinStepSize="1e-7"
     )
-    with pytest.raises(RuntimeError, match="IDASolve could not complete"):
+    with pytest.raises(ValueError, match="AbsoluteTolerance has 2 entries"):
         MaNTA.run(mismatched)
 
 

@@ -144,14 +144,14 @@ struct Tolerances
     double relative = 1e-9;
 };
 
-// Run to tFinal on a uniform grid of nCells cells at degree k, and return the L2
-// errors of the final solution and of its postprocessing.
+// Run to tFinal on a uniform grid of nCells cells at degree k, and return
+// whatever `measure(sys, grid, tFinal)` makes of the final state.
 //
 // runSolver writes <stem>.nc / .dat / .restart.nc into the working directory,
 // so the output name is unique per case and the files are removed afterwards.
-template <class Problem>
-Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
-                           bool superconvergent = false, Tolerances tol = {})
+template <class Problem, class Measure>
+auto solveAndMeasureWith(Index k, Index nCells, double tFinal, bool superconvergent,
+                         Tolerances tol, Measure &&measure)
 {
     Grid grid(0.0, 1.0, nCells);
     Problem problem;
@@ -184,18 +184,32 @@ Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
     // destroyed. Rebuild it from yJac, which the solver owns.
     sys.postprocessor->computeUStar(sys.yJac);
 
-    Errors err{
-        l2Error(sys, grid, tFinal),
-        l2ErrorOf([&](double x) { return sys.getPostprocessor()->uStar(0)(x); }, grid,
-                  tFinal)};
-
-    if constexpr (HasExtraError<Problem>)
-        err.extra = Problem::extraError(sys, grid, tFinal);
+    auto result = measure(sys, grid, tFinal);
 
     for (const char *suffix : {".nc", ".dat", ".restart.nc"})
         std::remove((stem + suffix).c_str());
 
-    return err;
+    return result;
+}
+
+// The two errors every problem reports, plus the problem's extra one if it has
+// one. solveAndMeasureWith takes any measurement, for a problem with more than
+// one thing to measure.
+template <class Problem>
+Errors solveAndMeasureBoth(Index k, Index nCells, double tFinal,
+                           bool superconvergent = false, Tolerances tol = {})
+{
+    return solveAndMeasureWith<Problem>(
+        k, nCells, tFinal, superconvergent, tol,
+        [](SystemSolver &sys, Grid const &grid, double t)
+        {
+            Errors err{l2Error(sys, grid, t),
+                       l2ErrorOf([&](double x) { return sys.getPostprocessor()->uStar(0)(x); },
+                                 grid, t)};
+            if constexpr (HasExtraError<Problem>)
+                err.extra = Problem::extraError(sys, grid, t);
+            return err;
+        });
 }
 
 /// The order between two consecutive grids, log(e0/e1) / log(n1/n0).
@@ -447,7 +461,9 @@ class ManufacturedGeometricDiffusion : public TransportSystem
 public:
     explicit ManufacturedGeometricDiffusion(M const &model_)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}}),
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic}),
           model(model_)
     {
     }
@@ -494,6 +510,17 @@ private:
     M const &model;
 };
 
+/// How a field-coupling tier attaches the model and reads psi back. Empty is
+/// tier 2: setFieldModel, and psi from the state vector. A tier that carries no
+/// psi in the state -- tier 0, FieldModelEquilibrium -- supplies both; the
+/// harness stays free of FieldModel's headers, so the tier is the caller's.
+template <class M>
+struct FieldTier
+{
+    std::function<void(SystemSolver &, std::shared_ptr<M> const &)> attach;
+    std::function<Vector(SystemSolver &, Time)> psi;
+};
+
 /// What one coupled run reports.
 struct CoupledErrors
 {
@@ -509,7 +536,8 @@ struct CoupledErrors
 /// netCDF write is pure cost here.
 template <ManufacturedFieldModel M>
 CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superconvergent,
-                               SystemSolver::FieldSolveMode mode, Tolerances tol = {})
+                               SystemSolver::FieldSolveMode mode, Tolerances tol = {},
+                               FieldTier<M> const &tier = {})
 {
     Grid grid(0.0, 1.0, nCells);
 
@@ -521,8 +549,13 @@ CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superc
     SystemSolver sys(grid, k, &problem);
     sys.setTau(1.0);
     sys.setSuperconvergent(superconvergent);
-    sys.setFieldModel(model);
-    sys.setFieldSolveMode(mode);
+    if (tier.attach)
+        tier.attach(sys, model);
+    else
+    {
+        sys.setFieldModel(model);
+        sys.setFieldSolveMode(mode);
+    }
     sys.resetCoeffs();
 
     sys.setInputFile("mms_coupled");
@@ -549,7 +582,7 @@ CoupledErrors solveCoupledOnce(Index k, Index nCells, double tFinal, bool superc
     sys.postprocessor->computeUStar(sys.yJac);
 
     const Vector psiExact = model->fieldExact(tFinal);
-    const Vector psi = sys.getSolution().getField();
+    const Vector psi = tier.psi ? tier.psi(sys, tFinal) : Vector(sys.getSolution().getField());
     const SystemSolver::FieldSweepStats stats = sys.getFieldSweepStats();
 
     return {l2Error(sys, grid, tFinal),
@@ -572,7 +605,7 @@ template <ManufacturedFieldModel M>
 Rates solveCoupledAndMeasure(
     Index k, std::vector<Index> const &cells, bool superconvergent = false,
     SystemSolver::FieldSolveMode mode = SystemSolver::FieldSolveMode::Iterative,
-    double tFinal = 0.25, Tolerances tol = {})
+    double tFinal = 0.25, Tolerances tol = {}, FieldTier<M> const &tier = {})
 {
     Rates r{0.0, 0.0, 0.0, 0.0};
     r.cells = cells;
@@ -580,7 +613,7 @@ Rates solveCoupledAndMeasure(
     for (Index n : cells)
     {
         const CoupledErrors e =
-            solveCoupledOnce<M>(k, n, tFinal, superconvergent, mode, tol);
+            solveCoupledOnce<M>(k, n, tFinal, superconvergent, mode, tol, tier);
         r.coupledU.push_back(e.u);
         r.coupledStar.push_back(e.uStar);
         r.coupledExtra.push_back(e.field);

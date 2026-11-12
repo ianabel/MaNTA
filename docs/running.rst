@@ -148,6 +148,17 @@ point a config file at it:
 The grid comes from the restart file, so ``GridSize``, ``GridPoints``,
 ``LowerBoundary`` and ``UpperBoundary`` are ignored on this path.
 
+**The boundary data is the case's own wherever the case has some.** A case that
+overrides ``LowerBoundary`` / ``UpperBoundary``, or fills ``uL`` / ``uR`` as an
+``AutodiffTransportSystem`` does from its ``[AutodiffTransportSystem]`` keys,
+resumes with exactly that. Only a case with none is given data recovered from
+the file: a Dirichlet end's datum from the trace, which the run wrote as
+:math:`g_D(t)` exactly; a Neumann end's from :math:`q_h` at the face; a mixed
+end's by evaluating its row on the stored profile. The last two are only as
+good as the discretisation at that face, since HDG imposes those conditions
+weakly -- on ``ADTest``'s zero-flux axis :math:`q_h(0)` is 2.7e-4 -- so a case
+whose boundary values matter at that accuracy should state them.
+
 ``PolynomialDegree`` is **not** ignored. It defaults to the degree the file was
 written at, and setting it to something else resumes the run at that degree
 instead, projecting the stored state onto the new space:
@@ -280,19 +291,20 @@ solution and a time derivative that did not belong together.
 
 .. warning::
 
-   Restarting is **fragile at tight tolerances**, and more so with ``nAux > 0``.
-   The regression suite exercises three restart round trips, each at the tightest
-   tolerance that completes; below that, ``IDACalcIC`` can fail to converge on
-   the resumed run. If a restart fails where the original run succeeded, loosen
-   the tolerances before looking for a deeper cause.
+   A restart at the file's own degree resumes from the stored state **without
+   running** ``IDACalcIC``, on the grounds that the run which wrote it had
+   already converged it. If the resumed problem is not the problem that run was
+   solving, that is false, and the symptom is ``IDA_ERR_FAIL`` on the first
+   step with a ``dsm`` that does not fall as ``h`` does. Changing the case's
+   parameters or boundary data across a restart does that.
+   ``ForceConsistentIC = true`` runs ``IDACalcIC`` anyway. Every
+   regression config's half-time round trip completes at ten and at a hundred
+   times tighter than its own tolerances, with ``SuppressAlgebraicError``
+   either way, as do the coupled theta pinch's at every ``FieldCoupling``.
 
-   Such a failure now reports itself: ``IDACalcIC could not complete``. It did not
-   used to — the return value was overwritten before it was checked, so a failed
-   initial-condition calculation carried on into the time loop with whatever
-   partial state IDA had reached, and the symptom appeared later and elsewhere.
-
-   :ref:`suppress-algebraic-error` makes this *worse*, not better: it is the
-   accuracy of the algebraic components that a restart resumes from.
+   :ref:`suppress-algebraic-error` costs fidelity on a restart without a
+   field: the resumed run starts from the file's ``sigma`` and ``q``, and with
+   them out of the error test they are less accurate there.
 
 .. _coupled-field-sweeps:
 
@@ -306,10 +318,12 @@ prints one extra line beside the step and Jacobian counts at the end::
 
 The ratio is what to read. A sweep is one transport solve; the exact Schur
 complement is :math:`\texttt{nField}+1` of them. So the iterative path is
-*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`, and
-on every fixture in this tree it is not — see :doc:`field_coupling` for the
-numbers. Measured in a real integration the sweep runs 2.5 to 3.6 iterations per
-Jacobian solve.
+*cheaper* only when the mean sweep count is below :math:`\texttt{nField}+1`.
+Whether it is depends on the coupling: the theta pinch runs about 3.7 sweeps per
+Jacobian solve at every resolution, so iterative wins from
+:math:`\texttt{nField} = 12` up, while the small manufactured fixtures run 2.0
+to 2.8 against an :math:`\texttt{nField}+1` of 2 to 6 and lose — see
+:doc:`field_coupling` for the numbers.
 
 .. important::
 
@@ -335,9 +349,8 @@ makes ``FieldSolve`` a cost choice and never an accuracy one. The adjoint has it
 own cap, ``FieldSolveMaxAdjointSweeps``, defaulting to 100 against the forward
 20: the transposed iteration has the same spectrum — it *is* the transpose — but
 always runs at :math:`c_j = 0`, where the spectral radius is largest, so it is
-strictly the harder direction. Five field unknowns have been measured needing
-13–38 sweeps on isolated right-hand sides, which is why inheriting the forward
-cap would under-serve it.
+strictly the harder direction, and inheriting the forward cap would
+under-serve it.
 
 .. note::
 
@@ -492,7 +505,7 @@ a steady solve or a restart, and cannot remove it from the run that needs it.
    norm only guesses.
 
    For scale, on ``TestDiffusion`` round trips a cold start's residual measures
-   0.30 at ``Absolute_tolerance = 1e-3`` and 417 at ``1e-8``, while a warm start
+   0.30 at ``AbsoluteTolerance = 1e-3`` and 417 at ``1e-8``, while a warm start
    lands between 7.7e-4 and 1.9e-2.
 
 **What makes a warm start consistent at all is that the trace is now kept.**
@@ -502,7 +515,7 @@ traces, not the HDG trace equation
 :math:`C_\sigma \sigma + C_q q + G_c u + H\lambda = L(t)` that :math:`\lambda`
 actually solves. On a restart that discarded a converged trace and replaced it
 with something that solves nothing: measured on a ``TestDiffusion`` round trip at
-``Absolute_tolerance = 1e-8``, that one call took the weighted residual from
+``AbsoluteTolerance = 1e-8``, that one call took the weighted residual from
 2.6e-3 to 556. It is why a restart used to need about ten times as many residual
 evaluations inside ``IDACalcIC`` as a cold start; on ``AuxVarTest``'s round trip
 keeping the trace takes the resumed run from 1139 residual evaluations to 1033.
@@ -608,8 +621,9 @@ transient *is* the answer.
    rejected step drops it to a finite ``dt`` and it continues as continuation.
 
 ``TimeMarch``
-   The original behaviour: integrate with IDA until ``dY/dt`` falls below
-   ``SteadyStateTolerance``. Slower, and the only one of the three that selects
+   The original behaviour: integrate with IDA until the state passes the same
+   ``SteadyStateTest`` the other two stop on, checked at each output time --
+   see below. Slower, and the only one of the three that selects
    a solution *branch* by following the physics — which matters for a problem
    with more than one steady state, such as a transport model with a barrier
    bifurcation.
@@ -670,40 +684,49 @@ happen to agree — they match bit for bit in ``Newton`` mode, where the damping
 term is identically zero. Its ``u_scale`` stays unit: that one is about the
 solution's units, and it drives the step-length test and the Newton step clamp.
 
-``TimeMarch`` does not use any of this. It compares ``dY/dt`` against the same
-tolerance in the time loop, so a config that switches between the modes is
-changing what the number means.
+``TimeMarch`` makes the same test, at each output time, on the state IDA
+returns: under ``Residual`` this norm of the residual, with :math:`\partial_t u`
+taken as zero, against ``SteadyStateTolerance``; under ``NewtonStep`` the
+undamped Newton correction below. So the tolerance means one thing whichever
+``SteadyStateSolver`` reaches the steady state. The test runs only at output
+times, so ``delta_t`` sets how soon after the state settles the run can notice,
+and its cost is per output: one residual under ``Residual``; under
+``NewtonStep`` a residual, a solve and two Jacobian builds, the second
+rebuilding the factorisation IDA is reusing so that a run which checks
+integrates exactly as one which does not.
 
 Measured on the benchmarks under ``python-examples/``, in the units
 ``PERFORMANCE.md`` asks for — flux and derivative evaluations per point — by
 the reuse-1 columns of ``python-examples/paper-figures/steady_modes.py`` with
 ``MANTA_STEADY_TOL=1e-11``, and again with ``MANTA_STEADY_TEST=Residual`` for
-the ``Residual`` entries (``Relative_tolerance = 1e-6``,
-``Absolute_tolerance = 1e-3``). The resolution
+the ``Residual`` entries (``RelativeTolerance = 1e-6``,
+``AbsoluteTolerance = 1e-3``). The resolution
 is stated because the counts depend on it: ``park-convergence`` at 4 cells, the
-other two at 10, all three at :math:`k = 3`. ``TimeMarch`` reads neither test.
+other two at 10, all three at :math:`k = 3`. These configurations set an output
+cadence as long as the run, so ``TimeMarch`` makes its test once, at its first
+output; the two figures in its column are that test's own cost under each rule.
 Every answer agrees with the converged one in every digit printed, except
 Shestakov under ``NewtonStep``, where ``Newton`` stops 6.5e-3 from the exact
 solution and ``PseudoTransient`` 5.6e-3, against the converged state's 7.2e-3 —
-within their ``Absolute_tolerance``.
+within their ``AbsoluteTolerance``.
 
 .. list-table::
    :header-rows: 1
 
    * - benchmark
-     - ``TimeMarch``
+     - ``TimeMarch``, ``NewtonStep`` / ``Residual``
      - ``PseudoTransient``, ``NewtonStep`` / ``Residual``
      - ``Newton``, ``NewtonStep`` / ``Residual``
    * - ``park-convergence``
-     - 120
+     - 123 / 121
      - 7 / 10
      - **5** / **5**
    * - ``jardin-critical-gradient``
-     - 183
+     - 186 / 184
      - 15 / 22
      - **11** / 15
    * - ``shestakov-nonlinear``
-     - 257
+     - 260 / 258
      - 31 / 44
      - **29** / 37
 
@@ -742,9 +765,9 @@ documents; on this table's configuration both steady modes beat it.
 .. note::
 
    A steady solve is also *better* for adjoints, not merely cheaper. The adjoint
-   state method assumes ``F(y, p) = 0``; ``TimeMarch`` only approximates that
-   through a ``dY/dt`` threshold, while these two enforce it. On the
-   ``test_adjoint.py`` fixture the gradient moves from ``2e-5`` to ``2e-8``
+   state method assumes ``F(y, p) = 0``; ``TimeMarch`` stops on the first output
+   time that passes the test, where these two iterate until it does. On the
+   ``test_adjoint.py`` fixture the gradient moves from ``4.7e-6`` to ``2e-8``
    against a finite-difference reference — the same accuracy as integrating far
    past the transient, for a fraction of the work.
 
@@ -783,7 +806,7 @@ geometric-mean rate and the last ratio of corrections, and :math:`s` is never
 below 1 — the distance left is taken to be at least the last correction, as in
 Deuflhard's error-oriented Newton termination.
 The correction is a distance to the solution per component, in units of the
-run's own ``Relative_tolerance`` and ``Absolute_tolerance``, so every channel is
+run's own ``RelativeTolerance`` and ``AbsoluteTolerance``, so every channel is
 judged on its own scale and ``SteadyStateTolerance``'s value is not read (its
 presence still arms the solve). ``"NewtonStep"`` is the default; ``"Residual"``
 is the merit-function test above, with KINSOL as the inner solver.
@@ -827,7 +850,7 @@ What changes with it:
 set by noise in the flux or by round-off in the linear solve. A badly
 conditioned discretisation — a graded mesh with cells ~5e-4 wide at a wall, say
 — puts the round-off floor of :math:`\|\delta\|` near IDA's threshold at
-``Absolute_tolerance = 1e-6``, and the solve then runs out of steps with
+``AbsoluteTolerance = 1e-6``, and the solve then runs out of steps with
 ``||F||`` already at 1e-9; ``python-examples/nc-toy-model`` did exactly that.
 Ask for a tolerance the discretisation can resolve, or set
 ``SteadyStateTest = "Residual"``.
@@ -974,8 +997,8 @@ slice*, and do not difference the two for a rate of change.
 converged state.
 
 ``TimeMarch`` is unaffected — it writes a slice per output cadence at real times
-and stops when ``dY/dt`` falls below the tolerance, so its last slice carries the
-time the state was actually reached.
+and stops at the first that passes the steady test, so its last slice carries
+the time the state was actually reached.
 
 **A failed steady solve writes its last state too**, at the same ``t = 1``,
 before the error propagates — which is exactly the run whose state is worth
@@ -1081,8 +1104,16 @@ the end should pass ``estimate=False`` and let the last slice produce the one
 that counts. Without ``solveAdjoint`` there is nothing to estimate and nothing to
 pay. ``EstimateObjectiveOnFinish = false`` turns it off for a whole run.
 
-Slicing is refused with ``DegreeAdaptation``: adapting the degree replaces the
-solver, and a slice loop holds the state of the one it started on.
+Under ``DegreeAdaptation`` each level is solved in slices. The slice that
+converges a level finishes the run on it, exactly as an unsliced level ends, and
+if the loop raises the degree it builds the next level from that answer and
+returns ``SteadyOutcome.Refined``; the iterator carries on through it as through
+``OutOfSteps``, and ``stats["degree"]`` names the level each slice was on. The
+levels, and the answer, are those ``run_ss()`` reaches -- the two run one loop,
+``DegreeAdaptationLoop``, and a sliced run lands on the same state bit for bit.
+``stop()`` part way through a level writes the state reached, at the degree
+reached. ``MeshAdaptation`` and the ladders are still refused: they replace the
+mesh as well as the solver.
 
 Through the JAX FFI
 '''''''''''''''''''
@@ -1518,7 +1549,7 @@ Five things worth knowing:
   levels drops the BDF history.
 * **The tolerance is relative**, to each variable's own :math:`L^2` norm, so one
   number means the same thing for variables in different units. It is floored by
-  ``Absolute_tolerance``, which is what stops a solution that is *identically
+  ``AbsoluteTolerance``, which is what stops a solution that is *identically
   zero* — ``LinearDiffusion`` with zero Dirichlet data at both ends, say — from
   dividing one round-off by another and climbing to the ceiling for nothing.
 * **The ceiling warns rather than failing.** Reaching ``MaxPolynomialDegree``
@@ -1547,6 +1578,109 @@ nothing.
    indexed by physics node, so changing the degree changes how many parameters
    there are.
 
+.. _error-weights:
+
+Error weights
+-------------
+
+IDA's error test, its Newton test, the field sweep's stopping test and the
+``NewtonStep`` steady test all measure in one weighted norm, with weight
+:math:`1 / (\mathrm{rtol}\,|y_i| + \tau_i)` on every unknown. The relative part
+is pointwise in every scheme; ``ErrorWeights`` chooses the absolute part
+:math:`\tau_i`, class by class:
+
+``AlgebraicMax`` (the default)
+   ``u`` and ``lambda`` at ``AbsoluteTolerance``; ``sigma``, ``q`` and the
+   auxiliary variables at the larger of that and ``RelativeTolerance`` times
+   the variable's largest magnitude on the grid.
+``Pointwise``
+   ``AbsoluteTolerance`` for everything.
+``AllMax``
+   ``AlgebraicMax``, with ``u`` and ``lambda`` floored the same way.
+``Derivative``
+   ``q`` held to what ``u``'s tolerance implies across the cell,
+   :math:`(\mathrm{rtol}\max|u| + \mathrm{atol}) / h`, and ``sigma`` to that
+   times :math:`\max|\sigma| / \max|q|`.
+``DerivativeLocal``
+   ``Derivative``, with ``sigma``'s tolerance propagated through the local
+   :math:`\partial\hat\sigma/\partial q` and :math:`\partial\hat\sigma/\partial u`
+   that the last Jacobian build recorded -- no extra physics call, and lagging
+   the state by however many steps ago that build was. Before the first build
+   it is ``Derivative``.
+``Hybrid``, ``HybridLocal``
+   The stricter, per cell, of ``Derivative`` (or ``DerivativeLocal``) and
+   ``AlgebraicMax``.
+
+``SuppressAlgebraicError``, below, is a separate key and composes with any of
+these.
+
+**Why the default is not** ``Pointwise``. A pointwise absolute tolerance holds
+``sigma`` and ``q``, wherever they pass near zero, to ``AbsoluteTolerance`` in
+absolute terms. Next to a Dirichlet wall that goes wrong in a specific way: the
+Chebyshev nodes crowd against the wall, the diffusive mode there is stiff, and
+backward Euler puts a stiff component on its slow manifold with a lag of about
+:math:`h\,\mathrm{d}g/\mathrm{d}t`. The lag is small in ``u``, but ``q`` and
+``sigma`` are derivatives of it across the node spacing, and the weights demand
+near-``atol`` precision of them. IDA then reads as local error something that is
+constant while ``h`` is and jumps when ``h`` doubles: a step at ``h`` passes
+with ``dsm`` 0.003, the doubled attempt fails with 1.6, and the order never
+leaves one. Measured on the manufactured theta pinch at ``k = 5, 6`` with two
+field intervals per cell, ``rtol`` 1e-9: under ``Pointwise``, 5 runs in 80
+(10 ``rtol`` jitters of 1e-4, both field solves, two compilers) crawled at
+~25000 steps against ~200, under the exact field solve as well as the
+iterative one, at any ``FieldSolveTolerance``, and which runs crawled was set by
+round-off -- a different compiler or BLAS picked different ones. Under every
+other scheme, none did:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 12 16 50
+
+   * - ``ErrorWeights``
+     - crawls
+     - steps
+     - work against accuracy, regression configs
+   * - ``Pointwise``
+     - 5 / 80
+     - 175–260
+     - the baseline
+   * - ``AlgebraicMax``
+     - 0 / 80
+     - 111–132
+     - identical where nothing is near zero; better on ``AuxVarTest``,
+       ``AuxVarADTest``, ``MatTestAlpha``; 1.3–2.5x the error at matched cost on
+       ``ThetaPinch``; monotone in the tolerance everywhere
+   * - ``AllMax``
+     - 0 / 80
+     - 110–126
+     - worse on ``AuxVarTest`` (5x) and ``MatTest``
+   * - ``Derivative``
+     - 0 / 40
+     - 92–95
+     - best on ``ThetaPinch`` and ``AuxVarTest``; worse on ``LinearDiffusion``,
+       ``nonlin``, ``MatTest``, ``MatTestAlpha``; error *rises* 6x as
+       ``AuxVarADTest``'s tolerance tightens
+   * - ``DerivativeLocal``
+     - 0 / 80
+     - 88–93
+     - the best ``ThetaPinch`` point; local kappa helps where kappa varies
+       (``nonlin``, 3.5x), but still loses on the same four
+   * - ``Hybrid``, ``HybridLocal``
+     - 0 / 80
+     - 111–132
+     - as ``AlgebraicMax``, but not monotone on ``AuxVarTest``
+
+The regression column compares each scheme at a config's own tolerances and at
+ten times tighter against a run a thousand times tighter under ``Pointwise``,
+cost counted as residual evaluations plus twice the Jacobian builds; six
+configs gave usable references. ``AlgebraicMax`` is the default because it is
+the one scheme that ends the crawl without ever making a tolerance mean less.
+The ``Derivative`` family shows what is right about the wall layer -- ``q``'s
+tolerance follows from ``u``'s -- but :math:`\mathrm{tol}_u / h` is too loose in
+general, since on a diffusion problem ``q`` drives the flux that drives ``u``.
+``SuppressAlgebraicError``, measured on the same grid, also ends the crawl at a
+third of the steps, and stops controlling the error on some configs; see below.
+
 .. _suppress-algebraic-error:
 
 Dropping the algebraic rows from the error test
@@ -1554,43 +1688,127 @@ Dropping the algebraic rows from the error test
 
 ``SuppressAlgebraicError = true`` calls SUNDIALS' ``IDASetSuppressAlg``, which
 takes ``sigma``, ``q``, ``lambda`` and ``phi`` out of IDA's local error test and
-leaves only ``u`` and the differential scalars in it. It is **off by default**,
-and this is a trade rather than an improvement.
+leaves only ``u`` and the differential scalars in it. They stay in the Newton
+test, so every step still solves for them; what goes is the check on their
+truncation error.
 
-What it buys. Any problem whose flux grows steeply — a degenerate diffusivity, a
-critical-gradient model near its kink — puts a large ``sigma`` into an error test
-that no reduction in step size can satisfy, because the offending component is
-algebraic. The signature is an ``IDA_ERR_FAIL`` (-3) whose ``dsm`` in the
-SUNDIALS log is *identical* as ``h`` shrinks, with the Newton converging happily
-each time. Setting this key is the direct fix, and it also dissolves the
-``Absolute_tolerance`` floor that otherwise makes ``atol <= 1e-7`` fail on the
-first step of such a problem. Measured on the benchmarks under
-``python-examples/``, it costs 13–44% *fewer* calls into the physics and moves
-the answer of a direct run by nothing at five significant figures.
+**Absent, it is on for a run with a field and off otherwise** -- a field being a
+``FieldModel`` or an ``EquilibriumModel``, at any ``FieldCoupling``. Neither
+setting preserves answers, and the measurements below are why the default
+differs between the two kinds of run. Set the key either way to override it.
 
-What it costs. ``sigma``, ``q``, ``lambda`` and ``phi`` are then controlled only
-by the Newton tolerance, and two things read them:
+**What it costs in accuracy.** Each regression config, at its own tolerances,
+against the same config at a thousandth of them; the error is the largest
+difference over every output time and point, relative to the reference's largest
+magnitude, and cost is residual evaluations plus twice the Jacobian builds:
 
-* **Restart files serialise the whole DOF vector.** A round trip that agreed to
-  ``1.9e-6`` degrades to ``8.6e-4`` with this on — see the warning above, which
-  this key makes worse rather than better.
-* **``phi`` is a physics quantity when ``nAux > 0``**, not merely an
-  intermediate, and ``q`` and ``sigma`` are what the flag drops from the error
-  test. On ``AuxVarTest`` those land 1.0e-6 from a converged solution with this
-  on against 4.1e-7 with it off — a factor of 2.5. (This bullet used to claim a
-  1.0% drift past a 0.84% tolerance. That was measured when the case ran at
-  ``rtol = atol = 1e-2``, where its own answer is 4.1% from converged, so the
-  drift was step-sequence noise; at the ``1e-6 / 1e-8`` the case now uses the
-  flag moves ``u`` by 3.5e-7 and passes the regression outright.)
+.. list-table::
+   :header-rows: 1
 
-So it is the right key for a hard steady-state or transient solve whose output is
-``u``, and the wrong one if you intend to restart from the result or care about
-the auxiliary variables. ``python-examples/shestakov-nonlinear`` is a problem
-that cannot be integrated at all without it — though that turns out to depend on
-the initial condition rather than on the formulation, which is worth knowing
-before reaching for this key. A start whose flux is badly scaled needs it; the
-same problem from a physically scaled start does not. That example's
-``ANALYSIS.md`` measures both.
+   * - config
+     - off: ``u`` / ``q``
+     - on: ``u`` / ``q``
+     - cost, on / off
+   * - ``ADTest``
+     - 6.3e-8 / 1.6e-7
+     - 1.4e-7 / 3.5e-7
+     - 0.54
+   * - ``AdjointTestProblem``
+     - 2.1e-5 / 2.6e-5
+     - 6.6e-5 / 1.1e-4
+     - 0.65
+   * - ``AuxVarADTest``
+     - 8.4e-7 / 2.9e-7
+     - 1.5e-6 / 5.1e-7
+     - 0.69
+   * - ``AuxVarTest``
+     - 4.8e-7 / 1.6e-7
+     - 1.9e-7 / 1.4e-7
+     - 0.88
+   * - ``LinearDiffusion``
+     - 2.3e-5 / 3.2e-4
+     - 1.1e-4 / 1.1e-3
+     - 0.90
+   * - ``NeumannTestLower``
+     - 5.7e-4 / 3.3e-4
+     - 1.9e-3 / 1.1e-3
+     - 0.80
+   * - ``Nonlin2``
+     - 2.3e-5 / 3.9e-5
+     - 9.0e-5 / 1.5e-4
+     - 0.52
+   * - ``PIDTest``
+     - 1.4e-5 / 6.3e-5
+     - 6.8e-4 / 2.2e-3
+     - 0.62
+   * - ``ld``
+     - 3.3e-5 / 4.2e-5
+     - 3.1e-4 / 5.8e-4
+     - 0.66
+   * - ``nonlin``
+     - 1.4e-4 / 9.6e-4
+     - 6.7e-4 / 8.7e-3
+     - 0.84
+   * - ``nonlin_ss``
+     - 6.9e-4 / 1.2e-3
+     - 8.0e-4 / 1.4e-3
+     - 0.48
+   * - ``ThetaPinch``
+     - 3.3e-7 / 1.2e-6
+     - 5.7e-7 / 2.2e-6
+     - 0.90
+   * - ``ThetaPinchNative``
+     - 3.2e-7 / 1.2e-6
+     - 3.6e-7 / 2.9e-6
+     - 0.96
+
+So at a given tolerance it is 1-5 times the error for 4-52% less work, with
+outliers in ``ld``, ``nonlin``'s ``q`` and ``PIDTest``. Tightened tenfold, which costs about what the
+default does at the stock tolerance, it is the more accurate on 11 of the 15
+configs whose references converged. The four it loses -- ``Nonlin2``,
+``nonlin``, ``PIDTest`` and ``ld``'s ``q`` -- are where its error stops
+following the tolerance: tightening ``Nonlin2`` tenfold takes it from 9.0e-5 to
+8.2e-5 with this on, against 7.6 times better with it off. (``MatTest`` and
+``MatTestAlpha`` are left out: a run a thousand times tighter is not converged
+there.)
+
+**What it costs a restart.** A restart reads ``sigma`` and ``q`` back from the
+file and resumes from them, so their accuracy is the restarted run's starting
+point. Split at half time and resumed, against the uninterrupted run, the plain
+diffusion cases come out worse with it on -- ``LinearDiffusion``'s ``q`` from
+3.2e-5 to 3.2e-3, ``Nonlin2``'s ``u`` from 3.4e-8 to 1.1e-6, ``nonlin``'s
+``sigma`` from 2.7e-3 to 2.0e-2 -- while ``AuxVarTest``, ``AuxVarADTest`` and both
+theta pinches are as faithful either way.
+
+**Why a field turns it on.** With the algebraic unknowns in the error test,
+IDA's order selection on the coupled theta pinch either holds order 2 for 120 to
+200 steps early in the transient or climbs to order 5, and round-off decides
+which: on the manufactured theta pinch at ``k = 3`` on 8 cells and ``rtol``
+1e-9, a run takes anywhere from 149 to 290 steps as the tolerance moves by
+:math:`\pm 8\%`, under either ``FieldSolve``, and 564 on one CI runner. With it
+on, every one of those runs takes 99 to 101 steps, and the two field solves
+agree to ten digits. Its time error there is about five times the default's --
+``N`` 4e-10 to 8e-10 against 2e-11 to 3e-10 -- and both are a millionth of the
+spatial error, 7.6e-5. The field's own quantities follow ``u``: ``psi``, ``V'``,
+``B`` and the pressure are within a factor of three of the default's error on
+both theta-pinch configs. A step count that round-off can triple is worse than a
+time error nobody can see.
+
+**What it buys without a field.** Any problem whose flux grows steeply -- a
+degenerate diffusivity, a critical-gradient model near its kink -- puts a large
+``sigma`` into an error test that no reduction in step size can satisfy, because
+the offending component is algebraic. The signature is an ``IDA_ERR_FAIL`` (-3)
+whose ``dsm`` in the SUNDIALS log is *identical* as ``h`` shrinks, with the
+Newton converging each time. Setting this key is the direct fix.
+
+So it is the right key for a hard solve whose output is ``u``, and the wrong
+one, without a field, if you intend to restart from the result or want the
+error to follow the tolerance on a nonlinear flux.
+``python-examples/shestakov-nonlinear`` is a problem that cannot be integrated
+at all without it -- though that turns out to depend on the initial condition
+rather than on the formulation, which is worth knowing before reaching for this
+key. A start whose flux is badly scaled needs it; the same problem from a
+physically scaled start does not. That example's ``ANALYSIS.md`` measures both.
 
 .. _the-run-lifecycle:
 

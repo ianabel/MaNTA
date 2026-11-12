@@ -1,9 +1,8 @@
 // Pseudo-transient continuation to a steady state.
 //
-// The solver's usual route to a steady state is to integrate until dY/dt is
-// small: TerminateOnSteadyState is a stopping test on the time loop in
-// Solver.cpp, and IDA sizes every step from a local error estimate on a
-// transient nobody wants. Measured on the three benchmarks under
+// The solver's original route to a steady state is to integrate until an
+// output time passes the steady test (timeMarchIsSteady, below), and IDA sizes
+// every step from a local error estimate on a transient nobody wants. Measured on the three benchmarks under
 // python-examples/, that costs 113-375 evaluations of the physics per point,
 // where the schemes in refs/ reach the same state in 10-15.
 //
@@ -137,9 +136,16 @@ namespace
 
 } // namespace
 
+// Masked only when SuppressAlgebraicError was set, never by the default a field
+// brings. This is a Newton test, and masking it stops the iteration on u's
+// correction alone; IDASetSuppressAlg leaves IDA's Newton test whole and masks
+// only the truncation-error test, which is why the field default can apply
+// there and not here. Measured: a tier-0 theta pinch -- Newton linear, no
+// coupling in its Jacobian -- solved to steady state under Newton lands 3.2e-8
+// from the coupled answer with the test masked, against 3.6e-10 unmasked.
 double SystemSolver::errorWeightedNorm(N_Vector v, N_Vector ewt) const
 {
-    return suppressAlgebraicError ? N_VWrmsNormMask(v, ewt, id) : N_VWrmsNorm(v, ewt);
+    return suppressAlgebraicError.value_or(false) ? N_VWrmsNormMask(v, ewt, id) : N_VWrmsNorm(v, ewt);
 }
 
 void SystemSolver::allocateNewtonStepScratch()
@@ -464,26 +470,31 @@ void SystemSolver::estimateObjectiveError(N_Vector correction)
     DGSoln correctionMap(nVars, grid, k, N_VGetArrayPointer(correction), nScalars, nAux, nField);
 
     nlsObjectivePrevTest = nlsObjectiveTest;
+    // At tier 1 the geometry's part of the correction, G' P correction, from
+    // the build the correction was solved with: one applyResponse.
+    const Vector correctionGeom = reducedCoupling() ? reducedResponse(correction) : Vector();
     nlsObjectiveError.resize(ng);
     nlsObjectiveTolerance.resize(ng);
     double worst = 0.0;
     for (Index g = 0; g < ng; ++g)
     {
-        // dG/dy has no trace or field block, so the cells contribute, and with
-        // global scalars the scalars' part of the correction through dG/dmu.
-        Vector Gmu;
+        // dG/dy has no trace block, so the cells contribute; with global scalars
+        // the scalars' part of the correction through dG/dmu, and with a field
+        // model the field's through dG/dpsi.
+        Vector Gmu, Gpsi, Ggeom;
         const std::vector<Vector> Gy =
-            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu);
+            assembleObjectiveGradient(*adjointProblem, g, state, t0, &Gmu, &Gpsi, &Ggeom);
         double change = 0.0;
         for (Index i = 0; i < static_cast<Index>(nCells); ++i)
             change += Gy[i].dot(Eigen::Map<const Vector>(d + i * cellDOF, cellDOF));
         if (nScalars > 0)
             change += Gmu.dot(correctionMap.Scalars());
+        if (nField > 0)
+            change += Gpsi.dot(Vector(correctionMap.getField()));
+        if (reducedCoupling())
+            change += Ggeom.dot(correctionGeom);
 
-        if (superconvergent)
-            postprocessor->computeUStar(state);
-        const double G = superconvergent ? adjointProblem->GFn(g, state, *postprocessor)
-                                         : adjointProblem->GFn(g, state);
+        const double G = objectiveValue(*adjointProblem, g, state, t0);
         nlsObjectiveError(g) = std::abs(change);
         nlsObjectiveTolerance(g) = objectiveAlgebraicTolerance(g, G);
         const double ratio = nlsObjectiveError(g) == 0.0
@@ -571,6 +582,11 @@ int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
 
 double SystemSolver::steadyCorrectionNorm()
 {
+    return steadyCorrectionNorm(t0);
+}
+
+double SystemSolver::steadyCorrectionNorm(Time t)
+{
     allocateNewtonStepScratch();
 
     // Restored on the way out, as estimateObjective does: alpha belongs to
@@ -580,12 +596,12 @@ double SystemSolver::steadyCorrectionNorm()
     N_Vector zeroDeriv = N_VClone(Y);
     N_VConst(0.0, zeroDeriv);
 
-    setJacTime(t0);
+    setJacTime(t);
     setAlpha(0.0);
     setJacEvalY(Y, zeroDeriv);
-    updateBoundaryConditions(t0);
+    updateBoundaryConditions(t);
     updateMatricesForJacSolve();
-    residual(t0, Y, zeroDeriv, nlsTmp);
+    residual(t, Y, zeroDeriv, nlsTmp);
     solveJacEq(nlsTmp, nlsU);
     getErrorWeights(Y, nlsEwt);
     const double norm = errorWeightedNorm(nlsU, nlsEwt);
@@ -593,6 +609,36 @@ double SystemSolver::steadyCorrectionNorm()
     N_VDestroy(zeroDeriv);
     setAlpha(alphaOnEntry);
     return norm;
+}
+
+bool SystemSolver::timeMarchIsSteady(Time t)
+{
+    if (steadyTest == SteadyTest::Residual)
+    {
+        const double norm = steadyResidualNorm(t);
+        if (physics_debug)
+            std::println(" steady residual norm at t = {:g} is {:g}", t, norm);
+        return norm <= steady_state_tol;
+    }
+
+    // The build IDA last made, to put back afterwards. yJac and dydtJac own
+    // their memory, so this is the whole of what updateMatricesForJacSolve reads
+    // that the check below changes.
+    const size_t dof = yJac.getDoF();
+    const std::vector<double> yIDA(yJacMem, yJacMem + dof), dydtIDA(dydtJacMem, dydtJacMem + dof);
+    const double jtIDA = jt, alphaIDA = alpha;
+
+    const double norm = steadyCorrectionNorm(t);
+
+    std::copy(yIDA.begin(), yIDA.end(), yJacMem);
+    std::copy(dydtIDA.begin(), dydtIDA.end(), dydtJacMem);
+    setJacTime(jtIDA);
+    setAlpha(alphaIDA);
+    updateMatricesForJacSolve();
+
+    if (physics_debug)
+        std::println(" steady Newton correction at t = {:g} is {:g}", t, norm);
+    return norm <= steadyStepTol;
 }
 
 int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
@@ -792,6 +838,11 @@ void SystemSolver::residualWeights()
 
 double SystemSolver::steadyResidualNorm()
 {
+    return steadyResidualNorm(t0);
+}
+
+double SystemSolver::steadyResidualNorm(Time t)
+{
     if (!initialised)
         throw std::runtime_error("steadyResidualNorm called before initialize()");
 
@@ -800,7 +851,7 @@ double SystemSolver::steadyResidualNorm()
     // Zeroing ptcDYdt is what makes this the steady residual rather than the
     // damped one: no backward-Euler term, whatever ptcStep currently is.
     N_VConst(0.0, ptcDYdt);
-    residual(t0, Y, ptcDYdt, res);
+    residual(t, Y, ptcDYdt, res);
 
     // The same norm KINSOL forms from the same weights, which is what keeps the
     // inner and outer stopping tests measuring one quantity.

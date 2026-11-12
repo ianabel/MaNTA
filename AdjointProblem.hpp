@@ -57,6 +57,33 @@ public:
       total += pp.starWeights(cell).dot(g.segment(cell * nStar, nStar));
     return total;
   }
+  // G = sum_j w_j g(states_j) over states the solver has built, nPerCell
+  // nodes per cell and summed cell by cell. This is what a run reports when a
+  // field model is attached, because only the solver can fill the states'
+  // geometry rows; it is the same quadrature the two forms above use, on the
+  // same nodes, so it is the functional dg differentiates.
+  virtual Value GFnAtNodes(Index gIndex, GlobalState const &states,
+                           std::vector<Position> const &points, Vector const &weights,
+                           Index nPerCell) const {
+    const Values g = gFn(gIndex, states, points);
+    const Index nCells = static_cast<Index>(points.size()) / nPerCell;
+    Value total = 0.0;
+    for (Index cell = 0; cell < nCells; ++cell)
+      total += weights.segment(cell * nPerCell, nPerCell)
+                   .dot(g.segment(cell * nPerCell, nPerCell));
+    return total;
+  }
+
+  // dG/dp|explicit on states the solver has built, the derivative of
+  // GFnAtNodes: what a coupled run asks for, since only the solver can fill
+  // the states' geometry rows. The default ignores the states and takes the
+  // y-based form below -- right for a problem whose objective reads no
+  // geometry. One that may read it differentiates sum_j w_j g(states_j) here.
+  virtual Matrix dGFndpAtNodes(Index gIndex, GlobalState const &, std::vector<Position> const &,
+                               Vector const &, Index, DGSoln &y, Postprocessor const *pp) const {
+    return pp ? dGFndp(gIndex, y, *pp) : dGFndp(gIndex, y);
+  }
+
   virtual Value dGFndp(Index gIndex, Index pIndex, DGSoln &y) const = 0;
   virtual Matrix dGFndp(Index gIndex, DGSoln &y) const {
     Values out(np);
@@ -124,15 +151,30 @@ public:
   // respect to each global scalar, already integrated -- for g = mu u that is
   // int u dx, taken with the quadrature G is. It arrives zeroed, which is right
   // for an objective that does not read the scalars.
+  //
+  // With a field model attached, out also carries one row per geometry slot:
+  // dg/d(geometry) at each node, pointwise like the u, q, sigma and phi rows.
+  // The solver contracts it with the quadrature weights and the field model's
+  // dGeometry_dpsi into dG/dpsi, so a case reports a derivative of g and never
+  // of G. It arrives zeroed, which is right for an objective that reads no
+  // geometry.
   virtual void dg(Index gIndex, GlobalState &out, GlobalState const &states,
                   std::vector<Position> const &abscissae) {
+    const bool geometry = out.GeometryMatrix().rows() > 0;
     for (size_t j = 0; j < states.size(); ++j) {
       dgFn_du(gIndex, out.Variable(j), states[j], abscissae[j]);
       dgFn_dq(gIndex, out.Derivative(j), states[j], abscissae[j]);
       dgFn_dsigma(gIndex, out.Flux(j), states[j], abscissae[j]);
       dgFn_dphi(gIndex, out.Aux(j), states[j], abscissae[j]);
+      if (geometry)
+        dgFn_dgeom(gIndex, out.GeometryMatrix().col(static_cast<Index>(j)), states[j],
+                   abscissae[j]);
     }
   }
+
+  /// dg/d(geometry slot) at one point, for an objective that reads State::geom.
+  /// Arrives zeroed; an objective that reads no geometry leaves it so.
+  virtual void dgFn_dgeom(Index, VectorRef, const State &, Position) {}
   // For computing F_p
   virtual void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s,
                            Position x) = 0;
@@ -204,6 +246,26 @@ public:
         "The transport system has global scalars, so its adjoint problem must "
         "provide dScalarG_dp: the derivative of each scalar constraint with "
         "respect to the parameters (zeros if they do not enter it).");
+  }
+
+  // dR_f/dp for row f of an attached FieldModel's residual -- a coil current
+  // or a boundary flux that is both in the field constraint and in the
+  // parameter vector. Takes FieldResidual's arguments: psi and psi', the state
+  // on the k+1 basis nodes (carrying du/dt when the model's spec reads it), one
+  // quadrature weight per node. Shaped as dScalarG_dp: (np, 1), or
+  // (np, nPoints) with spatialParameters.
+  //
+  // The gradient gains -z_psi(f) times it, z_psi being the field block of the
+  // adjoint state. Unlike dScalarG_dp this has a default, an empty matrix,
+  // meaning the field rows do not read the parameters: a FieldModel has no
+  // notion of an adjoint parameter of its own, so a model that does read one
+  // is the exception, and the adjoint problem that knows it is the one place
+  // that can say so. field_adjoint_tests pins what an adjoint problem that
+  // leaves it out gets for such a parameter: zero.
+  virtual Matrix dFieldResidual_dp(Index f, Vector const &psi, Vector const &dpsidt,
+                                   GlobalState const &states, std::vector<Position> const &points,
+                                   Vector const &weights, Time t) {
+    return Matrix();
   }
 
   virtual std::string getName(Index pIndex) const {

@@ -10,6 +10,7 @@
 #include "AdjointProblem.hpp"
 #include "PhysicsCases.hpp"
 #include "PyAdjointProblem.hpp"
+#include "PyEquilibriumModel.hpp"
 #include "PyGrid.hpp"
 #include "PyIntegrator.hpp"
 #include "PyRunner.hpp"
@@ -323,16 +324,31 @@ PYBIND11_MODULE(_manta, m) {
       .value("Fixed", RegridPolicy::Fixed)
       .value("InPlace", RegridPolicy::InPlace);
 
+  // Where the coupled Jacobian's d(physics)/d(geometry) comes from:
+  // SystemSpec.hpp. None, the default, cannot be coupled and runs a field as a
+  // black box under FieldCoupling = "auto".
+  py::enum_<GeometryDerivatives>(m, "GeometryDerivatives")
+      .value("None_", GeometryDerivatives::None)
+      .value("Analytic", GeometryDerivatives::Analytic)
+      .value("Differenced", GeometryDerivatives::Differenced);
+
   py::class_<SystemSpec>(m, "SystemSpec")
       .def(py::init([](std::vector<FieldSpec> variables,
                        std::vector<ScalarSpec> scalars,
-                       std::vector<AuxSpec> aux, RegridPolicy regrid) {
-             return SystemSpec{std::move(variables), std::move(scalars),
-                               std::move(aux), regrid};
+                       std::vector<AuxSpec> aux, RegridPolicy regrid,
+                       bool readsGeometry, GeometryDerivatives geometryDerivatives) {
+             return SystemSpec{.variables = std::move(variables),
+                               .scalars = std::move(scalars),
+                               .aux = std::move(aux),
+                               .regrid = regrid,
+                               .readsGeometry = readsGeometry,
+                               .geometryDerivatives = geometryDerivatives};
            }),
            py::arg("variables"), py::arg("scalars") = std::vector<ScalarSpec>{},
            py::arg("aux") = std::vector<AuxSpec>{},
-           py::arg("regrid") = RegridPolicy::Fixed)
+           py::arg("regrid") = RegridPolicy::Fixed,
+           py::arg("readsGeometry") = false,
+           py::arg("geometryDerivatives") = GeometryDerivatives::None)
       .def_readwrite("variables", &SystemSpec::variables)
       .def_readwrite("scalars", &SystemSpec::scalars)
       .def_readwrite("aux", &SystemSpec::aux)
@@ -340,6 +356,11 @@ PYBIND11_MODULE(_manta, m) {
                      "InPlace when the case follows a changed evaluation plan -- a "
                      "new mesh or degree -- through prepareEvaluation. Fixed, the "
                      "default, lets it be evaluated by its first plan only.")
+      .def_readwrite("readsGeometry", &SystemSpec::readsGeometry,
+                     "Whether the flux, sources or aux rows read State.geom -- the "
+                     "only channel from a field into the physics. A field model is "
+                     "refused for a case without it.")
+      .def_readwrite("geometryDerivatives", &SystemSpec::geometryDerivatives)
       .def("validate", &SystemSpec::validate);
 
   // Before TransportSystem, and in this order, because prepareEvaluation()
@@ -515,6 +536,12 @@ PYBIND11_MODULE(_manta, m) {
       .def("dAuxG_dt", &TransportSystem::dAuxG_dt)
       .def("dLowerBoundary_dt", &TransportSystem::dLowerBoundary_dt)
       .def("dUpperBoundary_dt", &TransportSystem::dUpperBoundary_dt)
+      // The batched derivative hooks fill a GlobalState out-parameter that
+      // crosses as a dict copy, so a Python caller never sees what they write.
+      // They stay bound as *drivers*: calling one runs the C++ loop over the
+      // pointwise hook, which is how test_jax_aux.py reaches AuxGPrime per
+      // point. A case overrides them under these names (batched_hook_names in
+      // PyTransportSystem.hpp).
       .def("dSigma", &TransportSystem::dSigma)
       .def("dSources", &TransportSystem::dSources)
       .def("InitialValue", &TransportSystem::InitialValue)
@@ -582,14 +609,18 @@ PYBIND11_MODULE(_manta, m) {
       .def("dgFndp", &AdjointProblem::dgFndp)
       .def("dgFn_dphi", &AdjointProblem::dgFn_dphi)
       .def("dg", &AdjointProblem::dg)
-      // Not exposed, for the same reason as ScalarGPrime: its output parameter
-      // is an array of GlobalStateMatrix references, which has no Python type,
-      // so the bound base method was never callable from Python. A vectorised
-      // subclass *overrides* it and the trampoline reaches the override
-      // directly; binding it only put an unresolvable name in the stub.
-      .def("dSigma", &AdjointProblem::dSigma)
-      .def("dSources", &AdjointProblem::dSources)
-      .def("dAux", &AdjointProblem::dAux)
+      // Not exposed: ComputePhysicsDerivatives, dSigma, dSources and dAux. The
+      // first takes an array of GlobalStateMatrix references, which has no
+      // Python type, as ScalarGPrime does. The other three take a GlobalState
+      // out-parameter, which crosses as a dict *copy*: the bound base wrote into
+      // it and the caller never saw a value. All four are reached the other
+      // way, from C++ into a subclass's override through the trampoline, and
+      // that needs no binding. Binding the last three also made
+      // `adjoint.dAux(i, states, x)` look like the solver's entry point when
+      // it is not -- on a JAXAdjointProblem it is the decorated method, which
+      // expects a converted State, and the trampoline hands an override the raw
+      // dict; the solver reaches neither through it, only through
+      // ComputePhysicsDerivatives.
       .def("dAux_dp", &AdjointProblem::dAux_dp)
       .def("dScalarG_dp", &AdjointProblem::dScalarG_dp)
       .def("computeUpperBoundarySensitivity",
@@ -669,6 +700,56 @@ PYBIND11_MODULE(_manta, m) {
       "Test support only: builds a State carrying the given geometry and calls "
       "the pointwise dSigmaFn_dGeometry dispatcher directly.");
 
+  // An equilibrium model written in Python: tiers 0 and 1 of the field
+  // coupling. manta.EquilibriumModel (python/manta/__init__.py) builds the spec
+  // from class attributes, as manta.TransportSystem does.
+  py::class_<FieldSlot>(m, "GeometrySlot",
+                        "One geometry slot an equilibrium model supplies: the only channel from "
+                        "the field into the transport physics, read there as State.geom.")
+      .def(py::init([](std::string name, std::string description, std::string units) {
+             return FieldSlot{std::move(name), std::move(description), std::move(units)};
+           }),
+           py::arg("name"), py::arg("description") = "", py::arg("units") = "")
+      .def_readwrite("name", &FieldSlot::name)
+      .def_readwrite("description", &FieldSlot::description)
+      .def_readwrite("units", &FieldSlot::units)
+      .def("__repr__", [](FieldSlot const &f) { return "GeometrySlot('" + f.name + "')"; });
+
+  py::native_enum<EquilibriumResponse>(m, "EquilibriumResponse", "enum.Enum",
+                                       "Where an equilibrium model's response dg = G'(p) dp comes from: "
+                                       "Differenced, a forward difference of Solve (the default); Model, "
+                                       "the model's own applyResponse and applyResponseTranspose.")
+      .value("Differenced", EquilibriumResponse::Differenced)
+      .value("Model", EquilibriumResponse::Model)
+      .finalize();
+
+  py::class_<EquilibriumSpec>(m, "EquilibriumSpec")
+      .def(py::init([](std::vector<FieldSlot> geometry, std::string label, std::string name,
+                       EquilibriumResponse response) {
+             EquilibriumSpec spec{std::move(geometry), std::move(label), std::move(name), response};
+             spec.validate();
+             return spec;
+           }),
+           py::arg("geometry"), py::arg("label"), py::arg("name") = "Field",
+           py::arg("response") = EquilibriumResponse::Differenced)
+      .def_readonly("geometry", &EquilibriumSpec::geometry)
+      .def_readonly("label", &EquilibriumSpec::label)
+      .def_readonly("name", &EquilibriumSpec::name)
+      .def_readonly("response", &EquilibriumSpec::response);
+
+  py::class_<EquilibriumModel, PyEquilibriumModel, py::smart_holder>(m, "EquilibriumModel")
+      .def(py::init<EquilibriumSpec>(), py::arg("spec"))
+      .def_property_readonly("spec", &EquilibriumModel::getSpec)
+      .def_property_readonly("nGeometry", &EquilibriumModel::nGeometry)
+      .def("responseStep", &EquilibriumModel::responseStep)
+      .def("setTolerances", &EquilibriumModel::setTolerances, py::arg("relative"), py::arg("absolute"))
+      .def("resetForRun", &EquilibriumModel::resetForRun);
+
+  m.def("registerEquilibriumModel", &EquilibriumModels::RegisterEquilibriumModel, py::arg("name"),
+        py::arg("factory"),
+        "Register an equilibrium model under the name a config file's EquilibriumModel key, or a "
+        "Runner.configure dict's, can ask for. factory(config, grid) builds it.");
+
   m.def("physics_cases", &PhysicsCases::RegisteredNames,
         "Every physics case name manta.Runner(name) will accept, ascending. "
         "Includes the C++ cases compiled into this extension, anything a "
@@ -718,7 +799,10 @@ PYBIND11_MODULE(_manta, m) {
       "SolverFailed: KINSol failed in a way pseudo-transient damping cannot answer.\n"
       "Stalled: SteadyStateTest = Objective only. The Newton correction reached "
       "round-off with an objective's estimated error still above its tolerance; "
-      "the state is as converged as the solve can make it.\n\n"
+      "the state is as converged as the solve can make it.\n"
+      "Refined: a sliced solve under DegreeAdaptation converged a level and raised "
+      "the degree. Not a failure, and not the end: continue_steady() solves the "
+      "next level, starting from this one's answer.\n\n"
       "An IntEnum, so a traced outcome compares with the members under jit: "
       "jnp.equal(outcome, SteadyOutcome.Converged).")
       .value("NotRun", SystemSolver::SteadyOutcome::NotRun,
@@ -736,6 +820,10 @@ PYBIND11_MODULE(_manta, m) {
              "with an objective's estimated error still above its tolerance. The state "
              "is as converged as the solve can make it; an objective near zero needs "
              "ObjectiveAbsoluteTolerance.")
+      .value("Refined", SystemSolver::SteadyOutcome::Refined,
+             "A sliced solve under DegreeAdaptation converged a level and raised the "
+             "degree. Not the end: continue_steady() solves the next level from this "
+             "one's answer.")
       .finalize();
 
   py::class_<PyRunner, py::smart_holder>(m, "Runner")
@@ -749,6 +837,10 @@ PYBIND11_MODULE(_manta, m) {
                              "built from, or \"\" when it was handed a "
                              "transport system object.")
       .def("configure", &PyRunner::configure)
+      .def("set_equilibrium_model", &PyRunner::setEquilibriumModel, py::arg("model"),
+           "Take the run's geometry from this EquilibriumModel object at the next "
+           "configure(), in place of one the dict names. None clears it.")
+      .def_property_readonly("equilibrium_model", &PyRunner::getEquilibriumModel)
       // Two overloads: run(tFinal) is the usual way in, run() uses the
       // configuration's t_final -- the same key a config file must carry.
       .def("run", static_cast<void (PyRunner::*)(double)>(&PyRunner::run))

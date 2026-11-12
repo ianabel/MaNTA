@@ -86,6 +86,13 @@ public:
                                        weights, nNodes);
   }
 
+  // On the solver's own states, which carry geometry on a coupled run.
+  Matrix dGFndpAtNodes(Index gIndex, GlobalState const &states,
+                       std::vector<Position> const &points, Vector const &weights,
+                       Index nPerCell, DGSoln &, Postprocessor const *) const override {
+    return explicitParameterDerivative(gIndex, states, points, weights, nPerCell);
+  }
+
   // At the star nodes, with u* and the star basis's weights b1: the derivative
   // of AdjointProblem::GFn's superconvergent form. Reads the u* from the last
   // pp.computeUStar(y).
@@ -159,7 +166,14 @@ public:
       // time); return;
     }
 
-    out = _override(gIndex, states, abscissae).cast<GlobalState>();
+    GlobalState result = _override(gIndex, states, abscissae).cast<GlobalState>();
+    // On a coupled run `out` carries one geometry row per slot, zeroed. An
+    // objective that reads no geometry returns none -- the caster leaves the
+    // block empty -- and assigning that over `out` would drop the rows rather
+    // than leave them zero. A dict with "Geometry" is dg/d(geometry) per node.
+    if (result.GeometryMatrix().rows() == 0)
+      result.GeometryMatrix() = out.GeometryMatrix();
+    out = result;
   };
 
   void ComputePhysicsDerivatives(

@@ -70,7 +70,7 @@ Value AutodiffTransportSystem::Sources(Index i, const State &s, Position x, Time
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -121,7 +121,7 @@ void AutodiffTransportSystem::dSources_du(Index i, VectorRef grad, const State &
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -138,7 +138,7 @@ void AutodiffTransportSystem::dSources_dq(Index i, VectorRef grad, const State &
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -155,7 +155,7 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, VectorRef grad, const Sta
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -166,13 +166,16 @@ void AutodiffTransportSystem::dSources_dsigma(Index i, VectorRef grad, const Sta
 	gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector ScalarD, RealVector geomD, RealVector udotD, Position X, Time T)
 			 { return this->Source(i, uD, qD, sD, phiD, ScalarD, geomD, udotD, X, T); },
 			 wrt(sigma), at(u, q, sigma, phi, Scalar, geom, udot, x, t), uout, grad);
+
+	// d/d(sigma_hat) above; the Jacobian's column is the stored sigma = -sigma_hat.
+	grad = -grad;
 }
 
 void AutodiffTransportSystem::dSources_dPhi(Index i, VectorRef grad, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -189,7 +192,7 @@ void AutodiffTransportSystem::dSources_dScalars(Index i, VectorRef grad, const S
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -206,7 +209,7 @@ void AutodiffTransportSystem::dSources_dGeometry(Index i, VectorRef grad, const 
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -228,7 +231,7 @@ void AutodiffTransportSystem::dSources_dudot(Index i, VectorRef grad, const Stat
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -277,7 +280,7 @@ void AutodiffTransportSystem::dSources_dp(Index i, Index pIndex, Value &grad, co
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector Scalar(s.scalars());
 	RealVector geom(s.geom());
@@ -306,7 +309,7 @@ void AutodiffTransportSystem::dAuxG_dp(Index i, Index pIndex, Value &grad, const
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector geom(s.geom());
 
@@ -327,7 +330,7 @@ Value AutodiffTransportSystem::AuxG(Index i, const State &s, Position x, Time t)
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector geom(s.geom());
 
@@ -338,7 +341,7 @@ void AutodiffTransportSystem::AuxGPrime(Index i, State &out, const State &s, Pos
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector geom(s.geom());
 
@@ -352,6 +355,8 @@ void AutodiffTransportSystem::AuxGPrime(Index i, State &out, const State &s, Pos
 
 	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
 					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(sigma), at(u, q, sigma, phi, geom, x, t), uout, out.sigma());
+	// As in dSources_dsigma: d/d(stored sigma) = -d/d(sigma_hat).
+	out.sigma() = -out.sigma();
 
 	autodiff::gradient([this, i](RealVector uD, RealVector qD, RealVector sD, RealVector phiD, RealVector geomD, Position X, Time T)
 					   { return this->GFunc(i, uD, qD, sD, phiD, geomD, X, T); }, wrt(phi), at(u, q, sigma, phi, geom, x, t), uout, out.phi());
@@ -361,7 +366,7 @@ void AutodiffTransportSystem::dAuxG_dGeometry(Index i, VectorRef grad, const Sta
 {
 	RealVector u(s.u());
 	RealVector q(s.q());
-	RealVector sigma(s.sigma());
+	RealVector sigma = physicalFlux(s);
 	RealVector phi(s.phi());
 	RealVector geom(s.geom());
 
@@ -499,83 +504,77 @@ Real2nd AutodiffTransportSystem::MMS_Solution(Index i, Real2nd x, Real2nd t)
 	return S;
 }
 
-// TODO(manufactured coupled sources): the direct Flux(...)/Source(...) calls
-// below (building `sigma`/`dSigma_dx`/`S`) go through the geometry-blind
-// overloads, not the geometry-aware ones dSigmaFn_du/dq above already use via
-// `s.geom()` -- so this function is internally inconsistent about which overload
-// it evaluates. Harmless today because `s` here is a bare State(nVars,
-// nScalars) with no geometry rows (ngeom = 0 by default) and no case yet gives
-// the two Flux/Source overloads different content, so both paths agree. It will
-// stop agreeing the moment a geometry-dependent case tries useMMS: the
-// manufactured source would then be built against a flux that ignores geometry
-// while the solver's actual residual uses one that does not, which is exactly
-// the "manufactured source differentiated with the wrong function" trap this
-// file's own header comment warns about for the sign convention -- same shape,
-// different cause.
-//
-// The two markers this sat beside -- on dSigmaFn_dp and dSources_dp -- are gone,
-// fixed with the adjoint transposes, because those two feed F_p and so were an
-// adjoint defect. This one is not, and it is not a two-line fix either: MMS_Source
-// is handed (i, x, t) and nothing else, so there is no psi to evaluate geometry
-// at. AutodiffTransportSystem holds no field model and has no way to reach the
-// solver's. Threading one in is a change to the manufactured-solution facility,
-// which is what the coupled order study owns.
+// See the declaration. Everything is evaluated through the overloads the solver
+// evaluates: a geometry-dependent case is forced to give the geometry-blind Flux
+// some body to compile, and a source differentiated from that stand-in converges
+// at the right rate to the wrong function.
 Value AutodiffTransportSystem::MMS_Source(Index i, Position x, Time t)
 {
+	if (nScalars > 0)
+		throw std::logic_error("MMS_Source cannot evaluate Source for a case with global scalars: "
+							   "there is no manufactured value for them.");
+
 	Real2nd xval = x;
 	Real2nd tval = t;
 
-	State s(nVars, nScalars);
+	RealVector u(nVars), q(nVars), udot(nVars);
 	Values d2udx2(nVars);
-	RealVector sigma(nVars);
-
 	for (Index j = 0; j < nVars; ++j)
 	{
-		auto [uval, qval, d2udx2val] = derivatives([this, j](Real2nd x, Real2nd t)
-												   { return this->MMS_Solution(j, x, t); }, wrt(xval, xval), at(xval, tval));
-
-		s.u(j) = uval;
-		s.q(j) = qval;
+		auto solution = [this, j](Real2nd X, Real2nd T) -> Real2nd
+		{ return this->MMS_Solution(j, X, T); };
+		auto [uval, qval, d2udx2val] = derivatives(solution, wrt(xval, xval), at(xval, tval));
+		u(j) = uval;
+		q(j) = qval;
 		d2udx2(j) = d2udx2val;
+		udot(j) = derivative(solution, wrt(tval), at(xval, tval));
 	}
 
-	Values gradu(nVars);
-	Values gradq(nVars);
-
-	dSigmaFn_du(i, gradu, s, x, t);
-	dSigmaFn_dq(i, gradq, s, x, t);
-
-	RealVector u(s.u());
-	RealVector q(s.q());
-
-	Real xreal = x;
-
-	double dSdx = derivative([this, i](RealVector uD, RealVector qD, Real X, Time T)
-							 { return this->Flux(i, uD, qD, X, T); },
-							 wrt(xreal), at(u, q, xreal, t));
-
-	double dSigma_dx = dSdx;
-
-	for (Index j = 0; j < nVars; ++j)
+	const Index nGeom = static_cast<Index>(MMS_Geometry(xval, tval).size());
+	if (nGeom == 0 && spec().readsGeometry)
+		throw std::logic_error("This case declares readsGeometry, so MMS_Source needs the geometry of its "
+							   "manufactured solution: override MMS_Geometry.");
+	RealVector geom(nGeom);
+	Values dgeom_dx(nGeom);
+	for (Index g = 0; g < nGeom; ++g)
 	{
-		sigma(j) = Flux(i, u, q, xreal, t);
-		dSigma_dx += s.q(j) * gradu[j] + d2udx2[j] * gradq[j];
+		auto slot = [this, g](Real2nd X, Real2nd T) -> Real2nd
+		{ return this->MMS_Geometry(X, T)(g); };
+		const auto dg = derivatives(slot, wrt(xval), at(xval, tval));
+		geom(g) = dg[0];
+		dgeom_dx(g) = dg[1];
 	}
+
+	// d/dx of sigma_hat_i along the solution, by the chain rule.
+	Real xreal = x;
+	auto flux = [this, i, t](RealVector uD, RealVector qD, RealVector geomD, Real X) -> Real
+	{ return this->Flux(i, uD, qD, geomD, X, t); };
+
+	Real F;
+	Vector dF_du(nVars), dF_dq(nVars), dF_dgeom(nGeom);
+	gradient(flux, wrt(u), at(u, q, geom, xreal), F, dF_du);
+	gradient(flux, wrt(q), at(u, q, geom, xreal), F, dF_dq);
+	if (nGeom > 0)
+		gradient(flux, wrt(geom), at(u, q, geom, xreal), F, dF_dgeom);
+	const double dF_dx = derivative(flux, wrt(xreal), at(u, q, geom, xreal));
+
+	double dSigma_dx = dF_dx + dF_dgeom.dot(dgeom_dx);
+	for (Index j = 0; j < nVars; ++j)
+		dSigma_dx += dF_du(j) * q(j).val + dF_dq(j) * d2udx2(j);
+
+	// Source sees each variable's own flux in its slot of sigma.
+	RealVector sigma(nVars);
+	for (Index j = 0; j < nVars; ++j)
+		sigma(j) = Flux(j, u, q, geom, xreal, t);
 
 	RealVector phi(nAux);
-
 	for (Index j = 0; j < nAux; ++j)
-	{
 		phi(j) = InitialAuxValue(j, x, t);
-	}
-	double dudt = derivative([this, i](Real2nd x, Real2nd t)
-							 { return this->MMS_Solution(i, x, t); }, wrt(tval), at(xval, tval));
 
-	double S = Source(i, u, q, sigma, phi, xreal, t).val;
+	const RealVector scalars(0);
+	const double S = Source(i, u, q, sigma, phi, scalars, geom, udot, xreal, t).val;
 
-	double MMS = dudt - dSigma_dx - S;
-
-	return MMS;
+	return aFn(i, x) * udot(i).val - dSigma_dx - S;
 }
 
 // The t0 slice of each diagnostic is the same function of the state as every
@@ -596,6 +595,7 @@ void AutodiffTransportSystem::initialiseDiagnostics(NetCDFIO &nc)
 				nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-",
 							   [this, i, &initial](double x)
 							   {  State s = initial.y->eval(x);
+								  fillGeometry(s, *initial.y, x, initial.t);
 								  return this->AuxG(i, s, x, initial.t); });
 			else
 				nc.AddVariable("AuxG", "Aux" + std::to_string(i), "Auxiliary function", "-", [this, i](double x)
@@ -638,6 +638,7 @@ void AutodiffTransportSystem::writeDiagnostics(DGSoln const &y, DGSoln const &dy
 		for (Index i = 0; i < nAux; ++i)
 			nc.AppendToGroup("AuxG", tIndex, "Aux" + std::to_string(i), [this, i, &y, &t](double x)
 							 {  State s = y.eval(x);
+								fillGeometry(s, y, x, t);
 								return this->AuxG(i, s, x, t); });
 	}
 

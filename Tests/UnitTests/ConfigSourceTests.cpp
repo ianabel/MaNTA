@@ -85,9 +85,9 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     BOOST_TEST(c.PolynomialDegree == 2u);
     BOOST_TEST(c.GridSize == 8);
     BOOST_TEST(c.tau == 1.0);
-    BOOST_TEST(c.Relative_tolerance == 1e-3);
-    BOOST_REQUIRE(c.Absolute_tolerance.size() == 1u);
-    BOOST_TEST(c.Absolute_tolerance[0] == 1e-3);
+    BOOST_TEST(c.RelativeTolerance == 1e-3);
+    BOOST_REQUIRE(c.AbsoluteTolerance.size() == 1u);
+    BOOST_TEST(c.AbsoluteTolerance[0] == 1e-3);
     BOOST_TEST(c.MinStepSize == 1e-7);
     BOOST_TEST(c.OutputPoints == 301);
     BOOST_TEST(c.WriteOutput);
@@ -98,7 +98,9 @@ BOOST_AUTO_TEST_CASE(a_minimal_config_loads_with_every_default_applied)
     const bool superconvergentAbsent = !c.Superconvergent.has_value();
     BOOST_TEST(superconvergentAbsent);
     BOOST_TEST(!c.AggressiveTimesteps);
-    BOOST_TEST(!c.SuppressAlgebraicError);
+    // Absent too, so that the solver can decide by whether a field is attached.
+    const bool suppressAbsent = !c.SuppressAlgebraicError.has_value();
+    BOOST_TEST(suppressAbsent);
     // Off by default: a steady solve and a restart skip IDACalcIC, and this is
     // what puts it back. See setForceConsistentIC.
     BOOST_TEST(!c.ForceConsistentIC);
@@ -127,14 +129,25 @@ BOOST_AUTO_TEST_CASE(absolute_tolerance_defaults_to_1e_3)
     // tree set it explicitly, so the TOML default was unreachable in practice
     // and 1e-3 -- the Python value -- wins.
     auto c = load(minimal);
-    BOOST_REQUIRE(c.Absolute_tolerance.size() == 1u);
-    BOOST_TEST(c.Absolute_tolerance[0] == 1e-3);
+    BOOST_REQUIRE(c.AbsoluteTolerance.size() == 1u);
+    BOOST_TEST(c.AbsoluteTolerance[0] == 1e-3);
 }
 
 BOOST_AUTO_TEST_CASE(absolute_tolerance_accepts_a_scalar_or_an_array)
 {
-    BOOST_TEST(load(minimal + "Absolute_tolerance = 1e-5\n").Absolute_tolerance.size() == 1u);
-    BOOST_TEST(load(minimal + "Absolute_tolerance = [1e-5, 1e-6]\n").Absolute_tolerance.size() == 2u);
+    BOOST_TEST(load(minimal + "AbsoluteTolerance = 1e-5\n").AbsoluteTolerance == std::vector<double>{1e-5},
+               boost::test_tools::per_element());
+    BOOST_TEST(load(minimal + "AbsoluteTolerance = [1e-5, 1e-6]\n").AbsoluteTolerance ==
+                   (std::vector<double>{1e-5, 1e-6}),
+               boost::test_tools::per_element());
+    // The old spelling is an alias: every config written before the rename
+    // reads the same.
+    BOOST_TEST(load(minimal + "Absolute_tolerance = [1e-5, 1e-6]\n").AbsoluteTolerance ==
+                   (std::vector<double>{1e-5, 1e-6}),
+               boost::test_tools::per_element());
+    // RelativeTolerance was renamed with it, and keeps its old spelling too.
+    BOOST_TEST(load(minimal + "RelativeTolerance = 1e-5\n").RelativeTolerance == 1e-5);
+    BOOST_TEST(load(minimal + "Relative_tolerance = 1e-5\n").RelativeTolerance == 1e-5);
 }
 
 BOOST_AUTO_TEST_CASE(an_integer_is_accepted_where_a_number_is_wanted)
@@ -258,11 +271,10 @@ BOOST_AUTO_TEST_CASE(a_problem_selection_key_is_fine_for_the_toml_reader)
     BOOST_TEST(load(minimal).TransportSystem == "LinearDiffusion");
 }
 
-BOOST_AUTO_TEST_CASE(the_field_model_key_is_problem_selection_too)
+BOOST_AUTO_TEST_CASE(the_field_model_key_is_read_by_both_surfaces)
 {
-    // Same treatment as TransportSystem: a config file names a registered model
-    // and runManta instantiates it; a dict has no equivalent and must be told
-    // so rather than have the key quietly ignored.
+    // Both surfaces name a registered model: runManta instantiates it from the
+    // config file, PyRunner from the dict, through geometrySourceFromConfig.
     BOOST_TEST(load(minimal).FieldModel == "");
     BOOST_TEST(load(minimal + "FieldModel = \"SomeModel\"\n").FieldModel == "SomeModel");
 
@@ -273,8 +285,217 @@ BOOST_AUTO_TEST_CASE(the_field_model_key_is_problem_selection_too)
         {"OutputFilename", std::string("out")},
         {"FieldModel", std::string("SomeModel")},
     };
-    BOOST_CHECK_THROW(loadSolverConfig(src, ConfigSchema::Reader::Dict),
-                      std::invalid_argument);
+    BOOST_TEST(loadSolverConfig(src, ConfigSchema::Reader::Dict).FieldModel == "SomeModel");
+}
+
+// FieldCoupling, resolved against what the case and the model supply. The table
+// is the policy docs/field_coupling.rst states: coupled wherever the case has
+// geometry derivatives, except a steady solve of a case whose derivatives are
+// differenced; consistent without them; and coupled whatever
+// the derivatives cost when the run needs it -- a field with dynamics, or an
+// adjoint.
+BOOST_AUTO_TEST_CASE(field_coupling_auto_takes_what_the_case_and_the_run_allow)
+{
+    using M = FieldCouplingMode;
+    using D = GeometryDerivatives;
+    auto spec = [](D d)
+    {
+        return SystemSpec{.variables = {{"u", "", ""}}, .readsGeometry = true, .geometryDerivatives = d};
+    };
+    const std::string steady = "SteadyStateTolerance = 1e-6\n";
+
+    BOOST_TEST(load(minimal).FieldCoupling == "auto");
+
+    struct Row
+    {
+        std::string extra;
+        D derivatives;
+        bool dynamics;
+        M want;
+    };
+    for (Row const &r : {
+             Row{"", D::Analytic, false, M::Coupled},
+             Row{"", D::Differenced, false, M::Coupled},
+             Row{"", D::None, false, M::Consistent},
+             Row{steady, D::Analytic, false, M::Coupled},
+             Row{steady, D::Differenced, false, M::Consistent},
+             Row{steady, D::None, false, M::Consistent},
+             Row{"SteadyStateSolve = true\n", D::Differenced, false, M::Consistent},
+             Row{steady + "SteadyStateSolver = \"Newton\"\n", D::Differenced, false, M::Consistent},
+             Row{steady + "SteadyStateSolver = \"Newton\"\n", D::Analytic, false, M::Coupled},
+             Row{steady + "SteadyStateSolver = \"TimeMarch\"\n", D::Differenced, false, M::Coupled},
+             Row{steady + "solveAdjoint = true\n", D::Differenced, false, M::Coupled},
+             Row{steady, D::Differenced, true, M::Coupled},
+             Row{"FieldCoupling = \"consistent\"\n", D::Analytic, false, M::Consistent},
+             Row{"FieldCoupling = \"coupled\"\n" + steady, D::Differenced, false, M::Coupled},
+             Row{"FieldCoupling = \"reduced\"\n", D::Analytic, false, M::Reduced},
+             Row{"FieldCoupling = \"reduced\"\n" + steady, D::Differenced, false, M::Reduced},
+         })
+    {
+        CapturedOutput quiet;
+        const M got = chooseFieldCoupling(load(minimal + r.extra), spec(r.derivatives), r.dynamics);
+        BOOST_TEST((got == r.want), "[" << r.extra << "] derivatives " << static_cast<int>(r.derivatives)
+                                         << ", dynamics " << r.dynamics);
+    }
+
+    // What the run needs and the case cannot supply is refused, naming why.
+    auto refusal = [&](std::string const &extra, bool dynamics)
+    {
+        try
+        {
+            chooseFieldCoupling(load(minimal + extra), spec(D::None), dynamics);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    BOOST_TEST(refusal("", true).find("dynamics") != std::string::npos, refusal("", true));
+    BOOST_TEST(refusal("solveAdjoint = true\n", false).find("adjoint") != std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"coupled\"\n", false).find("geometryDerivatives = None") !=
+               std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"reduced\"\n", false).find("geometryDerivatives = None") !=
+               std::string::npos);
+
+    // The reduced mode is a field that is a function of the transport state:
+    // one with dynamics is refused, by name, whatever the case's derivatives.
+    auto reducedRefusal = [&](std::string const &extra, bool dynamics)
+    {
+        try
+        {
+            chooseFieldCoupling(load(minimal + "FieldCoupling = \"reduced\"\n" + extra), spec(D::Analytic),
+                                dynamics);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    BOOST_TEST(reducedRefusal("", true).find("dynamics") != std::string::npos);
+    // It has an adjoint, through the transposed response, so asking for one
+    // is accepted -- but "auto" with an adjoint still couples the field model,
+    // whose adjoint needs no assembled response.
+    BOOST_TEST(reducedRefusal("solveAdjoint = true\n", false).empty());
+    BOOST_TEST(reducedRefusal(steady + "SteadyStateTest = \"Objective\"\n", false).empty());
+    {
+        CapturedOutput quiet;
+        BOOST_TEST((chooseFieldCoupling(load(minimal + "solveAdjoint = true\n"), spec(D::Analytic), false) ==
+                    M::Coupled));
+    }
+    BOOST_CHECK_THROW(load(minimal + "FieldCoupling = \"couple\"\n"), std::invalid_argument);
+}
+
+// A native EquilibriumModel: named on either surface like FieldModel, exclusive
+// with it, and never "coupled", all refused at load.
+BOOST_AUTO_TEST_CASE(the_equilibrium_model_key_is_exclusive_with_a_field_model)
+{
+    BOOST_TEST(load(minimal).EquilibriumModel == "");
+    BOOST_TEST(load(minimal + "EquilibriumModel = \"SomeModel\"\n").EquilibriumModel == "SomeModel");
+
+    MapConfigSource src;
+    src.values = {
+        {"Polynomial_degree", 2u}, {"Grid_size", 8}, {"delta_t", 0.1},
+        {"Lower_boundary", 0.0},   {"Upper_boundary", 1.0},
+        {"OutputFilename", std::string("out")},
+        {"EquilibriumModel", std::string("SomeModel")},
+    };
+    BOOST_TEST(loadSolverConfig(src, ConfigSchema::Reader::Dict).EquilibriumModel == "SomeModel");
+
+    auto refusal = [&](std::string const &extra)
+    {
+        try
+        {
+            load(minimal + extra);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    const std::string both = refusal("FieldModel = \"A\"\nEquilibriumModel = \"B\"\n");
+    BOOST_TEST(both.find("one source of geometry") != std::string::npos, both);
+    const std::string coupled = refusal("EquilibriumModel = \"B\"\nFieldCoupling = \"coupled\"\n");
+    BOOST_TEST(coupled.find("\"coupled\"") != std::string::npos, coupled);
+    BOOST_TEST(coupled.find("has none") != std::string::npos, coupled);
+    BOOST_TEST(refusal("EquilibriumModel = \"B\"\nFieldCoupling = \"reduced\"\n").empty());
+    BOOST_TEST(refusal("EquilibriumModel = \"B\"\nFieldCoupling = \"consistent\"\n").empty());
+}
+
+// FieldCoupling for a native model: the field-model rule with "reduced" for
+// "coupled", except that a differenced response sends steady solves to
+// "consistent", and an adjoint -- which a native model has only at tier 1 --
+// is reduced whatever the derivatives cost.
+BOOST_AUTO_TEST_CASE(equilibrium_coupling_auto_takes_what_the_case_the_model_and_the_run_allow)
+{
+    using M = FieldCouplingMode;
+    using D = GeometryDerivatives;
+    auto spec = [](D d)
+    {
+        return SystemSpec{.variables = {{"u", "", ""}}, .readsGeometry = true, .geometryDerivatives = d};
+    };
+    const std::string steady = "SteadyStateTolerance = 1e-6\n";
+    const std::string newton = steady + "SteadyStateSolver = \"Newton\"\n";
+
+    struct Row
+    {
+        std::string extra;
+        D derivatives;
+        bool differencedResponse;
+        M want;
+    };
+    for (Row const &r : {
+             Row{"", D::Analytic, false, M::Reduced},
+             Row{"", D::Differenced, false, M::Reduced},
+             Row{"", D::None, false, M::Consistent},
+             Row{"", D::Analytic, true, M::Reduced},
+             Row{"", D::Differenced, true, M::Reduced},
+             Row{steady, D::Analytic, false, M::Reduced},
+             Row{newton, D::Analytic, false, M::Reduced},
+             Row{steady, D::Differenced, false, M::Consistent},
+             Row{newton, D::Differenced, false, M::Consistent},
+             Row{steady, D::Analytic, true, M::Consistent},
+             Row{newton, D::Analytic, true, M::Consistent},
+             Row{"SteadyStateSolve = true\n", D::Differenced, false, M::Consistent},
+             Row{steady + "SteadyStateSolver = \"TimeMarch\"\n", D::Differenced, true, M::Reduced},
+             Row{steady, D::None, false, M::Consistent},
+             Row{steady + "solveAdjoint = true\n", D::Differenced, true, M::Reduced},
+             Row{newton + "SteadyStateTest = \"Objective\"\nsolveAdjoint = true\n", D::Analytic, true, M::Reduced},
+             Row{"FieldCoupling = \"consistent\"\n", D::Analytic, false, M::Consistent},
+             Row{"FieldCoupling = \"reduced\"\n" + steady, D::Differenced, true, M::Reduced},
+             Row{"FieldCoupling = \"reduced\"\nsolveAdjoint = true\n", D::Analytic, false, M::Reduced},
+         })
+    {
+        CapturedOutput quiet;
+        const M got =
+            chooseEquilibriumCoupling(load(minimal + r.extra), spec(r.derivatives), r.differencedResponse);
+        BOOST_TEST((got == r.want), "[" << r.extra << "] derivatives " << static_cast<int>(r.derivatives)
+                                         << ", differenced response " << r.differencedResponse);
+    }
+
+    auto refusal = [&](std::string const &extra, D d)
+    {
+        try
+        {
+            CapturedOutput quiet;
+            chooseEquilibriumCoupling(load(minimal + extra), spec(d), false);
+        }
+        catch (std::invalid_argument const &e)
+        {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    // Tier 0 has no adjoint; "auto" with one and no derivatives has no tier to
+    // go to; "reduced" needs the derivatives.
+    const std::string t0 = refusal("FieldCoupling = \"consistent\"\nsolveAdjoint = true\n", D::Analytic);
+    BOOST_TEST(t0.find("adjoint") != std::string::npos, t0);
+    BOOST_TEST(refusal("solveAdjoint = true\n", D::None).find("geometryDerivatives = None") != std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"reduced\"\n", D::None).find("geometryDerivatives = None") !=
+               std::string::npos);
+    BOOST_TEST(refusal("FieldCoupling = \"coupled\"\n", D::Analytic).find("no unknowns") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_with)
@@ -284,7 +505,8 @@ BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_wit
     // test connects them.
     auto c = load(minimal);
     BOOST_TEST(c.FieldSolve == "iterative");
-    BOOST_TEST(c.FieldSolveTolerance == 1e-8);
+    BOOST_TEST(c.FieldSolveTolerance == 1e-4);
+    BOOST_TEST(c.FieldSolveAdjointTolerance == 1e-8);
     BOOST_TEST(c.FieldSolveMaxSweeps == 20);
     BOOST_TEST(c.FieldSolveMaxAdjointSweeps == 100);
 
@@ -292,7 +514,12 @@ BOOST_AUTO_TEST_CASE(the_field_solve_defaults_are_the_ones_the_solver_starts_wit
     TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
     SystemSolver sys(grid, 1, &problem);
     BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Iterative));
-    BOOST_TEST(sys.getFieldSolveTolerance() == 1e-8);
+
+    // And the error weights: the schema's default name is the solver's own.
+    BOOST_TEST(c.ErrorWeights == "AlgebraicMax");
+    BOOST_TEST((sys.getErrorWeightScheme() == SystemSolver::ErrorWeights::AlgebraicMax));
+    BOOST_TEST(sys.getFieldSolveTolerance() == 1e-4);
+    BOOST_TEST(sys.getFieldSolveAdjointTolerance() == 1e-8);
     BOOST_TEST(sys.getFieldSolveMaxSweeps() == 20);
     BOOST_TEST(sys.getFieldSolveMaxAdjointSweeps() == 100);
 }
@@ -310,13 +537,19 @@ BOOST_AUTO_TEST_CASE(apply_solver_config_carries_the_field_solve_settings_throug
 
     applySolverConfig(load(minimal + "FieldSolve = \"exact\"\nFieldSolveTolerance = 1e-11\n"
                                      "FieldSolveMaxSweeps = 3\n"
-                                     "FieldSolveMaxAdjointSweeps = 9\n"),
+                                     "FieldSolveMaxAdjointSweeps = 9\n"
+                                     "FieldSolveAdjointTolerance = 1e-12\n"),
                       sys);
 
     BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Exact));
     BOOST_TEST(sys.getFieldSolveTolerance() == 1e-11);
     BOOST_TEST(sys.getFieldSolveMaxSweeps() == 3);
     BOOST_TEST(sys.getFieldSolveMaxAdjointSweeps() == 9);
+    BOOST_TEST(sys.getFieldSolveAdjointTolerance() == 1e-12);
+
+    applySolverConfig(load(minimal + "FieldSolve = \"krylov\"\n"), sys);
+    BOOST_TEST((sys.getFieldSolveMode() == SystemSolver::FieldSolveMode::Krylov));
+    BOOST_CHECK_THROW(applySolverConfig(load(minimal + "FieldSolve = \"gmres\"\n"), sys), std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(write_adjoints_reaches_the_solver_and_needs_solve_adjoint)
@@ -363,6 +596,28 @@ BOOST_AUTO_TEST_CASE(estimate_discretisation_error_reaches_the_solver_and_what_i
         SystemSolver other(grid, 1, &problem);
         BOOST_CHECK_THROW(applySolverConfig(load(minimal + extra), other), std::invalid_argument);
     }
+}
+
+BOOST_AUTO_TEST_CASE(every_error_weight_scheme_reaches_the_solver_by_name)
+{
+    using W = SystemSolver::ErrorWeights;
+    Grid grid(0.0, 1.0, 4);
+    TestDiffusion problem(toml::parse_str("[DiffusionProblem]\nKappa = 1.0\n"));
+    for (auto [name, scheme] : {std::pair<char const *, W>{"Pointwise", W::Pointwise},
+                                {"AlgebraicMax", W::AlgebraicMax},
+                                {"AllMax", W::AllMax},
+                                {"Derivative", W::Derivative},
+                                {"DerivativeLocal", W::DerivativeLocal},
+                                {"Hybrid", W::Hybrid},
+                                {"HybridLocal", W::HybridLocal}})
+    {
+        SystemSolver sys(grid, 1, &problem);
+        applySolverConfig(load(minimal + "ErrorWeights = \"" + name + "\"\n"), sys);
+        BOOST_TEST((sys.getErrorWeightScheme() == scheme), name);
+    }
+    SystemSolver other(grid, 1, &problem);
+    BOOST_CHECK_THROW(applySolverConfig(load(minimal + "ErrorWeights = \"Pointwize\"\n"), other),
+                      std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(the_objective_tolerances_reach_the_solver_from_either_source)
@@ -672,8 +927,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
 {
     const std::string body = minimal +
         "tau = 2.5\n"
-        "Relative_tolerance = 1e-6\n"
-        "Absolute_tolerance = [1e-7, 1e-8]\n"
+        "RelativeTolerance = 1e-6\n"
+        "AbsoluteTolerance = [1e-7, 1e-8]\n"
         "t_initial = 0.25\n"
         "OutputPoints = 51\n"
         "Superconvergent = true\n"
@@ -698,6 +953,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         "FieldSolveTolerance = 1e-10\n"
         "FieldSolveMaxSweeps = 7\n"
         "FieldSolveMaxAdjointSweeps = 31\n"
+        "FieldSolveAdjointTolerance = 1e-9\n"
         "OutputFilename = \"shared\"\n";
 
     auto v = toml::parse_str(body);
@@ -711,8 +967,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     map_src.values = {
         {"PolynomialDegree", 2u}, {"GridSize", 8}, {"delta_t", 0.1},
         {"t_final", 1.0}, {"LowerBoundary", 0.0}, {"UpperBoundary", 1.0},
-        {"tau", 2.5}, {"Relative_tolerance", 1e-6},
-        {"Absolute_tolerance", std::vector<double>{1e-7, 1e-8}},
+        {"tau", 2.5}, {"RelativeTolerance", 1e-6},
+        {"AbsoluteTolerance", std::vector<double>{1e-7, 1e-8}},
         {"t_initial", 0.25}, {"OutputPoints", 51},
         {"Superconvergent", true}, {"AggressiveTimesteps", true},
         {"SuppressAlgebraicError", true}, {"ForceConsistentIC", true},
@@ -729,6 +985,7 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         {"SteadyStateTolerance", 1e-5}, {"OutputFilename", std::string("shared")},
         {"FieldSolve", std::string("exact")}, {"FieldSolveTolerance", 1e-10},
         {"FieldSolveMaxSweeps", 7}, {"FieldSolveMaxAdjointSweeps", 31},
+        {"FieldSolveAdjointTolerance", 1e-9},
     };
     auto fromMap = loadSolverConfig(map_src, ConfigSchema::Reader::Dict);
 
@@ -737,8 +994,8 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.delta_t == fromMap.delta_t);
     BOOST_TEST(fromToml.tau == fromMap.tau);
     BOOST_TEST(fromToml.t_initial == fromMap.t_initial);
-    BOOST_TEST(fromToml.Relative_tolerance == fromMap.Relative_tolerance);
-    BOOST_TEST(fromToml.Absolute_tolerance == fromMap.Absolute_tolerance,
+    BOOST_TEST(fromToml.RelativeTolerance == fromMap.RelativeTolerance);
+    BOOST_TEST(fromToml.AbsoluteTolerance == fromMap.AbsoluteTolerance,
                boost::test_tools::per_element());
     BOOST_TEST(fromToml.OutputPoints == fromMap.OutputPoints);
     BOOST_TEST(fromToml.OutputFilename == fromMap.OutputFilename);
@@ -747,7 +1004,9 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
         fromToml.Superconvergent == fromMap.Superconvergent;
     BOOST_TEST(superconvergentAgrees);
     BOOST_TEST(fromToml.AggressiveTimesteps == fromMap.AggressiveTimesteps);
-    BOOST_TEST(fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError);
+    const bool suppressAgrees = fromToml.SuppressAlgebraicError == fromMap.SuppressAlgebraicError &&
+                                fromToml.SuppressAlgebraicError == std::optional<bool>(true);
+    BOOST_TEST(suppressAgrees);
     BOOST_TEST(fromToml.ForceConsistentIC == fromMap.ForceConsistentIC);
     BOOST_TEST(fromToml.SteadyStateSolver == fromMap.SteadyStateSolver);
     BOOST_TEST(fromToml.PseudoTransientInitialStep == fromMap.PseudoTransientInitialStep);
@@ -774,9 +1033,9 @@ BOOST_AUTO_TEST_CASE(both_sources_produce_the_same_solver_config)
     BOOST_TEST(fromToml.FieldSolveTolerance == fromMap.FieldSolveTolerance);
     BOOST_TEST(fromToml.FieldSolveMaxSweeps == fromMap.FieldSolveMaxSweeps);
     BOOST_TEST(fromToml.FieldSolveMaxAdjointSweeps == fromMap.FieldSolveMaxAdjointSweeps);
-    // FieldModel is ProblemSelection, so it is an error in a dict and cannot be
-    // compared across the two -- the same asymmetry TransportSystem has.
-    BOOST_TEST(fromToml.FieldModel == "");
+    BOOST_TEST(fromToml.FieldSolveAdjointTolerance == fromMap.FieldSolveAdjointTolerance);
+    BOOST_TEST(fromToml.FieldSolveAdjointTolerance == 1e-9);
+    BOOST_TEST(fromToml.FieldModel == fromMap.FieldModel);
     BOOST_REQUIRE(fromToml.SteadyStateTolerance.has_value());
     BOOST_REQUIRE(fromMap.SteadyStateTolerance.has_value());
     BOOST_TEST(*fromToml.SteadyStateTolerance == *fromMap.SteadyStateTolerance);

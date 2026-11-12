@@ -393,3 +393,40 @@ reconciling it.
 
 The numbers above are reproduced by `python-examples/paper-figures/`, which also
 holds the scripts behind the figures in `paper/`.
+
+## The trace solve is banded
+
+Static condensation leaves a matrix on the cell faces, `K_global`, factorised on
+every Newton iteration. It was a dense `Eigen::FullPivLU` of side
+`nVars * (nCells + 1)` -- O(nCells^3) in the one quantity static condensation
+exists to make O(nCells) -- and it dominated low-`k` runs. Phase breakdown with
+the dense factorisation, by direct `chrono` instrumentation (2026-08-25):
+
+| case | `K_global` | whole run | share |
+|---|---|---|---|
+| 400 cells, k = 3 | 3.534 s | 3.9 s | 91% |
+| 200 cells, k = 4 | 14.165 s | 19.4 s | 73% |
+| 50 cells, k = 8 | 0.248 s | 2.1 s | 12% |
+| 20 cells, k = 10 | 0.023 s | 1.0 s | 2% |
+
+It is a banded LU with partial pivoting now (`util/BandedMatrix.hpp`), `dgbtrf` /
+`dgbtrs` when a LAPACK was found and an equivalent built-in otherwise. MKL
+pinned, best of 3:
+
+| case | dense | banded | speed-up |
+|---|---|---|---|
+| 400 cells, k = 3 | 5233 ms | 555 ms | 9.4x |
+| 200 cells, k = 4 | ~16400 ms | 2147 ms | 7.6x |
+| 50 cells, k = 8 | 1902 ms | 1226 ms | 1.55x |
+| 20 cells, k = 10 | 976 ms | 755 ms | 1.29x |
+
+The k = 10 row is not the factorisation at all, which was 2% of that run: it is
+the dense `(nCells + 1)^2` allocate-and-zero and the `FullPivLU`'s own per-call
+buffers, 627 times over. CLAUDE.md ("The trace solve") has what the change turned
+up: `K_global` is singular by the number of Dirichlet boundaries, which the dense
+factorisation absorbed, and the banded answer differs from the dense one in the
+last bits rather than not at all.
+
+The band is `2 nVars - 1` either side only because the solve reorders the trace
+`(node, var)`. If the trace solve ever matters again, a solution vector that
+interleaved `lambda` the same way would remove that gather and scatter.

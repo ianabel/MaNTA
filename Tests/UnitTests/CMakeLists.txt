@@ -36,6 +36,7 @@ set(MANTA_TEST_SOURCES
   AdjointProblemTests.cpp
   AdjointTests.cpp
   AutodiffAuxTests.cpp
+  AutodiffSigmaTests.cpp
   AutodiffTest.cpp
   ConfigSchemaTests.cpp
   ConfigSourceTests.cpp
@@ -50,7 +51,9 @@ set(MANTA_TEST_SOURCES
   FieldAdjointTests.cpp
   FieldDoFLayoutTests.cpp
   FieldJacobianTests.cpp
+  EquilibriumTests.cpp
   FieldModelSpecTests.cpp
+  EquilibriumRegistryTests.cpp
   FieldRegistryTests.cpp
   GeometryDerivativeTests.cpp
   GridTests.cpp
@@ -81,6 +84,9 @@ set(MANTA_TEST_SOURCES
   StateGeometryTests.cpp
   SystemSolverMatrixTests.cpp
   SystemSolverTests.cpp
+  ThetaPinchEquilibriumTests.cpp
+  ThetaPinchMMSTests.cpp
+  ThetaPinchRunTests.cpp
   TimeDerivativeSourceTests.cpp
   TransportSystemTests.cpp
   UtilityTests.cpp

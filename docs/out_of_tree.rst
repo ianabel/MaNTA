@@ -19,36 +19,17 @@ directory there holds a case, its config and a README, and imports ``manta``
 exactly as your own package would — copy one out of the repository and it still
 runs. ``python-examples/linear-diffusion`` is the place to start.
 
-Then a case in your own package imports ``manta`` like any other dependency:
+Then a case in your own package imports ``manta`` like any other dependency.
+This one, and the config below, are the files CI's out-of-tree job installs the
+package for and runs (``Tests/OutOfTree/``):
 
-.. code-block:: python
+.. literalinclude:: ../Tests/OutOfTree/mypackage/mycase.py
+   :language: python
+   :caption: mypackage/mycase.py
+   :lines: 5-
 
-   # mypackage/mycase.py
-   import manta
-   import numpy as np
-
-   class MyDiffusion(manta.TransportSystem):
-       variables = [manta.Field("temperature", "electron temperature", "eV")]
-
-       def __init__(self, config, grid):
-           super().__init__()
-           self.kappa = config["Kappa"]
-
-       def SigmaFn(self, i, state, x, t):
-           return self.kappa * state["Derivative"][0]
-
-       def Sources(self, i, state, x, t):
-           return 1.0
-
-       def dSigmaFn_dq(self, i, state, x, t):
-           return np.full(self.nVars, self.kappa)
-
-       def LowerBoundary(self, i, t): return 0.0
-       def UpperBoundary(self, i, t): return 0.0
-       def InitialValue(self, i, x): return 0.0
-       def InitialDerivative(self, i, x): return 0.0
-
-   manta.registerPhysicsCase("MyDiffusion", MyDiffusion)
+The ``config`` the factory hands a case is the whole parsed file, as a C++ case
+gets; the case reads its own table from it.
 
 Only ``SigmaFn`` and ``Sources`` are required. The derivative hooks are
 optional, and an omitted one means that block is identically zero — which is
@@ -56,17 +37,9 @@ why the case above writes ``dSigmaFn_dq`` and nothing else.
 
 Run it with the ``manta`` command, naming the module that registers it:
 
-.. code-block:: toml
-
-   [configuration]
-   TransportSystem = "MyDiffusion"
-   PythonModule = "mypackage.mycase"
-   PolynomialDegree = 2
-   GridSize = 8
-   LowerBoundary = 0.0
-   UpperBoundary = 1.0
-   delta_t = 0.05
-   t_final = 0.2
+.. literalinclude:: ../Tests/OutOfTree/run.conf
+   :language: toml
+   :caption: run.conf
 
 .. code-block:: sh
 
@@ -102,27 +75,10 @@ deliberately no installed CMake package: an exported target would invite
 the mistake that gives a plugin its own copy of the registry.) A physics case is then an ordinary
 shared object:
 
-.. code-block:: cpp
-
-   // MyCase.cpp
-   #include <manta/PhysicsCases.hpp>
-
-   class MyCase : public TransportSystem
-   {
-   public:
-       MyCase(toml::value const &config, Grid const &)
-           : TransportSystem({.variables = {{"u", "the diffused quantity", "kg/m^3"}}})
-       {
-       }
-
-       Value SigmaFn(Index, const State &s, Position, Time) override { return s.q(0); }
-       // ... the rest of the interface
-
-   private:
-       REGISTER_PHYSICS_HEADER(MyCase)
-   };
-
-   REGISTER_PHYSICS_IMPL(MyCase);
+.. literalinclude:: ../Tests/OutOfTree/MyCase.cpp
+   :language: cpp
+   :caption: MyCase.cpp
+   :lines: 7-
 
 .. code-block:: sh
 
@@ -130,11 +86,13 @@ shared object:
 
 and name it in the config:
 
-.. code-block:: toml
+.. literalinclude:: ../Tests/OutOfTree/plugin.conf
+   :language: toml
+   :caption: plugin.conf
 
-   [configuration]
-   TransportSystem = "MyCase"
-   PhysicsPlugins = [ "./libmycase.so" ]
+and run it with the installed binary, ``$PREFIX/bin/MaNTA plugin.conf``.
+``Tests/OutOfTree/run-out-of-tree.sh`` does all of this -- install, compile,
+run, and the ``pip install .`` route above -- and is what CI runs.
 
 The solver ``dlopen``\ s each entry before instantiating the problem. The
 plugin's static initialiser runs on load and registers the case into the same
@@ -161,7 +119,9 @@ physics is not a solver setting.
    the plugin's state. This is why ``manta.pc`` records the concrete
    architecture rather than ``native``: a plugin compiled on a different machine
    is then rejected by the compiler instead of crashing at run time.
-   ``-DEIGEN_USE_BLAS`` is carried for the same reason.
+   ``-DEIGEN_USE_BLAS`` and ``-DEIGEN_DONT_PARALLELIZE`` are carried for the
+   same reason: each changes the code Eigen's templates expand to, and both
+   sides of the boundary must expand them alike.
 
    *Linking the library.* The solver links the core objects directly, so a
    plugin that also pulled in ``libmanta.so`` would get a **second** copy of

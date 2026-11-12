@@ -90,17 +90,36 @@ against a closed-form analytic solution, against a steady state, against a
 checked-in `<name>.ref.nc`, and -- for three cases -- against itself via a
 restart round trip. Tolerance is 5e-3, overridable with `--tolerance`.
 
-**It compares only `u`.** `test_ref_soln_l2` reads
-`groups[name].variables["u"]`, so the `q`, `sigma` and `u_star` that every run
-also writes are never checked against a reference. That is not hypothetical
-slack: making t0 output report the CalcIC-corrected state moved the t0 `sigma`
-of `AuxVarTest` by 2.3e-2 and the t0 `q` of `nonlin` by 1.2e-3, and the suite
-could not see either -- the change is invisible in `u` precisely because `u` is
-differential and `IDACalcIC` holds it fixed, so the fields that move are the
-ones nothing looks at. Closing it means regenerating the references, which hold
-the pre-CalcIC t0 values, and picking tolerances for three fields that are a
-derivative rougher than `u`; it is a piece of work rather than a line in the
-harness, which is why it is in `TODO` and recorded here rather than done.
+**A reference comparison covers every solution field a run writes**: `u`, `q`,
+`sigma` and `u_star` of each variable, the aux values and the scalar time series
+at the root of the file, and a field model's group. Not the diagnostic groups a
+case adds -- `AuxG` is the aux constraint's residual sampled between the nodes it
+is enforced at, interpolation noise about zero -- and a reference that lacks a
+field the run writes is an error, so a new output cannot go unchecked by default.
+
+Each field is compared per output time, relative to the reference's norm there or
+to the run's `AbsoluteTolerance`, whichever is larger: `||got - ref|| <= tol *
+max(||ref||, atol)`. The floor is for a field the run holds at noise level --
+PIDTest's mass error `E`, which its controller keeps near 1e-7 -- where a change
+of step sequence is an O(1) relative change and means nothing. `q` and `sigma`
+are held to twice the tolerance. The numbers behind both, measured on every
+reference case (the worst field of each kind, relative per time slice):
+
+| perturbation | `u`, `u_star` | `q`, `sigma` | aux values |
+|---|---|---|---|
+| g++-16 or clang++-19 against g++-15 | 4.2e-13 | 1.0e-11 | 1.6e-12 |
+| `AggressiveTimesteps = true` | 9.9e-4 | 2.6e-3 | 2.3e-6 |
+| `initialTimestep = 1e-6` | 2.2e-3 | 4.4e-3 | 1.1e-6 |
+
+The binding case is `MatTest`, whose `q` moves twice as far as its `u` under a
+different first step; elsewhere the ratio runs up to 30 (`LinearDiffusion`, where
+both are far inside). So a change that moves the step sequence -- a new
+factorisation, different error weights -- can be expected to pass, and a change
+to the answer cannot hide in a field nothing looks at. That is not hypothetical:
+making t0 output report the CalcIC-corrected state moved the t0 `sigma` of
+`AuxVarTest` by 2.3e-2, invisible in `u` because `IDACalcIC` holds the
+differential unknowns fixed, and the references written before it carried the
+uncorrected values until every one was regenerated with this comparison.
 
 The restart round trip runs to `t_final` in one go, then again in two halves via
 a `.restart.nc` file, and requires the final states to match. It is the only
@@ -148,7 +167,7 @@ other block unchanged. The fix declares the derivative rather than removing the
 term from `SigmaFn`, so the physics -- and the solution -- are untouched.
 
 Both times the trigger was the same and was not the fix: at
-`Relative_tolerance = Absolute_tolerance = 1e-2` **the case's own answer is 4.1%
+`RelativeTolerance = AbsoluteTolerance = 1e-2` **the case's own answer is 4.1%
 from the converged one**, against a comparison tolerance of 5e-3. Measured
 against a rtol = 1e-10 run of the same discretisation:
 
@@ -179,6 +198,17 @@ Two costs, neither of them free:
   recoverable, which is the same family as the `MinStepSize` floor.
 
 Runtime went from 0.07 s to 0.15 s.
+
+**`AuxVarADTest.ref.nc` was regenerated for the same reason, and its config
+tightened the same way.** It is the same problem written on the autodiff layer,
+and it ran at `1e-2` too. Its closed-form comparison is at the final time, where
+it is two orders inside the suite's tolerance, but the reference comparison is at
+every output, and at `t = 1` the `1e-2` answer was 1.46% from converged. Changing
+the default error weights to `AlgebraicMax` moved that answer to 0.49% from
+converged -- three times *closer* -- and failed the comparison at 1.95%. At
+`1e-6 / 1e-8` (and `MinStepSize = 1e-12`, without which it dies on the first
+step) both weight schemes are within 8.4e-7 of a rtol = 1e-10 run at every
+output, and the new reference is that run.
 
 Earlier references are kept out of the tree; recover one from
 `git show <commit>:Tests/RegressionTests/AuxVarTest.ref.nc` if a comparison ever
@@ -301,9 +331,10 @@ Two things make this work, and both are easy to get wrong when adding a case:
   `LinearDiffSourceTest`'s was worse -- it read `useMMS` and never applied
   `MMS_Source`, so the option silently did nothing. Both are gone; the
   manufactured problems here are self-contained and never depended on them.
-  `AutodiffTransportSystem::MMS_Solution` is still there, but nothing overrides
-  it any more: the C++ `MirrorPlasma`, its only user, has been removed in favour
-  of `python-physics/mirror-plasma`.
+  `AutodiffTransportSystem::MMS_Solution` is still there, and no physics case
+  overrides it; `AutodiffSigmaTests.cpp` checks `MMS_Source` against closed
+  forms, with the geometry `MMS_Geometry` supplies, and runs a coupled case
+  forced by it.
 * **The time-integration tolerance must be well below the spatial error, but not
   so tight that IDA cannot start.** At 1e-12 it fails at `t = 0` for `k >= 2`
   with "the error test failed repeatedly or with |h| = hmin"; 1e-9 leaves three
@@ -396,7 +427,7 @@ exact path's answer with nothing in the result to say so.
 `the_coupled_problem_converges_at_k_plus_one_in_u` therefore runs the whole `k =
 1, 2, 3` study on **both** modes and requires the local orders to agree.
 
-They do, to **1.8e-9, 3.2e-8 and 1.3e-7** at `k = 1, 2, 3` -- so the numbers above
+They do, to **7.6e-9, 1.4e-8 and 1.5e-6** at `k = 1, 2, 3` -- so the numbers above
 are the iterative mode's own, and the table would be unchanged had it been the
 exact mode's. The assertion is pinned at 0.01, the brief's "third digit of a
 rate", rather than at the measured gap: the gap is set by where IDA's Newton
@@ -407,24 +438,19 @@ worse.
 **`getFieldSweepStats().fallbacks` is zero at every refinement, on every case in
 the file, and that is asserted rather than printed** (`checkNoFallbacks`). The
 distinction is the whole finding: forcing an escalation by capping the sweep at
-one iteration leaves every local order in the file *bit for bit unchanged* -- the
-escalation returns the exact path's answer -- and drives the two-mode gap from
-1.3e-7 to **exactly zero**, so the agreement check passes more strongly while the
-study has stopped measuring the iterative mode at all. Only the fallback count
+one iteration leaves every local order in the file unchanged to the digits
+printed -- the escalation returns the exact path's answer -- and moves the
+two-mode gap no further than a different step sequence moves it anyway (1.0e-6
+at `k = 3`, against 1.5e-6), so the agreement check passes as before while the
+study has mostly stopped measuring the iterative mode. Only the fallback count
 tells the difference, and only if something checks it.
 
-The sweep runs 2.5 to 3.6 iterations per Jacobian solve here. Read that beside
-`FieldJacobianTests.cpp`'s 13 to 38 sweeps on *random* right-hand sides, where
-three of six exhaust the shipped cap of 20: the two are not in tension, and the
+The sweep runs 2.0 to 2.8 iterations per Jacobian solve here. Read that beside
+`FieldJacobianTests.cpp`'s 10 to 23 sweeps on *random* right-hand sides, where
+one of six exhausts the shipped cap of 20: the two are not in tension, and the
 contrast is the explanation for why that cap is adequate in a real run. Newton's
 right-hand sides are small, smooth corrections about a nearby state; a random
 vector is the hard case. Neither number says anything about the cap on its own.
-
-One outlier is worth recording so it is not mistaken for a defect later: the
-multi-DOF case at `n = 8` takes 1591 field solves and 4877 sweeps where its
-neighbours take ~200 and ~700. That is IDA working harder over that particular
-step sequence, not the sweep failing -- the fallback count is still zero and the
-ratio, 3.07 sweeps per solve, is inside the band every other row sits in.
 
 **These tests are not vacuous, and that was checked rather than assumed.** Three
 mutations, applied and reverted:
@@ -433,7 +459,7 @@ mutations, applied and reverted:
 |---|---|
 | `SigmaFn` drops `s.geom(0)`, i.e. the geometry never reaches the physics | the flux check fails at every sample point; both single-DOF studies die with `IDASolve could not complete`; the multi-DOF orders collapse to -0.001, -0.000, -0.000 |
 | `ManufacturedField::FieldResidual` becomes `psi - 1.05 Int u dx`, a 5% error in the field row -- not even a sign error | `k = 1` orders fall to 1.79, 0.85, 0.07; `k = 2` to 0.26, 0.00, -0.00; `k = 3` to 0.005, 0.000, 0.000; `psi` to -0.007 |
-| `FieldSolveMaxSweeps` capped at 1, so every Jacobian solve escalates | every order unchanged, the two-mode gap improves to exactly zero, and only `checkNoFallbacks` fires -- 382 fallbacks in 382 solves at `k = 1, n = 4` |
+| `FieldSolveMaxSweeps` capped at 1, so every Jacobian solve whose increment is not already below the tolerance escalates | every order unchanged, the two-mode gap moves by no more than the step sequence moves it, and only `checkNoFallbacks` fires -- 335 fallbacks in 357 solves at `k = 1, n = 4` |
 
 The second is the one that matters for the equations: it is the failure mode the
 whole file exists for, and the study loses the rate entirely rather than
@@ -469,19 +495,111 @@ carries no information whatever about the equations.
   to do with the coupling -- and the source-consistency check would still pass,
   since it samples away from the kinks by more than the stencil's reach.
 
-### There is no coupled regression case, deliberately
+### The theta pinch's own order study
 
-`Tests/RegressionTests/` has no `coupled-field.conf` and is not going to get one
-until a field model with physics in it exists. A regression case selects its
-model by name from `[configuration] FieldModel`, which resolves against the
-process-global registry, so the model would have to live in `PhysicsCases/` and
-be linked into the shipped binary. The only two models that exist are
-manufactured fixtures with no physics in them -- `ManufacturedField` and
-`ManufacturedFieldVector`, both under `Tests/UnitTests` and both deliberately
-unregistered -- and registering a fixture into the production binary to give the
-regression suite something to point at is a worse trade than the gap it closes.
+`ThetaPinchMMSTests.cpp` runs the registered pair -- `ThetaPinchDiffusion`'s
+own flux and aux row, under `ThetaPinchEquilibrium` -- against a manufactured
+density `n = (1 + cos(pi x)/2)(1 + t)`. With `p = T n` independent of `V'`, the
+equilibrium is closed form up to the constant `C(t)`, which a root-find on the
+wall condition gives, and the source is `N_t - d_x sigma_hat` with every term
+analytic. Before trusting any order, the file checks the case's own `SigmaFn`
+on the exact state against the manufactured flux (2.3e-15) and the PDE residual
+by a six-point stencil of that `SigmaFn` (1.9e-10 against `|S|` = 30) -- the
+sign convention trap, which an order study cannot see.
 
-What covers the coupled path instead, and what each catches:
+Local orders, one interval per cell, at `1e-9 / 1e-11`:
+
+| `k` | `N`, n = 8 -> 16 -> 32 (-> 64) | `V'` |
+|---|---|---|
+| 1 | 1.99, 1.99, (2.00) | 2.55, 2.49, (2.42) |
+| 2 | 3.01, 3.00, (3.00) | 3.59, 3.53, (3.47) |
+| 3 | 3.95, 3.99, (4.03) | 3.97, 3.98, (4.06) |
+
+The bracketed 64-cell column is measured and left out of the test for its cost.
+`N` goes at `k + 1`, the transport's own rate; `C` converges too, at 1.4 to 4.1,
+not cleanly enough to assert. At `k = 6` on 8 cells, where the spline is what
+limits the answer, halving the knot spacing goes at 4.03 in `N` and 4.00 in
+`V'`. Zero fallbacks throughout, asserted.
+
+**Every field-coupling tier runs the same study**, and is held to tier 2's
+answer as well as its orders, since a tier converging at the right rate to a
+different function is exactly what an order alone would pass. The tier is a
+value of `Tier` in the file: `Coupled`, `Consistent`, and `Reduced` and
+`ReducedDifferenced` for tier 1 with the exact and the differenced G'.
+
+* *Tier 0* (`FieldModelEquilibrium`, `FieldCoupling = "consistent"`) through
+  the transient study above, one case per degree: tier 2's orders to the digit,
+  and its errors in `N` to 6e-11 - 3.4e-9 against an `rtol ||N||` of 4.4e-9 --
+  integration error, asserted below ten times that, because the two tiers take
+  different steps. The price is Newton iterations, not order: with no coupling
+  in the Jacobian Newton converges linearly, and tier 0 makes two to three times
+  tier 1's equilibrium solves at about tier 2's steps. That needs the algebraic
+  error out of IDA's test, as a run with a field has by default; with it in,
+  the steps went 2 to 18 times tier 2's (2234 against 120 at `k = 3`, 16 cells).
+* *Tier 1* (`FieldCoupling = "reduced"`, `FieldSolve = "iterative"`), at both
+  responses, one case per degree: tier 2's orders to the digit, its errors in
+  `N` to 1.5e-11 - 1.2e-9, and tier 2's steps -- 59 - 168 against 61 - 166 --
+  with no fallback. `krylov` gives the same table in 45 s against the sweep's
+  16 s, and is not run.
+* *Steady*, at every tier: the source frozen at `t = 0.25`, a Newton solve from
+  the transient's `t = 0`, on 16, 32 and 64 cells (8 -> 16 is pre-asymptotic at
+  `k = 3`, 3.89). `N` at 2.00, 3.00 and 3.98 - 4.00, `V'` at 2.45 - 3.99. Tier 1
+  agrees with tier 2 to 9e-15 in 4 Newton iterations against 5, tier 0 to
+  3e-13 - 2e-11 in 8 - 14. A second or two per tier.
+* *The manufactured field models* (`MMSFieldTests.cpp`,
+  `the_lower_tiers_converge_at_k_plus_one`): both, at tiers 0 and 1, reproduce
+  tier 2's `u` and `psi` orders to the digit, with gaps of at most 1.3e-10 in the
+  `u` error; about a second per tier, the coupling there being too weak to slow
+  IDA. Both declare `Analytic` geometry derivatives, so tier 1 runs on both.
+* *The native model* (`ThetaPinchPressureBalance`, `EquilibriumModel`, tier 1)
+  is a different discretisation of the same balance, so it is held to tier 2's
+  answer at the discretisation error, not at `rtol`: the distance between the
+  two runs' `N` must converge at `k + 1` and stay within 5 times tier 2's own
+  error (measured 0.10 - 4.2). Its orders are `k + 1` transient on 16, 32, 64
+  cells and steady on 32, 64, 128, one level finer than the others because its
+  five-cell gradient fit is pre-asymptotic at `k = 3` on 8. Read off `p_h`
+  instead, the gradient costs an order; `EquilibriumRegistryTests.cpp` pins the
+  slots on an exact pressure.
+
+**Two findings about the method came out of this study, and each has a test
+that only a run can provide.**
+
+* *The field grid has to follow the transport mesh.* With knots finer than the
+  mesh the spline resolves the `O(h^{k+1})` jumps of `p_h` at the faces into
+  spikes in `d_x V'`, which the flux reads: four intervals per cell at `k = 1`
+  goes at order 1.0, and two per cell on 64 cells at `k = 3` stalls IDA at order
+  one under either `FieldSolve`. Breaking `V'` at the faces instead is worse,
+  about order `k`. `ThetaPinchEquilibrium.hpp` has the measurements.
+* *The sweep has to stop in IDA's own terms.* Under the original test -- a
+  relative 2-norm change in `psi` alone -- `k = 3` on 8 cells took more than
+  20000 steps against the exact solve's 213, and the answer was right. The
+  sweep left an error in `sigma` and `q` near the axis that is O(1) in IDA's
+  error weights. `the_iterative_solve_does_not_stall_ida` runs that case in both
+  modes and requires the iterative run's steps within twice the exact run's.
+  That holds because a run with a field suppresses the algebraic error by
+  default, and then both modes take 99-101 steps over a +-8% tolerance sweep.
+  With the algebraic rows in IDA's error test it would not: IDA falls in and
+  out of an order-2 trap on this case in both modes, as round-off decides, and
+  exact takes 149 to 278 steps and iterative 142 to 564 over small changes of
+  tolerance or CPU. No unit test
+  with random right-hand sides at a fixture state sees it, because the residue
+  only concentrates there on Newton's own corrections.
+
+### The coupled regression case
+
+`Tests/RegressionTests/ThetaPinch.conf` runs the registered field model,
+`ThetaPinchEquilibrium`, under `ThetaPinchDiffusion`, through a `.conf` file:
+the config plumbing, the registry and the netCDF field group. The reference
+check compares the field group as well as the transport -- psi's time series and
+every geometry slot, relative to the reference's magnitude -- because the
+transport's L_2 check sees the field only through what it does to `u`. Its
+restart round trip resumes an algebraic psi, so it pins the coupled state rather
+than the field block of the file, which `psi_round_trips_through_a_restart`
+pins with a differential one.
+
+The manufactured models stay unregistered: they exist to be compared with closed
+forms. What covers the coupled path beyond the regression case, and what each
+catches:
 
 | test | what only it sees |
 |---|---|
@@ -492,6 +610,11 @@ What covers the coupled path instead, and what each catches:
 | `SolverLifecycleTests.cpp::a_coupled_solver_reused_matches_a_fresh_one_bit_for_bit` | a field model that caches across runs, or an `initialize()` that stops calling `resetForRun` |
 | `SolverLifecycleTests.cpp::a_coupled_run_writes_the_field_group` | the netCDF group: its name, its `label`, and psi and geometry written to the wrong shape |
 | `FieldModelSpecTests.cpp` (two name cases) + `CoupledResidualTests.cpp` (two collision cases) | a spec whose names netCDF cannot use, which is otherwise an `NcBadName`/`NcNameInUse` out of `ncGroup.cpp` at the first write |
+| `ThetaPinchEquilibriumTests.cpp` | the theta pinch's spline, its derivatives, its sparse block solve in both directions, and its equilibrium against the closed form `V' = Phi / sqrt(C - p)`, at local orders 3.8-3.9 in the field resolution |
+| `FieldJacobianTests.cpp` (theta pinch cases) | the coupled Jacobian of a model whose `A2` lives only in an aux column and whose `A1` runs through four slots; that its sweep contracts at every `cj`, so a sweep that diverges on it is the sweep's defect |
+| `ThetaPinchMMSTests.cpp` | an error in the registered pair's coupled equations; a field grid that outresolves the mesh; an iterative sweep that stalls IDA; a tier that converges to something other than tier 2's answer; a native equilibrium that loses an order |
+| `EquilibriumRegistryTests.cpp` | the equilibrium registry's throws; the native theta pinch's table, and a slot of its balance -- `dV'/dx` above all -- converging below `k + 1` on an exact pressure |
+| `ThetaPinchRunTests.cpp` | a degree-changing restart losing psi; diagnostics evaluated without geometry; a reused solver; the coupled gradient for a parameter that reaches the transport only through the field (`T`); `G_field` against differences of the reported `G`; the objective estimate's field share; the adjoint sweep falling back when it should converge |
 
 **The restart case's oracle is the raw netCDF array, not `getSolution()`, and
 that is load bearing.** `yJac` is filled by `DGSoln::copy` — the function this
@@ -521,6 +644,31 @@ the regression suite's own 5e-3 is far too loose to see a change of this kind.
 Measured at the point the serialisation landed: **all 14 `.nc` files byte
 identical**, and all 14 `.restart.nc` files identical apart from the one
 deliberately added `int nField = 0`.
+
+### The tier-1 adjoint
+
+`FieldCoupling = "reduced"` solves its adjoint through the transposed response
+(`EquilibriumModel::applyResponseTranspose`), and is checked at two levels, as
+tier 2's is:
+
+| test | what only it sees |
+|---|---|
+| `FieldJacobianTests.cpp::the_reduced_adjoint_inverts_the_transpose_of_the_tier_zero_jacobian` | a wrong `A_g^T` or `G'^T`: `J_red^T z = g` against a finite difference of the tier-0 residual at `cj = 0`, under every `FieldSolve`, plain and superconvergent, with the model's transpose and the assembled one |
+| `FieldJacobianTests.cpp::the_reduced_adjoint_check_sees_a_missing_transpose` | the guard: `A_g^T` zeroed, or a transposed response that does nothing, misses by 6.3 against 2e-8 |
+| `FieldJacobianTests.cpp::the_reduced_adjoint_is_tier_twos_with_psi_eliminated` | tier 1's `z` against tier 2's with psi on its equilibrium, 1e-14 under `exact`; the geometry share of the right-hand side; tier 2's `krylov` adjoint |
+| `FieldJacobianTests.cpp::the_assembled_transpose_is_the_transpose_of_the_response` | the default `applyResponseTranspose` against the adapter's exact one, and its assembly made once per equilibrium |
+| `ThetaPinchRunTests.cpp::the_reduced_gradient_matches_finite_differences_and_tier_two` | the gradient end to end, for objectives reaching it through `G_y`, through `G_geometry` and through both, against central differences of `G` and against tier 2's `G_p` |
+| `ThetaPinchRunTests.cpp::dropping_the_transposed_response_makes_the_reduced_gradient_wrong` | the same guard on the gradient: 6.5-100% wrong |
+| `ThetaPinchRunTests.cpp::a_reduced_adjoint_on_demand_makes_no_physics_call` | an on-demand adjoint asking the case for anything, and the equilibrium solves it makes, pinned |
+| `ThetaPinchRunTests.cpp::a_reused_reduced_adjoint_matches_a_fresh_one_bit_for_bit` | a tier-1 cache surviving `initialize()`, in `G_p` |
+
+**The finite-difference floor is the check's, not the solve's.** The transpose
+check measures 2e-8 to 3e-8 in every mode alike, `exact` included, and its
+bound is the 1e-7 tier 2's transpose checks use; the assembled transpose, a
+forward difference good to about 1e-7 of `G'`, reaches 5e-7 and is bounded at
+1e-6. On the gradient the assembled transpose's error is on the scale of the
+largest entry of `G_p`, so the `B (1 + x^2)` objective, whose entries are 300
+times smaller, is bounded against that scale rather than its own.
 
 ## Superconvergence
 
@@ -864,6 +1012,20 @@ in `MESH-REFINEMENT.md` and the suite covers the geometry and the plumbing only.
 
 These are deliberate and tracked, not oversights:
 
+* **A field from Python is pinned the same way, and then against ports.**
+  `python/Tests/test_field_coupling.py` runs the theta pinch from a config file
+  and from a dict at all five tier/model pairs and requires the transport and
+  field groups equal bit for bit, which is what holds `GeometrySource` to being
+  the one place the coupling is chosen. The Python layer's own pieces are then
+  checked against C++ they reimplement, at round-off rather than exactly, since
+  a different summation order moves IDA's steps: `theta_pinch_balance.py`
+  (a numpy `ThetaPinchPressureBalance`, as a `manta.EquilibriumModel`) to 7e-11
+  at tiers 0 and 1, `theta_pinch_case.py` (`ThetaPinchDiffusion` by hand and on
+  `manta.jax`, reading `state.geom` by slot name) to 2e-11 at tiers 0-2, and
+  both together to 1.6e-10. What it does not cover: a Python model's own
+  `applyResponse` (the port declares none, so tier 1 differences `Solve`), and
+  a vectorised JAX case reading geometry.
+
 * **Driving a C++ case from Python is pinned by an exact comparison against the
   TOML surface, and the gap is plugins.** `python/Tests/test_cpp_cases.py` runs
   two cases -- `LinearDiffusion` and `AdjointTestProblem` -- twice each, once
@@ -895,8 +1057,9 @@ These are deliberate and tracked, not oversights:
   a pytest should build -- and it is the same gap the TOML surface's
   `PhysicsPlugins` key already has, so the `dlopen` flags and the
   do-not-link-`-lmanta` rule are covered by inspection on both surfaces. Nor does
-  anything exercise a **restart** through a C++ case named from Python, or a case
-  with `nScalars > 0`.
+  anything exercise a **restart** through a C++ case named from Python other
+  than the coupled theta pinch's (`test_a_coupled_restart_resumes_from_python`),
+  or a case with `nScalars > 0`.
 
 * **Degree adaptation is covered in three separable layers, and the gaps are in
   the physics it has been driven on rather than in the code.**
@@ -910,7 +1073,7 @@ These are deliberate and tracked, not oversights:
   formed per *variable* and the auxiliary variables are not looked at, which is
   a real question rather than a missing line — an under-resolved `phi` would not
   raise the degree. Nor is a **multi-variable** case exercised, so the "worst
-  variable wins" reduction and the per-variable `Absolute_tolerance` floor are
+  variable wins" reduction and the per-variable `AbsoluteTolerance` floor are
   covered by inspection only. Under the solution target nothing reads the adjoint
   problem, so `setAdjointProblem` being re-applied to each level's solver is
   tested only through the objective target, below, whose every level needs it.
@@ -1042,25 +1205,20 @@ These are deliberate and tracked, not oversights:
   two lengths. The extra auxiliary variable (`phi_u - u = 0`) is otherwise
   unused.
 
-* **The coupled adjoint is C++-only, and the Python surface cannot reach it.**
+* **The coupled adjoint is covered in C++ and reached from Python.**
   `Tests/UnitTests/FieldAdjointTests.cpp` covers the field coupling's adjoint end
   to end -- against a closed-form `dG/dp`, against finite differences, and
-  against the transpose of a finite-differenced coupled Jacobian -- but there is
-  no Python equivalent, and that is a gap in the *bindings* rather than in the
-  tests. `FieldModel` has no pybind11 class, so a Python case cannot define one;
-  the `FieldModel` configuration key names a *registered* model, and no field
-  model is registered anywhere in the tree (both manufactured ones live under
-  `Tests/UnitTests` and are deliberately unregistered). So there is nothing a
-  `python/Tests/test_adjoint.py` fixture could attach. Adding the coupled Python
-  check means first registering a production field model or binding `FieldModel`
-  to Python -- neither of which the adjoint work owns.
+  against the transpose of a finite-differenced coupled Jacobian -- and from
+  Python `test_an_objective_reading_the_geometry_has_the_right_gradient` checks a
+  `manta.jax` objective reading `B` against central differences, with a guard:
+  without the `"Geometry"` rows of its `dg` the gradient is 0.85% out.
 
-  Two limits of the coupled adjoint itself are structural rather than untested,
-  and are recorded in `TODO` and beside `G_field` in `SystemSolver.hpp`: an
-  objective whose integrand reads `State::geom` directly loses its `dG/dpsi`
-  term, because `AdjointProblem` reports four state derivatives and geometry is
-  not among them; and a `FieldModel` cannot depend on an adjoint parameter at
-  all, so `d(field residual)/dp` is zero by construction.
+  A field row may read an adjoint parameter, through the adjoint problem's
+  `dFieldResidual_dp`; `a_parameter_in_the_field_row_reaches_the_gradient` checks
+  it against a closed form and a finite difference, and its companion records
+  that an adjoint problem leaving the hook out gets zero for such a parameter. An
+  objective may read `State::geom`; its `dG/dpsi` is covered in
+  `ThetaPinchRunTests.cpp`.
 
   One defect that fixture found was **not** in the coupling. The adjoint's local
   matrix stored `+Sq` where the forward Jacobian builds `-Sq` -- the `u` row's
@@ -1366,8 +1524,8 @@ These are deliberate and tracked, not oversights:
   jardin-critical-gradient 1.23603 to 3.90868 on 10 (3.1622 against 3.1623) --
   and **neither run's continuation step count changes**, 3 and 5 respectively,
   both still converging to round-off. `shestakov-nonlinear` is unaffected because
-  it pins `TimeMarch`, whose stopping test is on `dY/dt` and does not go through
-  this function at all.
+  it pins `TimeMarch`, which makes its steady test only at output times, and
+  under the default `NewtonStep` test does not read this norm at all.
 
   What is still uncovered is the rest of the algorithm -- step rejection, the
   `KINSetMaxNewtonStep` clamp, and the hard-`KINSol`-failure path (the ordinary

@@ -29,6 +29,7 @@
 #include <sundials/sundials_context.h>
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
@@ -648,7 +649,8 @@ BOOST_AUTO_TEST_CASE(static_residual_converts_a_physics_exception_into_a_retry)
 BOOST_AUTO_TEST_CASE(error_weights_follow_the_rtol_atol_definition)
 {
     // ewt = 1 / (rtol |y| + atol), which is what IDA's weighted norm divides
-    // by. A single-element atol applies to every variable.
+    // by. A single-element atol applies to every variable. That is the
+    // Pointwise scheme; the default floors the algebraic classes, below.
     const Index k = 2, nCells = 3;
     Grid grid(0.0, 1.0, nCells);
     TestDiffusion problem(diffusion_config);
@@ -660,6 +662,7 @@ BOOST_AUTO_TEST_CASE(error_weights_follow_the_rtol_atol_definition)
 
     const double rtol = 1e-4, atol = 1e-7;
     sys.setTolerances({atol}, rtol);
+    sys.setErrorWeights(SystemSolver::ErrorWeights::Pointwise);
 
     SUNContext ctx;
     SUNContext_Create(SUN_COMM_NULL, &ctx);
@@ -747,6 +750,7 @@ BOOST_AUTO_TEST_CASE(error_weights_use_a_per_variable_atol_when_one_is_supplied)
     const double rtol = 1e-3;
     const std::vector<double> atol{1e-5, 1e-9};
     sys.setTolerances(atol, rtol);
+    sys.setErrorWeights(SystemSolver::ErrorWeights::Pointwise);
 
     SUNContext ctx;
     SUNContext_Create(SUN_COMM_NULL, &ctx);
@@ -837,6 +841,134 @@ BOOST_AUTO_TEST_CASE(error_weights_scale_the_scalar_rows_by_the_dof_count)
     N_VDestroy(dYdt);
     N_VDestroy(ewt);
     SUNContext_Free(&ctx);
+}
+
+namespace
+{
+/// One diffusion state, its weights under `scheme`, and both as DGSoln views.
+struct WeightCase
+{
+    static constexpr Index k = 2, nCells = 3;
+    static constexpr double rtol = 1e-4, atol = 1e-7;
+    Grid grid{0.0, 1.0, nCells};
+    TestDiffusion problem{diffusion_config};
+    SystemSolver sys{grid, k, &problem};
+    SUNContext ctx = nullptr;
+    N_Vector Y = nullptr, dYdt = nullptr, ewt = nullptr;
+
+    explicit WeightCase(SystemSolver::ErrorWeights scheme)
+    {
+        sys.setTau(1.0);
+        sys.resetCoeffs();
+        sys.initialiseMatrices();
+        sys.setTolerances({atol}, rtol);
+        sys.setErrorWeights(scheme);
+        SUNContext_Create(SUN_COMM_NULL, &ctx);
+        const Index n = DGSoln(1, grid, k).getDoF();
+        Y = N_VNew_Serial(n, ctx);
+        dYdt = N_VClone(Y);
+        ewt = N_VClone(Y);
+        N_VConst(0.0, Y);
+        N_VConst(0.0, dYdt);
+        sys.setInitialConditions(Y, dYdt);
+        // Signed, of varied size, and passing through zero in every class.
+        double *ya = N_VGetArrayPointer(Y);
+        for (Index i = 0; i < n; ++i)
+            ya[i] = std::sin(0.8 * i) * (1.0 + 0.5 * i);
+        sys.getErrorWeights(Y, ewt);
+    }
+    ~WeightCase()
+    {
+        for (N_Vector v : {Y, dYdt, ewt})
+            N_VDestroy(v);
+        SUNContext_Free(&ctx);
+    }
+    DGSoln y() { return DGSoln(1, grid, k, N_VGetArrayPointer(Y)); }
+    DGSoln w() { return DGSoln(1, grid, k, N_VGetArrayPointer(ewt)); }
+};
+
+double largest(DGSoln::DGApprox const &a, Index nCells)
+{
+    double m = 0.0;
+    for (Index i = 0; i < nCells; ++i)
+        m = std::max(m, a.getCoeff(i).second.cwiseAbs().maxCoeff());
+    return m;
+}
+
+/// Every node of one class against 1 / (rtol |y| + tol(cell)).
+void requireWeights(DGSoln::DGApprox const &y, DGSoln::DGApprox const &w, Index nCells, Index k,
+                    double rtol, std::function<double(Index)> const &tol, char const *what)
+{
+    for (Index i = 0; i < nCells; ++i)
+        for (Index j = 0; j < k + 1; ++j)
+            BOOST_TEST(w.getCoeff(i).second(j) == 1.0 / (rtol * std::abs(y.getCoeff(i).second(j)) + tol(i)),
+                       boost::test_tools::tolerance(1e-12) << what);
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(algebraic_max_floors_sigma_and_q_at_rtol_times_their_largest_magnitude)
+{
+    // The default. sigma and q are held to rtol times their largest magnitude on
+    // the grid wherever they pass near zero, rather than to atol; u and lambda
+    // are held exactly as Pointwise holds them.
+    WeightCase c(SystemSolver::ErrorWeights::AlgebraicMax);
+    DGSoln y = c.y(), w = c.w();
+    const double r = c.rtol, a = c.atol;
+    const double sMax = largest(y.sigma(0), c.nCells), qMax = largest(y.q(0), c.nCells);
+    BOOST_REQUIRE(r * sMax > a);
+    BOOST_REQUIRE(r * qMax > a);
+    requireWeights(y.sigma(0), w.sigma(0), c.nCells, c.k, r, [&](Index) { return r * sMax; }, "sigma");
+    requireWeights(y.q(0), w.q(0), c.nCells, c.k, r, [&](Index) { return r * qMax; }, "q");
+    requireWeights(y.u(0), w.u(0), c.nCells, c.k, r, [&](Index) { return a; }, "u");
+    for (Index i = 0; i <= c.nCells; ++i)
+        BOOST_TEST(w.lambda(0)(i) == 1.0 / (r * std::abs(y.lambda(0)(i)) + a), boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(all_max_floors_u_and_lambda_too)
+{
+    WeightCase c(SystemSolver::ErrorWeights::AllMax);
+    DGSoln y = c.y(), w = c.w();
+    const double r = c.rtol;
+    const double uMax = largest(y.u(0), c.nCells);
+    BOOST_REQUIRE(r * uMax > c.atol);
+    requireWeights(y.u(0), w.u(0), c.nCells, c.k, r, [&](Index) { return r * uMax; }, "u");
+    const double lMax = y.lambda(0).cwiseAbs().maxCoeff();
+    for (Index i = 0; i <= c.nCells; ++i)
+        BOOST_TEST(w.lambda(0)(i) == 1.0 / (r * std::abs(y.lambda(0)(i)) + std::max(c.atol, r * lMax)),
+                   boost::test_tools::tolerance(1e-12));
+}
+
+BOOST_AUTO_TEST_CASE(derivative_holds_q_to_u_s_tolerance_over_the_cell_width)
+{
+    // q to (rtol max|u| + atol) / h, sigma to that times max|sigma| / max|q|.
+    // DerivativeLocal falls back to exactly this before any Jacobian build has
+    // recorded a local dsigma/dq, and this state has had none.
+    for (auto scheme : {SystemSolver::ErrorWeights::Derivative, SystemSolver::ErrorWeights::DerivativeLocal})
+    {
+        WeightCase c(scheme);
+        DGSoln y = c.y(), w = c.w();
+        const double r = c.rtol;
+        const double uMax = largest(y.u(0), c.nCells), qMax = largest(y.q(0), c.nCells),
+                     sMax = largest(y.sigma(0), c.nCells);
+        auto tolQ = [&](Index i) { return (r * uMax + c.atol) / c.grid[i].h(); };
+        requireWeights(y.q(0), w.q(0), c.nCells, c.k, r, tolQ, "q");
+        requireWeights(y.sigma(0), w.sigma(0), c.nCells, c.k, r, [&](Index i) { return tolQ(i) * sMax / qMax; },
+                       "sigma");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(hybrid_takes_the_stricter_of_derivative_and_algebraic_max)
+{
+    WeightCase c(SystemSolver::ErrorWeights::Hybrid);
+    DGSoln y = c.y(), w = c.w();
+    const double r = c.rtol;
+    const double uMax = largest(y.u(0), c.nCells), qMax = largest(y.q(0), c.nCells),
+                 sMax = largest(y.sigma(0), c.nCells);
+    auto dQ = [&](Index i) { return (r * uMax + c.atol) / c.grid[i].h(); };
+    requireWeights(y.q(0), w.q(0), c.nCells, c.k, r,
+                   [&](Index i) { return std::min(dQ(i), std::max(c.atol, r * qMax)); }, "q");
+    requireWeights(y.sigma(0), w.sigma(0), c.nCells, c.k, r,
+                   [&](Index i) { return std::min(dQ(i) * sMax / qMax, std::max(c.atol, r * sMax)); }, "sigma");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

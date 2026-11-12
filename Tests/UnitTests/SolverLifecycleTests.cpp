@@ -28,6 +28,8 @@
 #include "TestDiffusion.hpp"
 #include "Types.hpp"
 #include "../../FieldModel.hpp"
+#include "../../PhysicsCases/ADTestProblem.hpp"
+#include "../../PhysicsCases/ScalarTestLD3.hpp"
 
 #include <ida/ida.h>
 #include <netcdf>
@@ -149,7 +151,9 @@ class GeometricDiffusion : public TransportSystem
 public:
     GeometricDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic})
     {
     }
 
@@ -693,71 +697,186 @@ BOOST_AUTO_TEST_CASE(initialize_leaves_the_corrected_initial_condition_in_Y)
     removeOutput("lifecycle_consistent_ic");
 }
 
-BOOST_AUTO_TEST_CASE(at_t0_only_the_differential_part_of_dydt_exists)
+BOOST_AUTO_TEST_CASE(a_cold_start_begins_with_consistent_algebraic_derivatives)
 {
-    // A known gap, pinned so that it is visible rather than assumed away, and so
-    // that whoever closes it is told the gate depends on it.
-    //
-    // dG/dt is assembled as a full chain rule over u, q, sigma and phi, and
-    // AdjointProblemTests proves that assembly correct. But at t0 the only part of
-    // dydt that carries anything is the differential one: setInitialConditions
-    // zeroes dydt and writes just dydt.u and the differential scalars, and
-    // IDACalcIC does not fill in the rest. So at the point the gate runs, the q,
-    // sigma and phi terms contribute nothing -- an objective depending on those is
-    // differentiated only through its u dependence.
-    //
-    // The reason is structural rather than a bug: q, sigma and phi are algebraic in
-    // this formulation, and IDA's IDA_YA_YDP_INIT computes algebraic *values* and
-    // differential *derivatives* -- there is no y' for an algebraic component to
-    // fetch. Their true time derivatives follow from differentiating the algebraic
-    // constraints, which nothing here does.
-    //
-    // Worth being precise about, because there *was* also a wrong id vector telling
-    // IDA the whole system was algebraic, and it would have been reasonable to
-    // expect that to be the cause. It is not: the id vector is correct now (see
-    // the_id_vector_marks_u_differential_and_nothing_else) and these blocks are
-    // still exactly zero.
-    //
-    // This is still strictly better than origin/optimize-mode's gate, which
-    // evaluated the objective functional on the derivative vector and so was wrong
-    // about the u term too whenever g was nonlinear. But it is less than the full
-    // derivative, and the comment on SystemSolver::dGdt says so.
-    //
-    // No gate armed and no objective attached: IDAGetConsistentIC is unconditional,
-    // so this holds for every run rather than only for a gated one.
+    // IDA_YA_YDP_INIT makes algebraic *values* and differential *derivatives*
+    // consistent, and leaves the algebraic components of y' at zero. On a
+    // diffusing u, q and sigma are moving, so IDA's predictor carried an error
+    // of h |y'| in them -- first order where its error test expects second --
+    // and at a tight tolerance the first step had to fall below MinStepSize's
+    // default to pass. initialize() now solves G_z z' = -G_t - G_u u' after
+    // IDACalcIC on a cold start, as it does on a projected restart. So the
+    // algebraic rows' total derivative along (1, y') vanishes, which it does not
+    // with z' = 0. TestDiffusion's Dirichlet data move with time, so this also
+    // needs its dLowerBoundary_dt and dUpperBoundary_dt: without them the q rows
+    // of the cell at each end are out by exactly the omitted term.
     Grid grid(0.0, 1.0, nCells);
-
     TestDiffusion problem(lifecycle_config);
     SystemSolver sys(grid, k, &problem);
-    configure(sys, "lifecycle_gate_consistent");
-
+    configure(sys, "lifecycle_cold_algebraic");
     {
         CapturedOutput quiet;
         sys.initialize();
     }
+    BOOST_REQUIRE(sys.initialConditionWasCorrected());
+    BOOST_TEST(sys.consistentDerivativeChange <= 1e-14);
 
-    double uNorm = 0.0, qNorm = 0.0, sigmaNorm = 0.0;
-    for (Index i = 0; i < nCells; ++i)
+    // d/dt of the algebraic rows along (1, y'), y' held fixed.
+    auto alongTrajectory = [&](N_Vector dY)
     {
-        uNorm += sys.dydt.u(0).getCoeff(i).second.norm();
-        qNorm += sys.dydt.q(0).getCoeff(i).second.norm();
-        sigmaNorm += sys.dydt.sigma(0).getCoeff(i).second.norm();
-    }
-
-    // The differential part is real, so the gate has something to work with.
-    BOOST_TEST(uNorm > 1e-8);
-
-    // The algebraic parts are not. If either of these ever becomes nonzero the gap
-    // above has closed, and the gate's coverage should be re-examined and this
-    // test rewritten rather than relaxed.
-    BOOST_TEST(qNorm == 0.0, boost::test_tools::tolerance(0.0));
-    BOOST_TEST(sigmaNorm == 0.0, boost::test_tools::tolerance(0.0));
+        const double e = 1e-6;
+        N_Vector Yp = N_VClone(sys.Y), Ym = N_VClone(sys.Y), Fp = N_VClone(sys.Y), Fm = N_VClone(sys.Y);
+        N_VLinearSum(1.0, sys.Y, e, dY, Yp);
+        N_VLinearSum(1.0, sys.Y, -e, dY, Ym);
+        sys.residual(e, Yp, dY, Fp);
+        sys.residual(-e, Ym, dY, Fm);
+        double const *pp = N_VGetArrayPointer(Fp), *m = N_VGetArrayPointer(Fm),
+                     *isDiff = N_VGetArrayPointer(sys.id);
+        double worst = 0.0;
+        for (sunindextype i = 0; i < N_VGetLength(Fp); ++i)
+            if (isDiff[i] == 0.0)
+                worst = std::max(worst, std::abs(pp[i] - m[i]) / (2.0 * e));
+        for (N_Vector v : {Yp, Ym, Fp, Fm})
+            N_VDestroy(v);
+        return worst;
+    };
+    const double consistent = alongTrajectory(sys.dYdt);
+    N_Vector differentialOnly = N_VClone(sys.dYdt);
+    N_VProd(sys.dYdt, sys.id, differentialOnly);
+    const double zeroed = alongTrajectory(differentialOnly);
+    N_VDestroy(differentialOnly);
+    BOOST_TEST_MESSAGE("d/dt of the algebraic rows along y': " << consistent << " solved, "
+                                                               << zeroed << " with z' = 0");
+    BOOST_TEST(zeroed > 1e-2);
+    BOOST_TEST(consistent < 1e-6 * zeroed);
 
     {
         CapturedOutput quiet;
         sys.destroySundials();
     }
-    removeOutput("lifecycle_gate_consistent");
+    removeOutput("lifecycle_cold_algebraic");
+}
+
+BOOST_AUTO_TEST_CASE(the_algebraic_derivative_solve_raises_alpha_until_it_converges)
+{
+    // The refinement contracts by about s / alpha per correction, s being the
+    // problem's fastest rate, so an alpha below s stalls it. alpha used to be
+    // 1e8 / delta_t, and Shestakov's delta_t = 1e3 made it 1e5: the defect sat
+    // at 4-18% and IDA started from that. Started here from alpha = 1, far
+    // below this discretisation's stiffness, the solve has to find its own
+    // alpha -- and land on the y' the default start gives, because alpha sets
+    // the rate and not the answer.
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, "lifecycle_alpha");
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+    BOOST_REQUIRE(sys.initialConditionWasCorrected());
+    const double defaultAlpha = sys.consistentDerivativeAlpha;
+    BOOST_TEST(sys.consistentDerivativeBuilds == 1);
+
+    N_Vector reference = N_VClone(sys.dYdt), fromLow = N_VClone(sys.dYdt);
+    N_VScale(1.0, sys.dYdt, reference);
+    N_VScale(1.0, sys.dYdt, fromLow);
+    sys.consistentDerivativeAlpha = 1.0;
+    sys.consistentAlgebraicDerivatives(sys.Y, fromLow, 0.0);
+    sys.consistentDerivativeAlpha = defaultAlpha;
+    BOOST_TEST_MESSAGE("from alpha = 1: " << sys.consistentDerivativePasses << " passes, "
+                                          << sys.consistentDerivativeBuilds << " builds, alpha "
+                                          << sys.consistentDerivativeAlphaUsed << ", last change "
+                                          << sys.consistentDerivativeChange);
+    BOOST_TEST(sys.consistentDerivativeBuilds > 1);
+    BOOST_TEST(sys.consistentDerivativeAlphaUsed > 1e3);
+    BOOST_TEST(sys.consistentDerivativeChange <= 1e-14);
+
+    double gap = 0.0, size = 0.0;
+    double const *r = N_VGetArrayPointer(reference), *l = N_VGetArrayPointer(fromLow);
+    for (sunindextype i = 0; i < N_VGetLength(reference); ++i)
+    {
+        gap = std::max(gap, std::abs(r[i] - l[i]));
+        size = std::max(size, std::abs(r[i]));
+    }
+    BOOST_TEST_MESSAGE("|y'(alpha = 1 start) - y'(default start)| = " << gap << " against " << size);
+    BOOST_TEST(gap <= 1e-10 * size);
+    N_VDestroy(reference);
+    N_VDestroy(fromLow);
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_alpha");
+}
+
+BOOST_AUTO_TEST_CASE(algebraic_derivatives_do_not_depend_on_alpha_where_an_algebraic_row_reads_du_dt)
+{
+    // ScalarTestLD3's controller scalar J is algebraic and its row reads dM/dt,
+    // i.e. du/dt, so differentiating it brings in u'', which only the
+    // differentiated differential rows pin down. J(alpha)'s algebraic rows are
+    // G_y + alpha G_y' there: a right-hand side of -G_t alone left
+    // alpha G_y' u' in the answer, and holding x_d = u' threw u'' away and left
+    // a mode the iteration could not damp at any alpha -- raising alpha to beat
+    // it took it to 1e33 and the regression config's first step failed. Solved as
+    // the total derivative of every row, the answer does not involve alpha: three
+    // starts a decade apart must converge and agree, to the alpha eps |G_y' u'|
+    // that row's cancellation leaves.
+    const toml::value config = u8R"(
+        [DiffusionProblem]
+        gamma = 1.0
+        gamma_d = -0.1
+        gamma_I = -0.5
+    )"_toml;
+    Grid grid(-1.0, 1.0, 8);
+    ScalarTestLD3 problem(config, grid);
+    SystemSolver sys(grid, 3, &problem);
+    configure(sys, "lifecycle_ld3_alpha");
+    sys.setTolerances({1e-3}, 1e-4);
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+    }
+    BOOST_REQUIRE(sys.initialConditionWasCorrected());
+
+    N_Vector start = N_VClone(sys.dYdt);
+    N_VScale(1.0, sys.dYdt, start);
+    std::vector<std::vector<double>> answers;
+    const double defaultAlpha = sys.consistentDerivativeAlpha;
+    for (double alpha0 : {1e6, 1e7, 1e8})
+    {
+        N_Vector dY = N_VClone(sys.dYdt);
+        N_VScale(1.0, start, dY);
+        sys.consistentDerivativeAlpha = alpha0;
+        sys.consistentAlgebraicDerivatives(sys.Y, dY, 0.0);
+        BOOST_TEST_MESSAGE("from alpha = " << alpha0 << ": " << sys.consistentDerivativePasses
+                                           << " passes, " << sys.consistentDerivativeBuilds
+                                           << " builds, alpha " << sys.consistentDerivativeAlphaUsed
+                                           << ", last change " << sys.consistentDerivativeChange);
+        BOOST_TEST(sys.consistentDerivativeChange <= 1e-12);
+        BOOST_TEST(sys.consistentDerivativeAlphaUsed <= 1e10);
+        double const *p = N_VGetArrayPointer(dY);
+        answers.emplace_back(p, p + N_VGetLength(dY));
+        N_VDestroy(dY);
+    }
+    sys.consistentDerivativeAlpha = defaultAlpha;
+    N_VDestroy(start);
+
+    double gap = 0.0, size = 0.0;
+    for (std::size_t i = 0; i < answers[0].size(); ++i)
+    {
+        size = std::max(size, std::abs(answers[1][i]));
+        gap = std::max({gap, std::abs(answers[0][i] - answers[1][i]), std::abs(answers[2][i] - answers[1][i])});
+    }
+    BOOST_TEST_MESSAGE("y' spread over the three starts: " << gap << " against " << size);
+    BOOST_TEST(gap <= 1e-8 * size);
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput("lifecycle_ld3_alpha");
 }
 
 BOOST_AUTO_TEST_CASE(a_second_integration_on_one_solver_matches_a_fresh_one)
@@ -898,12 +1017,14 @@ BOOST_AUTO_TEST_CASE(the_initial_condition_uses_boundary_data_at_t0)
 // IDA to solve: IDAInit clears the counter, and nothing else in initialize()
 // goes through IDA. So on a path that skips IDACalcIC this stays at zero, and
 // MaNTA's own nResidualEvals -- which the debug .dat blocks and the steady solve
-// also increment -- would not distinguish the two.
+// also increment -- would not distinguish the two. The IDAReInit that hands IDA
+// the consistent algebraic derivatives clears the counter again, so what it had
+// counted by then is added back.
 long idaResidualEvals(SystemSolver &sys)
 {
     long n = -1;
     BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &n) == IDA_SUCCESS);
-    return n;
+    return n + sys.idaResidualEvalsBeforeReinit;
 }
 
 BOOST_AUTO_TEST_CASE(the_reported_dirichlet_trace_follows_the_boundary_datum)
@@ -1920,6 +2041,103 @@ RestartFileData readRestart(std::string const &path)
     f.close();
     return out;
 }
+
+// A restart must resume the problem the run was solving, boundary data
+// included. setRestartValues recovers uL/uR from the restarted profile for a
+// case with no boundary data of its own, and it used to do so for every case --
+// so an AutodiffTransportSystem, whose uL/uR are its configured data, resumed
+// with them replaced by values sampled off the solution. ADTest's zero-flux
+// axis became q_h(0), which HDG's weak imposition leaves nonzero, and its
+// Dirichlet 0.3 became u_h(1). The resumed run was then a different problem:
+// at these tolerances it failed its first step with ten error-test failures,
+// a dsm of 1.17 that no step size moved, and at rtol 1e-4 it completed 8.3e-4
+// away from the uninterrupted run in q. Through the file, as production does.
+BOOST_AUTO_TEST_CASE(a_restart_keeps_the_boundary_data_the_case_owns)
+{
+    const toml::value config = u8R"(
+        [AutodiffTransportSystem]
+        uL = [0.0]
+        isLowerDirichlet = false
+        uR = [0.3]
+        isUpperDirichlet = true
+        InitialHeights = [0.3]
+        InitialProfile = ["Uniform"]
+        [ADTestProblem]
+        kappa = 1.0
+    )"_toml;
+    constexpr Index order = 5;
+    constexpr double tSplit = 0.5, tEnd = 1.0;
+    auto setUp = [](SystemSolver &sys, std::string const &stem, double t0)
+    {
+        sys.setTau(1.0);
+        sys.resetCoeffs();
+        sys.setInputFile(stem);
+        sys.setOutputCadence(0.25);
+        sys.setNOutput(11);
+        sys.setInitialTime(t0);
+        sys.setMinStepSize(1e-14);
+        sys.setTolerances({1e-5}, 1e-6);
+        sys.setWriteDatFile(false);
+    };
+    auto qAndU = [](SystemSolver &sys)
+    {
+        Vector out(10);
+        for (Index j = 0; j < 5; ++j)
+        {
+            out(j) = sys.getSolution().u(0)(0.1 + 0.2 * j);
+            out(5 + j) = sys.getSolution().q(0)(0.2 * j);
+        }
+        return out;
+    };
+
+    Vector uninterrupted;
+    {
+        Grid grid(0.0, 1.0, 5);
+        ADTestProblem problem(config, grid);
+        SystemSolver sys(grid, order, &problem);
+        setUp(sys, "lifecycle_owned_bcs_full", 0.0);
+        sys.setWriteOutput(false);
+        CapturedOutput quiet;
+        sys.runSolver(tEnd);
+        uninterrupted = qAndU(sys);
+    }
+    {
+        Grid grid(0.0, 1.0, 5);
+        ADTestProblem problem(config, grid);
+        SystemSolver sys(grid, order, &problem);
+        setUp(sys, "lifecycle_owned_bcs", 0.0);
+        CapturedOutput quiet;
+        sys.runSolver(tSplit);
+    }
+
+    const RestartFileData rf = readRestart("lifecycle_owned_bcs.restart.nc");
+    Grid grid(rf.cellBoundaries);
+    ADTestProblem problem(config, grid);
+    problem.setRestartValues(rf.Y, rf.dYdt, grid, rf.order);
+
+    // The case's own data, exactly; what the profile would have given is not
+    // close enough to pass for it.
+    DGSoln file(1, grid, rf.order, const_cast<double *>(rf.Y.data()));
+    BOOST_TEST(problem.LowerBoundary(0, tSplit) == 0.0);
+    BOOST_TEST(problem.UpperBoundary(0, tSplit) == 0.3);
+    BOOST_TEST(std::abs(file.q(0)(0.0)) > 1e-6);
+    BOOST_TEST(std::abs(file.u(0)(1.0) - 0.3) > 1e-8);
+
+    SystemSolver sys(grid, rf.order, &problem);
+    setUp(sys, "lifecycle_owned_bcs_rest", tSplit);
+    sys.setWriteOutput(false);
+    {
+        CapturedOutput quiet;
+        BOOST_REQUIRE_NO_THROW(sys.runSolver(tEnd));
+    }
+    // Measured 2.1e-13: resuming from a converged state, with the same data,
+    // the two runs take the same steps.
+    const double gap = (qAndU(sys) - uninterrupted).cwiseAbs().maxCoeff();
+    BOOST_TEST_MESSAGE("restarted against uninterrupted: " << gap);
+    BOOST_TEST(gap < 1e-5);
+    removeOutput("lifecycle_owned_bcs");
+}
+
 
 BOOST_AUTO_TEST_CASE(a_warm_start_from_a_restart_file_does_not_run_calcic)
 {
@@ -2981,8 +3199,7 @@ BOOST_AUTO_TEST_CASE(initialize_starts_at_a_nonzero_time)
 
         // Not vacuous: IDACalcIC has to have run and done something, or the case
         // would pass just as well if the call were removed.
-        long idaResEvals = -1;
-        BOOST_REQUIRE(IDAGetNumResEvals(sys.IDA_mem, &idaResEvals) == IDA_SUCCESS);
+        const long idaResEvals = idaResidualEvals(sys);
         BOOST_TEST(idaResEvals > 0,
                    "IDACalcIC evaluated no residuals at t0 = " << t0
                        << ", so it cannot have run");
@@ -3107,6 +3324,151 @@ BOOST_AUTO_TEST_CASE(a_resumed_steady_solve_does_not_re_climb_the_ser_ramp)
                    << " -- the SER ramp cannot be being re-climbed");
 
     removeOutput("lifecycle_resume");
+}
+
+// SteadyStateSolver = "TimeMarch" stops on the steady solvers' own
+// SteadyStateTest, made at each output time (timeMarchIsSteady), so a tolerance
+// means one thing whichever solver reaches the steady state. It used to test the
+// trace's change over an output interval against a floor that governed at any
+// SteadyStateTolerance tighter than 1e-3, so the key moved nothing.
+namespace
+{
+struct TimeMarchStop
+{
+    double t;      // when the run reported a steady state
+    double measure; // the test's own quantity at the state it stopped at
+};
+
+// Integrate to a steady state under TimeMarch with `test`, and measure the
+// state it stopped at with that test's own norm. The phases are driven
+// separately so Y is still allocated when the run ends.
+TimeMarchStop timeMarchStop(SystemSolver::SteadyTest test, double steadyTol, double stepTol,
+                            std::string const &stem)
+{
+    Grid grid(0.0, 1.0, nCells);
+    TestDiffusion problem(lifecycle_config);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setOutputCadence(0.02);
+    sys.setSteadyMode(SystemSolver::SteadyMode::TimeMarch);
+    sys.setSteadyTest(test);
+    sys.setSteadyStateTolerance(steadyTol);
+    sys.setSteadyStateStepTolerance(stepTol);
+
+    std::string text;
+    {
+        CapturedOutput out;
+        sys.initialize();
+        sys.integrate(10.0);
+        text = out.text();
+    }
+
+    const std::string marker = "Steady State achieved at time t = ";
+    const auto at = text.find(marker);
+    BOOST_TEST_REQUIRE(at != std::string::npos, "the run never reported a steady state");
+    // Printed to six figures; the stop is an output time, a multiple of the
+    // cadence. TestDiffusion's data does not depend on t either way.
+    TimeMarchStop stop{};
+    stop.t = std::round(std::stod(text.substr(at + marker.size())) / 0.02) * 0.02;
+    stop.measure = test == SystemSolver::SteadyTest::Residual ? sys.steadyResidualNorm(stop.t)
+                                                              : sys.steadyCorrectionNorm(stop.t);
+    sys.destroySundials();
+    removeOutput(stem);
+    return stop;
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(a_time_march_stops_on_the_steady_residual_under_residual)
+{
+    // Under Residual, SteadyStateTolerance bounds the weighted ||F|| here as it
+    // does for PseudoTransient and Newton: a tighter one stops later, and the
+    // state stopped at meets it.
+    std::vector<TimeMarchStop> stops;
+    for (double tol : {1e-2, 1e-4, 1e-6})
+    {
+        stops.push_back(timeMarchStop(SystemSolver::SteadyTest::Residual, tol, 0.33,
+                                      "lifecycle_timemarch_residual"));
+        BOOST_TEST_MESSAGE("Residual, SteadyStateTolerance " << tol << ": stops at t = "
+                                                             << stops.back().t << ", ||F|| = "
+                                                             << stops.back().measure);
+        BOOST_TEST(stops.back().measure <= tol);
+    }
+    BOOST_TEST(stops[0].t < stops[1].t);
+    BOOST_TEST(stops[1].t < stops[2].t);
+}
+
+BOOST_AUTO_TEST_CASE(a_time_march_stops_on_the_newton_correction_under_newton_step)
+{
+    // Under NewtonStep, the default, SteadyStateStepTolerance bounds the
+    // undamped Newton correction in the error weights, and SteadyStateTolerance
+    // is not read -- as for the steady solvers.
+    std::vector<TimeMarchStop> stops;
+    for (double tol : {1.0, 0.33, 1e-2})
+    {
+        stops.push_back(timeMarchStop(SystemSolver::SteadyTest::NewtonStep, 1e-3, tol,
+                                      "lifecycle_timemarch_newton"));
+        BOOST_TEST_MESSAGE("NewtonStep, SteadyStateStepTolerance " << tol << ": stops at t = "
+                                                                   << stops.back().t
+                                                                   << ", correction "
+                                                                   << stops.back().measure);
+        BOOST_TEST(stops.back().measure <= tol);
+    }
+    BOOST_TEST(stops[0].t < stops[1].t);
+    BOOST_TEST(stops[1].t < stops[2].t);
+
+    const TimeMarchStop other = timeMarchStop(SystemSolver::SteadyTest::NewtonStep, 1e-9, 0.33,
+                                              "lifecycle_timemarch_newton");
+    BOOST_TEST(other.t == stops[1].t);
+}
+
+BOOST_AUTO_TEST_CASE(a_time_march_check_does_not_perturb_the_integration)
+{
+    // The NewtonStep check factorises the Jacobian at alpha = 0 over the one IDA
+    // is reusing, and has to put IDA's back. Every slice written before the stop
+    // must be bit for bit the slice a run that never checks writes.
+    auto slices = [](bool check, double tFinal, std::string const &stem)
+    {
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setOutputCadence(0.02);
+        if (check)
+        {
+            sys.setSteadyMode(SystemSolver::SteadyMode::TimeMarch);
+            sys.setSteadyTest(SystemSolver::SteadyTest::NewtonStep);
+            sys.setSteadyStateTolerance(1e-3);
+            sys.setSteadyStateStepTolerance(1e-2);
+        }
+        {
+            CapturedOutput quiet;
+            sys.runSolver(tFinal);
+        }
+        netCDF::NcFile out;
+        out.open(stem + ".nc", netCDF::NcFile::FileMode::read);
+        const size_t nt = out.getDim("t").getSize(), nx = out.getDim("x").getSize();
+        std::vector<double> t(nt);
+        out.getVar("t").getVar(t.data());
+        std::vector<std::vector<double>> fields;
+        for (const char *name : {"u", "q", "sigma"})
+        {
+            std::vector<double> v(nt * nx);
+            out.getGroup(problem.getVariableName(0)).getVar(name).getVar(v.data());
+            fields.push_back(std::move(v));
+        }
+        out.close();
+        removeOutput(stem);
+        return std::pair{t, fields};
+    };
+
+    const auto [tChecked, checked] = slices(true, 10.0, "lifecycle_timemarch_checked");
+    const double tStop = tChecked.back();
+    const auto [tPlain, plain] = slices(false, tStop, "lifecycle_timemarch_plain");
+
+    BOOST_TEST_REQUIRE(tChecked.size() > 3u);
+    BOOST_TEST_REQUIRE(tPlain.size() == tChecked.size());
+    for (size_t f = 0; f < checked.size(); ++f)
+        BOOST_TEST(checked[f] == plain[f], boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
