@@ -30,7 +30,7 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 sys.path.append("..")
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective, ObjectiveFromUserWithParams, ObjectiveHistory
-from itg_wrapper import make_itg_builder, itg_at, with_itg
+from itg_wrapper import make_itg_builder, itg_at, with_itg, itg_rho_at_nodes
 from config import rescale_config, field_norm_from_eq
 from yancc_wrapper import yancc_data
 
@@ -51,7 +51,7 @@ from desc.objectives import (
 )
 import desc
 from desc.grid import Grid
-from desc.profiles import SplineProfile
+from desc.profiles import PowerSeriesProfile, SplineProfile
 from desc.geometry import FourierRZToroidalSurface
 from desc.equilibrium import Equilibrium, EquilibriaFamily
 import yancc
@@ -66,6 +66,28 @@ eq_name = "eq_itg_flux_no_nc"  # what this run writes
 fname = "stellarator_opt" + eq_name
 append = True
 use_default = True
+
+# --- pressure self-consistency with MaNTA, inside the one eq.optimize call ----
+# DESC's pressure becomes an even power series to rho^16 (smooth -- a spline's
+# slope rule switches branch inside a DESC step), with p(1) = 0, and a residual
+# pulls it to MaNTA's pressure at MaNTA's nodes. Beyond MaNTA's edge it is
+# pulled to a straight fall from MaNTA's last node to zero at rho = 1, which
+# nothing else would pin: unconstrained, the profile dipped negative there and
+# the optimiser deepened the dip. MaNTA's pressure carries its derivative
+# (PressureObjectives in objective.py), so DESC's model sees how a boundary step
+# moves it. See desc-optimize-stored-energy.py for the bootstrap current too.
+pressure_consistency = False
+# relative to stored_energy_weight, on the mismatch normalised by MaNTA's peak
+# pressure: below a percent it barely registers beside the stored energy
+pressure_weight = 1.0
+# L = M = N for DESC. At 4 the interior was poorly determined: a boundary change
+# of 7e-6 moved it by 1.4% and G by 4%, which stalled the trust region. None
+# keeps the resolution of the loaded equilibrium.
+desc_resolution = 8 if pressure_consistency else None
+# every equilibrium solve, including each trial point's inside the proximal
+# projection, converged to this: at DESC's default tolerance the interior
+# depended on the path taken to a point, and G with it
+tight_solve = dict(ftol=1e-8, xtol=1e-8, gtol=1e-8, maxiter=100)
 
 if append:
     eq_in = eq_name
@@ -228,6 +250,13 @@ else:
     eq_init = eqs[0].copy()
     eq = eqs[-1].copy()
 
+if desc_resolution is not None:
+    eq.change_resolution(
+        L=desc_resolution, M=desc_resolution, N=desc_resolution,
+        L_grid=2 * desc_resolution, M_grid=2 * desc_resolution, N_grid=2 * desc_resolution,
+    )
+    eq.solve(objective="force", optimizer="lsq-exact", verbose=1, **{**tight_solve, "maxiter": 500})
+
 V0 = eq_init.compute("V")["V"]
 
 yancc_wrapper = yancc_data.from_eq(
@@ -247,8 +276,14 @@ def normalized(config):
     return {**config, "Normalization": normalization}
 
 
-# Built once, on the initial equilibrium; it serves every equilibrium after
-itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+# Built once, on the initial equilibrium; it serves every equilibrium after of
+# the same resolution, so on the one being optimised when that has changed. A
+# knot at every MaNTA node: between knots the monotone interpolation's slope
+# rule switches branch inside a geometry step (see itg_rho_at_nodes).
+itg_builder = make_itg_builder(
+    st_config, eq if desc_resolution is not None else eq_init, rho_upper,
+    rho=itg_rho_at_nodes(points),
+)
 
 config = normalized({"Stellarator": st_config, "Solver": initial_solver_config})
 st = StellaratorTransport(
@@ -256,7 +291,34 @@ st = StellaratorTransport(
 )
 st.run()
 
-config = normalized({"Stellarator": st_config, "Solver": solver_config})
+points_np = np.asarray(points)
+if pressure_consistency:
+    # one tracking step: DESC's pressure set to MaNTA's at the starting point
+    pm0 = np.asarray(st.getPressure())
+    p_ref = float(pm0.max())
+    P_MODES = np.arange(0, 17, 2)
+    _A = np.stack([points_np**m for m in P_MODES], 1)
+    _B = _A[:, 1:] - _A[:, :1]  # c_0 = -sum c_k: p(1) = 0
+    _c = np.linalg.lstsq(_B, pm0, rcond=None)[0]
+    _c = np.concatenate([[-_c.sum()], _c])
+    print(f"pressure fit to rho^16: rms {np.sqrt(np.mean((_A @ _c - pm0) ** 2)) / p_ref:.2e} of peak")
+    desc_pressure = PowerSeriesProfile(_c, modes=P_MODES)
+    eq.pressure = desc_pressure
+    eq.solve(objective="force", optimizer="lsq-exact", verbose=1, **{**tight_solve, "maxiter": 500})
+    # between MaNTA's last node and rho = 1
+    RHO_EDGE = np.linspace(points_np[-1], 1.0, 6)[1:-1]
+    GRID_EDGE = Grid(np.stack([RHO_EDGE, 0 * RHO_EDGE, 0 * RHO_EDGE], 1), jitable=True)
+    # the ITG proxy holds the pressure profile's layout from the equilibrium it
+    # was built on, and it has just changed
+    itg_builder = make_itg_builder(st_config, eq, rho_upper, rho=itg_rho_at_nodes(points))
+
+config = normalized(
+    {
+        "Stellarator": st_config,
+        "Solver": solver_config,
+        "PressureObjectives": pressure_consistency,
+    }
+)
 
 # a failed solve returns make_objective's default 1e-10, so 1/G is huge there
 manta_objective = make_objective(
@@ -300,13 +362,26 @@ def objective_from_user_fun(grid, data, params=None):
 
     fields = jax.vmap(lambda d: yancc.field.Field(**d, NFP=grid.NFP))(yancc_dat)
 
-    g, _ = manta_objective(with_itg((fields, Vp, Vpp), itg_builder, params), grid)
+    desc_p = grid.compress(data["p"], surface_label="rho")
+
+    g, manta_pressure = manta_objective(
+        with_itg((fields, Vp, Vpp), itg_builder, params), grid
+    )
 
     print("------------ STORED ENERGY ----------------")
     print(g)
     print("-------------------------------------------")
 
-    return 1 / g
+    if not pressure_consistency:
+        return 1 / g
+    p_edge_target = manta_pressure[-1] * (1.0 - RHO_EDGE) / (1.0 - points_np[-1])
+    p_edge = desc_pressure(GRID_EDGE, params["p_l"])
+    r_p = jnp.concatenate([manta_pressure - desc_p, p_edge_target - p_edge]) / p_ref
+    if not isinstance(manta_pressure, jax.core.Tracer) and not isinstance(desc_p, jax.core.Tracer):
+        mp, dp = np.asarray(manta_pressure), np.asarray(desc_p)
+        print(f"consistency: L2 pressure error {np.linalg.norm(dp - mp) / np.linalg.norm(mp):.3e}")
+    # 1/g first, so ObjectiveHistory's first column is still 1/g
+    return jnp.concatenate([jnp.ravel(1 / g), pressure_weight * r_p])
 
 
 yancc_desc_grid = desc.grid.LinearGrid(
@@ -319,20 +394,25 @@ domainBoundary_rho = 1.0
 def pressure_constraint_fun(params):
     # fix dp/dr=0 at axis and p at the edge
     p_l = params["p_l"]
-    dp0 = desc_pressure(Grid(jnp.zeros((1, 3)), jitable=True), p_l, dr=1)
     p1 = desc_pressure(
         Grid(jnp.zeros((1, 3)).at[0, 0].set(domainBoundary_rho), jitable=True), p_l
     )
+    if pressure_consistency:
+        # the even power series has dp/dr = 0 at the axis built in
+        return jnp.atleast_1d(p1.squeeze())
+    dp0 = desc_pressure(Grid(jnp.zeros((1, 3)), jitable=True), p_l, dr=1)
     return jnp.array([dp0, p1]).squeeze()
 
 
 pi_edge = (
     st_config["EdgeTemperature"] * st_config["EdgeDensity"] * 1e20 * 1000 * 1.6e-19
 )
-if (rho_upper == 1.0):
+if rho_upper == 1.0:
     pressure_constraint_target = jnp.array([0.0, pi_edge])
 else:
     pressure_constraint_target = jnp.array([0.0, 0.0])
+if pressure_consistency:
+    pressure_constraint_target = pressure_constraint_target[1:]
 
 
 def fun_mirror_ratio(grid, data):
@@ -360,7 +440,7 @@ obj_mirror_ratio = ObjectiveFromUser(
 
 # as in desc-optimize-stored-energy.py
 stored_energy_weight = 20.0
-max_it = 40 
+max_it = 40
 
 eqfam = EquilibriaFamily(eq)
 
@@ -377,6 +457,9 @@ objectives = [
         weight=stored_energy_weight,
         grid=yancc_desc_grid,
         deriv_mode="rev",  # a scalar: see jac_chunk_size above
+        # with the pressure residual it is a vector: a row at a time keeps the
+        # backward pass through DESC's geometry and the ITG proxy small
+        **(dict(jac_chunk_size=1) if pressure_consistency else {}),
     ),
 ]
 
@@ -417,13 +500,16 @@ eq, info_out = eq.optimize(
     ftol=1e-4,
     xtol=1e-6,
     gtol=1e-6,
+    **({"options": {"solve_options": tight_solve}} if pressure_consistency else {}),
     verbose=3,
     copy=True,
 )
 
 stored_energy_history.attach(info_out, key="stored_energy_history")
-# objective_from_user_fun returns 1 / g
-info_out["stored_energy_history"] = 1.0 / info_out["stored_energy_history"]
+# objective_from_user_fun returns 1 / g, first when it returns the pressure
+# residual beside it
+_h = np.asarray(info_out["stored_energy_history"])
+info_out["stored_energy_history"] = 1.0 / (_h[:, 0] if _h.ndim > 1 else _h)
 print("stored energy per iteration:", info_out["stored_energy_history"])
 np.save(eq_name + "_stored_energy_history.npy", info_out["stored_energy_history"])
 
