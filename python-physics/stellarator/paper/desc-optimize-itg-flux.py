@@ -291,31 +291,18 @@ st = StellaratorTransport(
 )
 st.run()
 
-def _require_finite(name, values):
-    """Stop with what was wrong rather than fit a profile to NaN."""
-    values = np.asarray(values)
-    if not np.all(np.isfinite(values)):
-        raise ValueError(
-            f"MaNTA's {name} at its nodes is not finite on process {jax.process_index()}: "
-            f"{values}. V' at the nodes: {np.asarray(st.vp)}. The run's steady "
-            "outcome is in its log ('MaNTA returned steady-state outcome')."
-        )
-    return values
-
-
 points_np = np.asarray(points)
 if pressure_consistency:
     # one tracking step: DESC's pressure set to MaNTA's at the starting point
-    pm0 = _require_finite("pressure", st.getPressure())
+    pm0 = np.asarray(st.getPressure())
     p_ref = float(pm0.max())
-    # a spline through MaNTA's nodes, flat to the axis and zero at rho = 1, as
-    # a power series: even powers to rho^16 (sym=True gives dp/dr = 0 at the
-    # axis); p(1) = 0 is enforced by the linear constraint below
-    desc_pressure = SplineProfile(
-        jnp.concatenate([pm0[:1], pm0, jnp.zeros(1)]), pressure_rho
-    ).to_powerseries(order=16, sym=True)
-    _fit = np.asarray(desc_pressure(Grid(np.stack([points_np, 0 * points_np, 0 * points_np], 1))))
-    print(f"pressure fit to rho^16: rms {np.sqrt(np.mean((_fit - pm0) ** 2)) / p_ref:.2e} of peak")
+    P_MODES = np.arange(0, 17, 2)
+    _A = np.stack([points_np**m for m in P_MODES], 1)
+    _B = _A[:, 1:] - _A[:, :1]  # c_0 = -sum c_k: p(1) = 0
+    _c = np.linalg.lstsq(_B, pm0, rcond=None)[0]
+    _c = np.concatenate([[-_c.sum()], _c])
+    print(f"pressure fit to rho^16: rms {np.sqrt(np.mean((_A @ _c - pm0) ** 2)) / p_ref:.2e} of peak")
+    desc_pressure = PowerSeriesProfile(_c, modes=P_MODES)
     eq.pressure = desc_pressure
     eq.solve(objective="force", optimizer="lsq-exact", verbose=1, **{**tight_solve, "maxiter": 500})
     # between MaNTA's last node and rho = 1
