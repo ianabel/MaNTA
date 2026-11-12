@@ -227,6 +227,56 @@ def test_explicit_grid_points_are_honoured(tmp_path):
     assert len(u) > 0
 
 
+def _jax_array(points):
+    jnp = pytest.importorskip("jax.numpy")
+    return jnp.asarray(points)
+
+
+@pytest.mark.parametrize(
+    "as_arraylike",
+    [
+        tuple,
+        np.asarray,
+        lambda p: np.asarray(p, dtype=np.float32),
+        lambda p: np.asarray(p)[:, None][:, 0],  # a strided view
+        _jax_array,
+    ],
+    ids=["tuple", "numpy", "numpy-float32", "numpy-view", "jax"],
+)
+def test_grid_points_may_be_any_arraylike(tmp_path, as_arraylike):
+    """GridPoints as a driver builds it -- usually a numpy array, not a list.
+
+    Every non-table entry of the dict goes through PyToml's tomlFromPy on its
+    way to the [configuration] table a geometry source reads, and that used to
+    handle a numpy *scalar* only: a numpy array reached item() and raised
+    "can only convert an array of size 1 to a Python scalar", a ValueError
+    naming no key, on every configure() of every driver that passes its nodes
+    as an array. The run is compared with the list one bit for bit, so a value
+    altered on the way through would fail as well as one refused. The points
+    are exact in float32, so the float32 and JAX (float32 by default) cases
+    hold the same numbers as the list.
+    """
+
+    points = [0.0, 0.125, 0.375, 0.625, 1.0]
+
+    def solve(grid_points):
+        runner = MaNTA.Runner(LinearDiffusion())
+        cfg = base_config(
+            tmp_path,
+            GridSize=len(points) - 1,
+            GridPoints=grid_points,
+            AbsoluteTolerance=np.asarray([1e-6]),
+        )
+        del cfg["LowerBoundary"]
+        del cfg["UpperBoundary"]
+        runner.configure(cfg)
+        runner.run(0.05)
+        return np.asarray(runner.getSolution(0, None))
+
+    reference = solve(points)
+    assert np.array_equal(solve(as_arraylike(points)), reference)
+
+
 # ------------------------------------------------------------------ runs --
 
 

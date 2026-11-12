@@ -90,18 +90,27 @@ inline toml::value tomlFromPy(py::handle obj)
         return toml::value(std::move(a));
     }
 
-    // A numpy scalar or 0-d array, unwrapped to the Python type it holds and
-    // re-tested above. This is not an exotic input: the caller for whom driving
-    // a C++ case from Python is worth anything is an optimiser sweeping a
-    // parameter, and `arr[i]` off a numpy array is a numpy scalar.
+    // Anything array-like -- a numpy scalar, a numpy or JAX array of any shape
+    // and dtype, anything else with __array__ -- converted by numpy's own
+    // tolist(), which gives the Python scalar a 0-d one holds and nested Python
+    // lists for the rest, and re-tested above.
+    //
+    // Neither half of that is an exotic input. `arr[i]` off a numpy array is a
+    // numpy scalar, which is what an optimiser sweeping a parameter passes; and
+    // the solver's own keys pass through here too -- physicsConfigFromDict puts
+    // every non-table entry under [configuration] -- so `"GridPoints": nodes`
+    // with `nodes` a numpy array reaches this line on every configure().
     //
     // np.float64 happens to subclass Python's float and so is caught above
     // already -- which is the trap, because it makes the common case work and
     // leaves np.float32 and every np.int* (which subclass nothing) throwing.
-    // Going through item() rather than casting to double keeps the integer /
+    // This used to call item(), which handled exactly those scalars and raised
+    // numpy's "can only convert an array of size 1 to a Python scalar" -- a bare
+    // ValueError naming no key -- on any array with more than one element.
+    // tolist() keeps what item() did for a scalar, including the integer /
     // float distinction TOML cares about.
-    if (py::hasattr(obj, "item"))
-        return tomlFromPy(obj.attr("item")());
+    if (py::hasattr(obj, "__array__"))
+        return tomlFromPy(py::module_::import("numpy").attr("asarray")(obj).attr("tolist")());
 
     throw std::invalid_argument(
         "Cannot express a Python " +
