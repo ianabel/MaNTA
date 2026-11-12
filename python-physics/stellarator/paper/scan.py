@@ -346,7 +346,7 @@ for S0 in S0s:
             target=0,
             weight=objective_from_user_weight,
             grid=yancc_desc_grid,
-            deriv_mode="fwd",
+            deriv_mode="rev",  # make_objective's mode, "rev" by default
         ),
     ]
     constraints = [

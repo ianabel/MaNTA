@@ -343,7 +343,8 @@ def main():
     builder = ITGFluxBuilder(proxy)
     print(f"ITG proxy built ({time.time() - t0:.1f} s)")
 
-    manta_objective = make_objective(config, yancc_res=YANCC_RES)
+    # jax.jvp below, and LAST_JVP_PARTS, need the custom JVP
+    manta_objective = make_objective(config, yancc_res=YANCC_RES, mode="fwd")
     fun = objective_fun_factory(manta_objective, builder)
 
     args.plot = os.path.abspath(args.plot)  # before the chdir below

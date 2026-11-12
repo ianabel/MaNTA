@@ -149,7 +149,9 @@ def _itg_node_tangent(itg, itg_tangent, points, n_itg):
     return out
 
 
-def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-10):
+def make_objective(
+    config, yancc_res=None, normalization=None, failure_value=1e-10, mode="rev"
+):
     """Make an external (python) function work with JAX.
 
     The returned function takes `(tree_in, grid)`, where `tree_in` is
@@ -168,7 +170,18 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
     for a driver minimising 1/G (stored energy): a failure is then 1e10 and
     the step is rejected. A driver minimising G itself (the ITG heat flux)
     needs a large value instead.
+
+    `mode` is how DESC may differentiate it: "rev" (the default) gives it a
+    custom VJP, for `deriv_mode="rev"`; "fwd" a custom JVP, for
+    `deriv_mode="fwd"` and for anything calling `jax.jvp` on it (the
+    `fd_check_*` diagnostics, which also read LAST_JVP_PARTS -- recorded in
+    "fwd" only). Each refuses the other direction. Both contract the same G_p
+    the same way, so the Jacobians agree; "rev" also keeps the MaNTA run out
+    of JAX's linearisation, which compiled every function it calls a second
+    time (see the reverse-mode block below).
     """
+    if mode not in ("fwd", "rev"):
+        raise ValueError(f"mode must be 'fwd' or 'rev', not {mode!r}")
     if normalization is None:
         normalization = config.get("Normalization", {})
     # the primal, the time-march fallback and the gradient solve all carry it,
@@ -214,7 +227,6 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
 
     time_march_config = {**config, "Solver": time_march_solver_config}
 
-    @eqx.filter_custom_jvp
     def _objective_base(tree_in, grid):
         fields, Vp, Vpp, itg = _split_tree(tree_in)
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
@@ -258,35 +270,52 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
         _release_if_concrete(st, (G, pi))
         return G, pi
 
-    @_objective_base.def_jvp
-    def _objective_base_jvp(primals, tangents):
-        tree_in, grid = primals
+    def _gradient_run(tree_in, grid):
+        """MaNTA's gradient solve at `tree_in`: (G_all, G_p, pi, st, layout).
+
+        `layout` is what the contraction needs to know about G_p's columns and
+        rows, as plain numbers so it can cross into a custom_vjp's backward
+        pass, which the case cannot.
+        """
         fields, Vp, Vpp, itg = _split_tree(tree_in)
-
-        v, _ = tangents
-        if v is None:
-            v = (None,) * len(tree_in)
-        v_fields, v_Vp, v_Vpp, v_itg = _split_tree(v)
-        v = (v_fields, v_Vp, v_Vpp)
-
-        # compute
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
 
         # runs MaNTA and returns the adjoints + pressure profile
         G_all, G_p, pi, st = StellaratorFun(grad_config, yancc_wrapper, itg)
-        G = G_all[0]
 
         # columns: the field's (np_field, incl. V' and V''), the ITG geometry's
         # (n_itg, zero without the ITG term), then one upper-boundary
         # sensitivity per variable. Rows: npoints per objective, G's first,
         # then (PressureObjectives) one objective per node's pressure.
         adj = st.adjointProblem
-        np_field, np_cell = adj.np_field, adj.np_cell
-        npts = adj.npoints
+        layout = dict(
+            np_field=adj.np_field,
+            np_cell=adj.np_cell,
+            npts=adj.npoints,
+            n_itg=adj.n_itg,
+            pad_width=1 + 2 * fields.nzeta + 2 * fields.ntheta,
+            pressure_objectives=bool(st.pressure_objectives),
+            pnorm=st.pnorm,
+            jnorm=st.params.constants.BootstrapCurrentNormalization() if bootstrap else 1.0,
+        )
+        return G_all, G_p, pi, st, layout
 
-        ntheta = fields.ntheta
-        nzeta = fields.nzeta
-        pad_width = 1 + 2 * (nzeta) + 2 * (ntheta)
+    def _tangent_out(tree_in, v, G_all, G_p, points, boundary_tangent, layout):
+        """The objective's tangent along `v`, linear in `v`: (dp, dpi, djbs).
+
+        The JVP rule calls it with DESC's tangent; the custom_vjp's backward
+        pass differentiates it in `v` (it is linear, so its VJP is its
+        transpose). `boundary_tangent(v_Vp)` is g_D's tangent. dpi is None
+        without PressureObjectives and djbs None without BootstrapObjectives.
+        """
+        fields, Vp, Vpp, itg = _split_tree(tree_in)
+        if v is None:
+            v = (None,) * len(tree_in)
+        v_fields, v_Vp, v_Vpp, v_itg = _split_tree(v)
+        v = (v_fields, v_Vp, v_Vpp)
+        np_field, np_cell, npts = layout["np_field"], layout["np_cell"], layout["npts"]
+        pad_width = layout["pad_width"]
+
         # no field tangent at all when only the ITG geometry moves (a
         # perturbation of what the builder sees with the fields held fixed)
         v_unstack = None
@@ -300,11 +329,10 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
             )(v)
         v_itg_nodes = None
         if itg is not None and v_itg is not None:
-            v_itg_nodes = _itg_node_tangent(itg, v_itg, st.points, adj.n_itg)
+            v_itg_nodes = _itg_node_tangent(itg, v_itg, points, layout["n_itg"])
         dgD = None
-        Vp_tangent = v[1]
-        if Vp_tangent is not None:
-            _, dgD = jax.jvp(st.upper_boundary_values, (Vp,), (Vp_tangent,))
+        if v_Vp is not None:
+            dgD = boundary_tangent(v_Vp)
 
         def contract(rows):
             """One objective's directional derivative from its rows of G_p."""
@@ -323,40 +351,127 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
             return dp_field, dp_itg, dp_boundary
 
         dp_field, dp_itg, dp_boundary = contract(G_p[:npts])
-        jax.debug.callback(_record_jvp_parts, dp_field, dp_itg, dp_boundary)
+        if mode == "fwd":
+            jax.debug.callback(_record_jvp_parts, dp_field, dp_itg, dp_boundary)
         dp = jnp.asarray(dp_field + dp_itg + dp_boundary, dtype=cpu_fp_dtype)
 
         dpi = None
-        if st.pressure_objectives:
+        if layout["pressure_objectives"]:
             # node j's pressure is objective 1 + j; getPressure's units
             dpi = jnp.stack(
                 [
                     sum(contract(G_p[(1 + j) * npts : (2 + j) * npts]))
                     for j in range(npts)
                 ]
-            ) * st.pnorm
+            ) * layout["pnorm"]
             dpi = jnp.asarray(dpi, dtype=cpu_fp_dtype)
 
+        djbs = None
         if bootstrap:
             # node j's bootstrap current is objective b0 + j
-            jnorm = st.params.constants.BootstrapCurrentNormalization()
-            jbs = jnp.asarray(G_all[b0 : b0 + n_nodes] * jnorm, dtype=cpu_fp_dtype)
             djbs = jnp.stack(
                 [
                     sum(contract(G_p[(b0 + j) * npts : (b0 + j + 1) * npts]))
                     for j in range(npts)
                 ]
-            ) * jnorm
+            ) * layout["jnorm"]
             djbs = jnp.asarray(djbs, dtype=cpu_fp_dtype)
+        return dp, dpi, djbs
+
+    def _bootstrap_values(G_all, layout):
+        # node j's bootstrap current is objective b0 + j
+        return jnp.asarray(G_all[b0 : b0 + n_nodes] * layout["jnorm"], dtype=cpu_fp_dtype)
+
+    if mode == "fwd":
+        objective = eqx.filter_custom_jvp(_objective_base)
+
+        @objective.def_jvp
+        def _objective_jvp(primals, tangents):
+            tree_in, grid = primals
+            v, _ = tangents
+            Vp = _split_tree(tree_in)[1]
+            G_all, G_p, pi, st, layout = _gradient_run(tree_in, grid)
+            G = G_all[0]
+
+            def boundary_tangent(v_Vp):
+                return jax.jvp(st.upper_boundary_values, (Vp,), (v_Vp,))[1]
+
+            dp, dpi, djbs = _tangent_out(
+                tree_in, v, G_all, G_p, st.points, boundary_tangent, layout
+            )
+            # what was read from the runner; dp and dpi are tracers whenever the
+            # tangent is (DESC's Jacobian), and say nothing about the runner
             _release_if_concrete(st, (G_all, G_p, pi))
-            return (G, pi, jbs), (dp, dpi, djbs)
+            if bootstrap:
+                return (G, pi, _bootstrap_values(G_all, layout)), (dp, dpi, djbs)
+            return (G, pi), (dp, dpi)
 
-        # what was read from the runner; dp and dpi are tracers whenever the
-        # tangent is (DESC's Jacobian), and say nothing about the runner
+        return objective
+
+    # Reverse mode. A custom_jvp would be linearised by jax.vjp: its rule --
+    # and with it the MaNTA run and every jitted function the run calls back
+    # into, the adjoint's d(yancc)/d(field) included -- runs under JAX's
+    # linearisation trace, which is a different jit cache entry from a plain
+    # call, so each of them compiles a second time on the first reverse-mode
+    # Jacobian (measured with diagnostics/time_field_jac.py --rule: 45 s
+    # against 20 s at low yancc resolution, all of it the second compile of
+    # dke_field_jac). A custom_vjp's forward pass runs as a plain call.
+    objective = eqx.filter_custom_vjp(_objective_base)
+
+    @objective.def_fwd
+    def _objective_fwd(perturbed, tree_in, grid):
+        G_all, G_p, pi, st, layout = _gradient_run(tree_in, grid)
+        Vp = _split_tree(tree_in)[1]
+        # g_D(V') as a matrix, so the backward pass needs no case; always,
+        # since the backward pass transposes at a tangent with every leaf
+        dgD_dVp = jax.jacfwd(st.upper_boundary_values)(Vp)
+        points = jnp.asarray(st.points)
+        G = jnp.asarray(G_all[:1], dtype=cpu_fp_dtype)
+        out = (G, pi, _bootstrap_values(G_all, layout)) if bootstrap else (G, pi)
         _release_if_concrete(st, (G_all, G_p, pi))
-        return (G, pi), (dp, dpi)
+        return out, (G_all, G_p, points, dgD_dVp, layout)
 
-    return _objective_base
+    @objective.def_bwd
+    def _objective_bwd(residuals, grad_obj, perturbed, tree_in, grid):
+        G_all, G_p, points, dgD_dVp, layout = residuals
+        ct_G, ct_pi = grad_obj[0], grad_obj[1]
+        ct_jbs = grad_obj[2] if bootstrap else None
+
+        def boundary_tangent(v_Vp):
+            return dgD_dVp @ v_Vp
+
+        def tangent(v):
+            dp, dpi, djbs = _tangent_out(
+                tree_in, v, G_all, G_p, points, boundary_tangent, layout
+            )
+            return dp, dpi, djbs
+
+        # the tangent's layout has to be the one the JVP rule is handed, since
+        # G_p's columns follow it: a leaf nothing perturbs reaches the JVP as a
+        # symbolic zero, i.e. None, and ravel_pytree drops it -- so the same
+        # leaves are None here, not zeros
+        v0 = jax.tree.map(
+            lambda x, p: jnp.zeros_like(x) if (p and eqx.is_inexact_array(x)) else None,
+            tree_in,
+            perturbed,
+        )
+        outs, pullback = jax.vjp(tangent, v0)
+
+        def cotangent(ct, o):
+            if o is None:
+                return None
+            return jnp.zeros_like(o) if ct is None else jnp.reshape(ct, o.shape).astype(o.dtype)
+
+        cts = (cotangent(ct_G, outs[0]), cotangent(ct_pi, outs[1]), cotangent(ct_jbs, outs[2]))
+        (g,) = pullback(cts)
+        return jax.tree.map(
+            lambda gl, p: gl if (gl is not None and p) else None,
+            g,
+            perturbed,
+            is_leaf=lambda x: x is None,
+        )
+
+    return objective
 
 
 class ObjectiveFromUserWithParams(ObjectiveFromUser):
