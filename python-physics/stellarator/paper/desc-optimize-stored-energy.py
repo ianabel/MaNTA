@@ -132,8 +132,8 @@ initial_run = not append
 # MaNTA's pressure and <J.B> carry their derivatives (PressureObjectives,
 # BootstrapObjectives in objective.py), so DESC's model sees how a boundary
 # step moves them.
-pressure_consistency = False
-bootstrap_consistency = False
+pressure_consistency = True
+bootstrap_consistency = True
 consistency = pressure_consistency or bootstrap_consistency
 # weights relative to stored_energy_weight, on mismatches normalised by MaNTA's
 # peak pressure and peak |<J.B>|
@@ -196,10 +196,11 @@ solver_config = {
     "SteadyStateStepDiagnostics": True,
     # "tauScaling": "Diffusive",
     # "tauUpdate": "ContinuationStep",
+    "SteadyStateSolver": "Newton",
     "NewtonJacobianReuse": 4,
     "NewtonMaxIterations": 25,
     "MaxRejectedSteps": 10,
-    "restart": False,
+    "restart": True,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 0.5,
@@ -284,23 +285,36 @@ else:
 # its current (the free one) are what DESC was tracking MaNTA's with, so they
 # are kept -- replacing them would throw away what the run reached -- and the
 # start needs no MaNTA solve.
-continue_pressure = append and pressure_consistency and isinstance(eq.pressure, PowerSeriesProfile)
+continue_pressure = (
+    append and pressure_consistency and isinstance(eq.pressure, PowerSeriesProfile)
+)
 continue_current = (
-    append and bootstrap_consistency and isinstance(eq.current, PowerSeriesProfile)
+    append
+    and bootstrap_consistency
+    and isinstance(eq.current, PowerSeriesProfile)
     and bool(np.any(np.asarray(eq.c_l) != 0))
 )
 if not continue_pressure:
     eq.pressure = desc_pressure
 if desc_resolution is not None:
     eq.change_resolution(
-        L=desc_resolution, M=desc_resolution, N=desc_resolution,
-        L_grid=2 * desc_resolution, M_grid=2 * desc_resolution, N_grid=2 * desc_resolution,
+        L=desc_resolution,
+        M=desc_resolution,
+        N=desc_resolution,
+        L_grid=2 * desc_resolution,
+        M_grid=2 * desc_resolution,
+        N_grid=2 * desc_resolution,
     )
 if bootstrap_consistency and not continue_current:
     # a current DESC can move: the full power series to rho^L, zero to start
     eq.current = PowerSeriesProfile(np.zeros(eq.L + 1), sym=False)
 if desc_resolution is not None or bootstrap_consistency:
-    eq.solve(objective="force", optimizer="lsq-exact", verbose=1, **{**tight_solve, "maxiter": 500})
+    eq.solve(
+        objective="force",
+        optimizer="lsq-exact",
+        verbose=1,
+        **{**tight_solve, "maxiter": 500},
+    )
 
 eq_init = eq.copy()
 
@@ -338,7 +352,9 @@ config = normalized(config)
 # # # %%
 # with jax.log_compiles(True):
 #
-itg_builder = make_itg_builder(config["Stellarator"], eq_init, rho_upper, rho=itg_rho_at_nodes(points))
+itg_builder = make_itg_builder(
+    config["Stellarator"], eq_init, rho_upper, rho=itg_rho_at_nodes(points)
+)
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
 )
@@ -356,10 +372,9 @@ def current_from_JdotB(e, jb, rho):
     d = e.compute(["psi_r", "p_r", "current", "<|B|^2>"], grid=g)
     c = lambda k: np.asarray(g.compress(d[k]))
     mu_0 = 4e-7 * np.pi
-    current_r = (
-        -mu_0 * c("current") / c("<|B|^2>") * c("p_r")
-        + 2 * np.pi * c("psi_r") * jb / c("<|B|^2>")
-    )
+    current_r = -mu_0 * c("current") / c("<|B|^2>") * c("p_r") + 2 * np.pi * c(
+        "psi_r"
+    ) * jb / c("<|B|^2>")
     XX = np.vander(rho, e.L + 1)[:, :-1]
     c_r = np.pad(np.linalg.lstsq(XX, current_r, rcond=None)[0], (0, 1))
     current = np.polyval(np.polyint(c_r), rho)
@@ -387,12 +402,20 @@ if consistency:
     if pressure_consistency:
         # between MaNTA's last node and rho = 1
         RHO_EDGE = np.linspace(points_np[-1], 1.0, 6)[1:-1]
-        GRID_EDGE = Grid(np.stack([RHO_EDGE, 0 * RHO_EDGE, 0 * RHO_EDGE], 1), jitable=True)
+        GRID_EDGE = Grid(
+            np.stack([RHO_EDGE, 0 * RHO_EDGE, 0 * RHO_EDGE], 1), jitable=True
+        )
     if continue_pressure:
         desc_pressure = eq.pressure
-        p_ref = float(np.max(np.asarray(desc_pressure(
-            Grid(np.stack([points_np, 0 * points_np, 0 * points_np], 1))
-        ))))
+        p_ref = float(
+            np.max(
+                np.asarray(
+                    desc_pressure(
+                        Grid(np.stack([points_np, 0 * points_np, 0 * points_np], 1))
+                    )
+                )
+            )
+        )
         print("pressure: continuing the loaded equilibrium's power series")
     elif pressure_consistency:
         # one tracking step: DESC's pressure set to MaNTA's at the starting point
@@ -403,10 +426,17 @@ if consistency:
         _B = _A[:, 1:] - _A[:, :1]  # c_0 = -sum c_k: p(1) = 0
         _c = np.linalg.lstsq(_B, pm0, rcond=None)[0]
         _c = np.concatenate([[-_c.sum()], _c])
-        print(f"pressure fit to rho^16: rms {np.sqrt(np.mean((_A @ _c - pm0) ** 2)) / p_ref:.2e} of peak")
+        print(
+            f"pressure fit to rho^16: rms {np.sqrt(np.mean((_A @ _c - pm0) ** 2)) / p_ref:.2e} of peak"
+        )
         desc_pressure = PowerSeriesProfile(_c, modes=P_MODES)
         eq.pressure = desc_pressure
-        eq.solve(objective="force", optimizer="lsq-exact", verbose=1, **{**tight_solve, "maxiter": 500})
+        eq.solve(
+            objective="force",
+            optimizer="lsq-exact",
+            verbose=1,
+            **{**tight_solve, "maxiter": 500},
+        )
     if continue_current:
         j_ref = float(np.abs(JdotB_at(eq, points_np)).max())
         print("current: continuing the loaded equilibrium's current profile")
@@ -416,9 +446,16 @@ if consistency:
         j_ref = float(np.abs(jb0).max())
         for _k in range(3):
             eq.c_l = current_from_JdotB(eq, jb0, points_np)
-            eq.solve(objective="force", optimizer="lsq-exact", verbose=1, **{**tight_solve, "maxiter": 500})
+            eq.solve(
+                objective="force",
+                optimizer="lsq-exact",
+                verbose=1,
+                **{**tight_solve, "maxiter": 500},
+            )
             _jd = JdotB_at(eq, points_np)
-            print(f"current step {_k}: L2 <J.B> error {np.linalg.norm(_jd - jb0) / np.linalg.norm(jb0):.3e}")
+            print(
+                f"current step {_k}: L2 <J.B> error {np.linalg.norm(_jd - jb0) / np.linalg.norm(jb0):.3e}"
+            )
     if itg_builder is not None:
         # the ITG proxy holds the profiles' layout from the equilibrium it was
         # built on, and they have just changed
@@ -677,9 +714,24 @@ def objective_from_user_fun_bootstrap(grid, data, params=None):
     # keys a user function needs from its source, so they are all named here --
     # objective_from_user_fun's, and <J*B> -- and <J*B> is computed only when
     # this is the function in use.
-    (data["B^theta"], data["B^zeta"], data["B_theta"], data["B_zeta"], data["|B|"],
-     data["|B|_t"], data["|B|_z"], data["sqrt(g)"], data["Psi"], data["a"], data["R0"],
-     data["iota"], data["V(r)"], data["V_r(r)"], data["V_rr(r)"], data["p"])
+    dat = (
+        data["B^theta"],
+        data["B^zeta"],
+        data["B_theta"],
+        data["B_zeta"],
+        data["|B|"],
+        data["|B|_t"],
+        data["|B|_z"],
+        data["sqrt(g)"],
+        data["Psi"],
+        data["a"],
+        data["R0"],
+        data["iota"],
+        data["V(r)"],
+        data["V_r(r)"],
+        data["V_rr(r)"],
+        data["p"],
+    )
     desc_jb = grid.compress(data["<J*B>"], surface_label="rho")
     return objective_from_user_fun(grid, data, params, desc_jb=desc_jb)
 
@@ -774,7 +826,9 @@ objectives = [
         if itg_builder is not None or pressure_consistency
         else ObjectiveFromUser
     )(
-        objective_from_user_fun_bootstrap if bootstrap_consistency else objective_from_user_fun,
+        objective_from_user_fun_bootstrap
+        if bootstrap_consistency
+        else objective_from_user_fun,
         eqfam[-1],
         target=0.0,
         weight=objective_from_user_weight,
@@ -782,12 +836,18 @@ objectives = [
         # need this assuming manta only has vjp, if using jvp switch to fwd.
         # With the consistency residuals the term is a vector: reverse mode a
         # row at a time keeps the backward pass through DESC's geometry small
-        **(dict(deriv_mode="rev", jac_chunk_size=1) if consistency else dict(deriv_mode="fwd")),
+        **(
+            dict(deriv_mode="rev", jac_chunk_size=1)
+            if consistency
+            else dict(deriv_mode="fwd")
+        ),
     ),
 ]
 
 # blocked: each objective's Jacobian uses its own jac_chunk_size
-objective = ObjectiveFunction(objectives, deriv_mode="blocked" if consistency else "auto")
+objective = ObjectiveFunction(
+    objectives, deriv_mode="blocked" if consistency else "auto"
+)
 objective.build(use_jit=False)
 # DESC returns the iterates but not the objective at each; record the MaNTA
 # term (objective_from_user_fun's 1/g) as it is evaluated
