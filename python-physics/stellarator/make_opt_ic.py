@@ -1,5 +1,5 @@
 from stellarator_multichannel import StellaratorTransport
-from itg_wrapper import make_itg_builder, itg_at
+from itg_wrapper import make_itg_builder, itg_at, itg_rho_at_nodes
 from yancc_wrapper import yancc_data
 import yancc
 import jax.numpy as jnp
@@ -135,6 +135,6 @@ V0 = eq.compute("V")["V"]
 yancc_wrapper = yancc_data.from_eq(
     points, eq=eq_init, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
 )
-itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper, rho=itg_rho_at_nodes(points))
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict))
 st.run()

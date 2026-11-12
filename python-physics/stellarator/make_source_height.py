@@ -15,7 +15,7 @@ from typing import NamedTuple
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 import matplotlib.pyplot as plt
 from stellarator_multichannel import StellaratorTransport
-from itg_wrapper import make_itg_builder, itg_at
+from itg_wrapper import make_itg_builder, itg_at, itg_rho_at_nodes
 from netCDF4 import Dataset
 from interpax import Akima1DInterpolator
 from desc.equilibrium import Equilibrium
@@ -176,7 +176,7 @@ def compute_physics(nt, nz, na, nx, Sn=0.0, Spi=0.0, Spe=0.0):
 
     yancc_wrapper = yancc_data.from_eq(points, eq=eq_init, nt=nt, nz=nz, **yancc_res)
 
-    itg = itg_at(make_itg_builder(st_config, eq_init, rho_upper), eq_init.params_dict)
+    itg = itg_at(make_itg_builder(st_config, eq_init, rho_upper, rho=itg_rho_at_nodes(points)), eq_init.params_dict)
     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg)
     states = make_test_state(points, st)
     st.layout = {}

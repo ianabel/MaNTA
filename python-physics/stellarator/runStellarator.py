@@ -3,7 +3,7 @@ import os
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from itg_wrapper import make_itg_builder, itg_at
+from itg_wrapper import make_itg_builder, itg_at, itg_rho_at_nodes
 from objective import make_objective
 
 from config import rescale_config, field_norm_from_eq
@@ -183,7 +183,7 @@ config = normalized(config)
 # # # %%
 # with jax.log_compiles(True):
 #
-itg_builder = make_itg_builder(st_config, eq, rho_upper)
+itg_builder = make_itg_builder(st_config, eq, rho_upper, rho=itg_rho_at_nodes(points))
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict)
 )

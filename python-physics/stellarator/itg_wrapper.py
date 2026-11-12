@@ -452,6 +452,27 @@ def make_itg_flux(eq, rho, floor="subtract", floor_width=0.1, **proxy_kwargs):
 DEFAULT_ITG_MODEL_DIR = os.environ.get("ITG_NN_DIR")
 
 
+ITG_RHO_MIN = 0.1
+
+
+def itg_rho_at_nodes(points, rho_min=ITG_RHO_MIN):
+    """Tabulation radii with a knot at every MaNTA physics node.
+
+    Pass the result as `make_itg_builder(..., rho=...)`. `signals_at` then
+    reads each node off a knot, where the interpolant is the table value
+    itself and its derivative is the table's: the monotone spline's slope
+    rule, which switches branch wherever neighbouring secants change sign,
+    no longer enters. Between knots it does -- at the 12-surface default,
+    hundreds of entries switched branch within a geometry step of 1e-3, and
+    a finite difference of the ITG flux disagreed with its (correct) JVP by
+    3%. It is also the geometry the case actually reads, as yancc's is.
+
+    Nodes inside `rho_min` are held at it, as `signals_at` holds them now:
+    the shear-normalised GX coefficients are singular on the axis.
+    """
+    return np.unique(np.clip(np.asarray(points, dtype=float), rho_min, None))
+
+
 def make_itg_builder(
     st_config,
     eq,
@@ -459,6 +480,7 @@ def make_itg_builder(
     model_dir=None,
     n_rho=12,
     n_ensemble=10,
+    rho=None,
     **proxy_kwargs,
 ):
     """The ITGFluxBuilder a driver needs, or None when `useITGProxy` is unset.
@@ -469,6 +491,10 @@ def make_itg_builder(
     singular; the flux is held at its innermost value inwards, and V' -> 0
     there. `model_dir` is the itg-proxy demo's `neural_networks/`, from the
     ITG_MODEL_DIR environment variable when not given.
+
+    `rho` are the tabulation radii; `itg_rho_at_nodes(points)` puts one at
+    each MaNTA node, which is what an optimisation wants (see there). Without
+    it, `n_rho` surfaces evenly spaced from 0.1 to `rho_upper`.
     """
     if not st_config.get("useITGProxy", False):
         return None
@@ -482,7 +508,7 @@ def make_itg_builder(
         )
     proxy = build_itg_proxy(
         eq,
-        np.linspace(0.1, rho_upper, n_rho),
+        np.linspace(ITG_RHO_MIN, rho_upper, n_rho) if rho is None else rho,
         ensemble_dir=os.path.join(model_dir, "cyclic_invariant_models"),
         ensemble_csv=os.path.join(model_dir, "deephyper_exp", "results.csv"),
         n_ensemble=n_ensemble,

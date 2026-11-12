@@ -3,7 +3,7 @@ import sys
 sys.path.append("..")
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective, ObjectiveFromUserWithParams
-from itg_wrapper import make_itg_builder, with_itg
+from itg_wrapper import make_itg_builder, with_itg, itg_rho_at_nodes
 from yancc_wrapper import yancc_data
 import yancc
 import jax.numpy as jnp
@@ -161,7 +161,7 @@ eq.solve(x_scale="ess")[0]
 # eq = desc.io.load("eq_omnigenity.h5")
 
 eq_init = eq.copy()
-itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper, rho=itg_rho_at_nodes(points))
 
 
 yancc_wrapper = yancc_data.from_eq(

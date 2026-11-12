@@ -6,7 +6,7 @@ sys.path.append("..")
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective, ObjectiveFromUserWithParams
-from itg_wrapper import make_itg_builder, itg_at, with_itg
+from itg_wrapper import make_itg_builder, itg_at, with_itg, itg_rho_at_nodes
 
 # os.environ.pop("TEST_STELLARATOR", None)
 from yancc_wrapper import yancc_data
@@ -240,7 +240,7 @@ yancc_wrapper = yancc_data.from_eq(
 # # # %%
 # with jax.log_compiles(True):
 #
-itg_builder = make_itg_builder(st_config, eq_init, rho_upper)
+itg_builder = make_itg_builder(st_config, eq_init, rho_upper, rho=itg_rho_at_nodes(points))
 st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict))
 st.run()
 #
