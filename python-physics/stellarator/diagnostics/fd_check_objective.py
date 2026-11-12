@@ -109,6 +109,13 @@ def parse_args():
     p.add_argument("--ss-tol", type=float, default=1e-10, help="primal SteadyStateTolerance")
     p.add_argument("--evolve-density", action="store_true")
     p.add_argument("--layout-only", action="store_true")
+    p.add_argument(
+        "--mode",
+        choices=["fwd", "rev"],
+        default="fwd",
+        help="make_objective's mode: fwd checks jax.jvp of its custom JVP, rev "
+        "contracts one jax.grad of its custom VJP with each perturbation",
+    )
     return p.parse_args()
 
 
@@ -291,7 +298,7 @@ def layout_report(data, grid):
 
 
 def fd_check(args, data, grid, config):
-    objective = make_objective(config, yancc_res=YANCC_RES)
+    objective = make_objective(config, yancc_res=YANCC_RES, mode=args.mode)
 
     def f(d):
         G, _ = objective(build_tree(d, grid), grid)
@@ -309,7 +316,18 @@ def fd_check(args, data, grid, config):
         sys.exit("base solve did not converge (objective returned its 1e-10 sentinel)")
 
     jvps = {}
-    for k in keys:
+    if args.mode == "rev":
+        # one gradient, then every directional derivative is a dot product
+        t0 = time.time()
+        grad = jax.grad(f)(data)
+        print(f"  grad (one vjp) ({time.time() - t0:.1f} s)")
+        for k in keys:
+            dk = perturbation(data, k, rho_nodes)
+            jvps[k] = float(
+                sum(jnp.vdot(grad[q], dk[q]) for q in data if dk[q] is not None)
+            )
+            print(f"  vjp  {k:10s} {jvps[k]: .6e}")
+    for k in keys if args.mode == "fwd" else ():
         t0 = time.time()
         _, dG = jax.jvp(f, (data,), (perturbation(data, k, rho_nodes),))
         jvps[k] = float(dG)

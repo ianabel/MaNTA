@@ -832,14 +832,11 @@ objectives = [
         target=0.0,
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
-        # need this assuming manta only has vjp, if using jvp switch to fwd.
-        # With the consistency residuals the term is a vector: reverse mode a
-        # row at a time keeps the backward pass through DESC's geometry small
-        **(
-            dict(deriv_mode="rev", jac_chunk_size=1)
-            if consistency
-            else dict(deriv_mode="fwd")
-        ),
+        # make_objective's mode, "rev" by default. With the consistency
+        # residuals the term is a vector: reverse mode a row at a time keeps
+        # the backward pass through DESC's geometry small
+        deriv_mode="rev",
+        **(dict(jac_chunk_size=1) if consistency else {}),
     ),
 ]
 

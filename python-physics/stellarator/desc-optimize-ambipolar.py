@@ -463,8 +463,7 @@ objectives = [
         target=0.0,
         weight=objective_from_user_weight,
         grid=yancc_desc_grid,
-        deriv_mode="fwd",
-        # need this assuming manta only has vjp, if using jvp switch to fwd
+        deriv_mode="rev",  # make_objective's mode, "rev" by default
     ),
 ]
 
