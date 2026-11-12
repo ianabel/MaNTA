@@ -113,6 +113,10 @@ def make_config(Spi=300.0, Sn=1.2):
 
 keep_physics = False
 append = False
+# the cold MaNTA solve before optimising. Appending usually skips it; then the
+# consistency options need the loaded equilibrium to come from a consistency
+# run, whose profiles they continue (see below)
+initial_run = not append
 
 # --- self-consistency with MaNTA, inside the one eq.optimize call -------------
 # pressure_consistency: DESC's pressure becomes an even power series to rho^16
@@ -276,13 +280,23 @@ if not append:
 else:
     eqs = desc.io.load(eq_name + "_all_equilibria.h5")
     eq = eqs[-1].copy()
-eq.pressure = desc_pressure
+# Appending onto a consistency run: its pressure (the even power series) and
+# its current (the free one) are what DESC was tracking MaNTA's with, so they
+# are kept -- replacing them would throw away what the run reached -- and the
+# start needs no MaNTA solve.
+continue_pressure = append and pressure_consistency and isinstance(eq.pressure, PowerSeriesProfile)
+continue_current = (
+    append and bootstrap_consistency and isinstance(eq.current, PowerSeriesProfile)
+    and bool(np.any(np.asarray(eq.c_l) != 0))
+)
+if not continue_pressure:
+    eq.pressure = desc_pressure
 if desc_resolution is not None:
     eq.change_resolution(
         L=desc_resolution, M=desc_resolution, N=desc_resolution,
         L_grid=2 * desc_resolution, M_grid=2 * desc_resolution, N_grid=2 * desc_resolution,
     )
-if bootstrap_consistency:
+if bootstrap_consistency and not continue_current:
     # a current DESC can move: the full power series to rho^L, zero to start
     eq.current = PowerSeriesProfile(np.zeros(eq.L + 1), sym=False)
 if desc_resolution is not None or bootstrap_consistency:
@@ -328,7 +342,8 @@ itg_builder = make_itg_builder(config["Stellarator"], eq_init, rho_upper, rho=it
 st = StellaratorTransport(
     config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq_init.params_dict)
 )
-st.run()
+if initial_run:
+    st.run()
 
 
 def current_from_JdotB(e, jb, rho):
@@ -360,10 +375,29 @@ def JdotB_at(e, rho):
 
 points_np = np.asarray(points)
 if consistency:
-    # one tracking step: DESC's profiles set to MaNTA's at the starting point
-    pm0 = np.asarray(st.getPressure())
-    p_ref = float(pm0.max())
+    if (
+        (pressure_consistency and not continue_pressure)
+        or (bootstrap_consistency and not continue_current)
+    ) and not initial_run:
+        raise ValueError(
+            "the consistency options start DESC's profiles from MaNTA's, which needs "
+            "the initial MaNTA solve: set initial_run = True, or append onto an "
+            "equilibrium from a consistency run, whose profiles are continued"
+        )
     if pressure_consistency:
+        # between MaNTA's last node and rho = 1
+        RHO_EDGE = np.linspace(points_np[-1], 1.0, 6)[1:-1]
+        GRID_EDGE = Grid(np.stack([RHO_EDGE, 0 * RHO_EDGE, 0 * RHO_EDGE], 1), jitable=True)
+    if continue_pressure:
+        desc_pressure = eq.pressure
+        p_ref = float(np.max(np.asarray(desc_pressure(
+            Grid(np.stack([points_np, 0 * points_np, 0 * points_np], 1))
+        ))))
+        print("pressure: continuing the loaded equilibrium's power series")
+    elif pressure_consistency:
+        # one tracking step: DESC's pressure set to MaNTA's at the starting point
+        pm0 = np.asarray(st.getPressure())
+        p_ref = float(pm0.max())
         P_MODES = np.arange(0, 17, 2)
         _A = np.stack([points_np**m for m in P_MODES], 1)
         _B = _A[:, 1:] - _A[:, :1]  # c_0 = -sum c_k: p(1) = 0
@@ -372,11 +406,12 @@ if consistency:
         print(f"pressure fit to rho^16: rms {np.sqrt(np.mean((_A @ _c - pm0) ** 2)) / p_ref:.2e} of peak")
         desc_pressure = PowerSeriesProfile(_c, modes=P_MODES)
         eq.pressure = desc_pressure
-        # between MaNTA's last node and rho = 1
-        RHO_EDGE = np.linspace(points_np[-1], 1.0, 6)[1:-1]
-        GRID_EDGE = Grid(np.stack([RHO_EDGE, 0 * RHO_EDGE, 0 * RHO_EDGE], 1), jitable=True)
         eq.solve(objective="force", optimizer="lsq-exact", verbose=1, **{**tight_solve, "maxiter": 500})
-    if bootstrap_consistency:
+    if continue_current:
+        j_ref = float(np.abs(JdotB_at(eq, points_np)).max())
+        print("current: continuing the loaded equilibrium's current profile")
+    elif bootstrap_consistency:
+        # Landreman & Catto steps from MaNTA's <J.B> at the starting point
         jb0 = np.asarray(st.getBootstrapCurrent())
         j_ref = float(np.abs(jb0).max())
         for _k in range(3):

@@ -292,7 +292,20 @@ st = StellaratorTransport(
 st.run()
 
 points_np = np.asarray(points)
-if pressure_consistency:
+# Appending onto a consistency run: its pressure is already the power series
+# DESC was tracking MaNTA's with, and refitting it would throw away what the run
+# reached, so it is continued.
+continue_pressure = append and pressure_consistency and isinstance(eq.pressure, PowerSeriesProfile)
+if continue_pressure:
+    desc_pressure = eq.pressure
+    p_ref = float(np.max(np.asarray(desc_pressure(
+        Grid(np.stack([points_np, 0 * points_np, 0 * points_np], 1))
+    ))))
+    print("pressure: continuing the loaded equilibrium's power series")
+    # between MaNTA's last node and rho = 1
+    RHO_EDGE = np.linspace(points_np[-1], 1.0, 6)[1:-1]
+    GRID_EDGE = Grid(np.stack([RHO_EDGE, 0 * RHO_EDGE, 0 * RHO_EDGE], 1), jitable=True)
+elif pressure_consistency:
     # one tracking step: DESC's pressure set to MaNTA's at the starting point
     pm0 = np.asarray(st.getPressure())
     p_ref = float(pm0.max())
