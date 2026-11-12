@@ -5443,11 +5443,18 @@ void SystemSolver::computeAdjointGradients()
     // identical, and a finite difference put the second out by exactly that factor
     // of four.
     //
-    // F_p does not depend on the objective, so it is rebuilt once per objective
-    // rather than cached. That costs a factor of ng in the parameter-derivative
-    // hooks and nothing at ng = 1, which is every case in the tree bar this one;
-    // caching it would cost np * nCells * localDOF, which with spatial parameters
-    // is not obviously the better trade.
+    // dF/dp does not depend on the objective either, so the adjoint problem is
+    // asked for it once, here, and every objective's accumulation reads the
+    // same set. It used to be evaluated inside the loop, once per objective, on
+    // the reasoning that caching F_p would cost np * nCells * localDOF. But what
+    // is cached is the raw nodal derivatives, which one iteration allocated in
+    // full anyway -- holding them across the loop costs no more memory than a
+    // single pass -- while F_p itself is still built a cell at a time below.
+    // The factor of ng it saved nothing on was real: a case whose dF/dp is a
+    // reverse-mode Jacobian through a drift-kinetic solve, with 91 objectives
+    // (an objective plus a pressure and a bootstrap current at each of 45
+    // nodes), made 91 identical evaluations of it per gradient, which on
+    // production resolution did not finish in four hours.
     //
     // The operator is the same for every objective, so it is assembled once:
     // from the last Jacobian build when that was taken at this state, which a
@@ -5455,33 +5462,20 @@ void SystemSolver::computeAdjointGradients()
     // evaluation here otherwise.
     assembleAdjointOperator(adjointDerivativesAt(y, dydt, jt));
     initialised = true;
+    AdjointParameterDerivatives dFdp = adjointParameterDerivatives();
     for (Index gIndex = 0; gIndex < adjointProblem->getNg(); ++gIndex)
     {
         G_y = assembleObjectiveGradient(*adjointProblem, gIndex, y, jt, &G_mu, &G_field, &G_geometry);
         solveAdjointState();
         storeAdjointSolution(gIndex, y, true);
-        accumulateAdjointGradients(gIndex);
+        accumulateAdjointGradients(gIndex, dFdp);
     }
 }
 
-// One objective's contribution to G_p, at the adjoint state solveAdjointState
-// has already left in adjoint_squ.
-//
-// Split out of the loop above rather than inlined into it because the two halves
-// have different preconditions: this one requires the adjoint *matrices* to be
-// the ones its caller wants, and initializeMatricesForAdjointSolve rebuilds them
-// from scratch. A test that zeroes a transposed coupling block to check the
-// block is read at all -- which is the only thing standing between a wrong
-// gradient and a silently plausible one, see
-// field_adjoint_tests/dropping_a_transposed_coupling_block_makes_the_gradient_wrong
-// -- cannot do that through computeAdjointGradients(), because the rebuild
-// happens after the zeroing and undoes it. With the accumulation callable on its
-// own the sequence is init, zero, solve, accumulate, and the block stays zeroed.
-void SystemSolver::accumulateAdjointGradients(Index gIndex)
+SystemSolver::AdjointParameterDerivatives SystemSolver::adjointParameterDerivatives()
 {
-    GlobalStateMatrix dSigmadp(nVars);
-    GlobalStateMatrix dSourcedp(nVars);
-    GlobalStateMatrix dAuxdp(nAux);
+    AdjointParameterDerivatives dFdp{GlobalStateMatrix(nVars), GlobalStateMatrix(nVars),
+                                     GlobalStateMatrix(nAux)};
 
     // dF/dp is evaluated at the same state, and with the same geometry, as the
     // residual it differentiates: dSigmaFn_dp on a geometry-dependent case reads
@@ -5498,15 +5492,43 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex)
     logmsg<LOG_LEVEL::INFO>("Computing adjoints for {} parameters.", adjointProblem->getNp());
     for (Index var = 0; var < nVars; var++)
     {
-      dSigmadp.add(nCells, derivK, np_internal, nScalars, np_internal);
-      dSourcedp.add(nCells, derivK, np_internal, nScalars, np_internal);
+        dFdp.dSigmadp.add(nCells, derivK, np_internal, nScalars, np_internal);
+        dFdp.dSourcedp.add(nCells, derivK, np_internal, nScalars, np_internal);
     }
     for (Index aux = 0; aux < nAux; aux++)
     {
-      dAuxdp.add(nCells, derivK, np_internal, nScalars, np_internal);
+        dFdp.dAuxdp.add(nCells, derivK, np_internal, nScalars, np_internal);
     }
-    adjointProblem->ComputePhysicsDerivatives({dSigmadp, dSourcedp, dAuxdp}, states, points);
-    
+    adjointProblem->ComputePhysicsDerivatives({dFdp.dSigmadp, dFdp.dSourcedp, dFdp.dAuxdp},
+                                              states, points);
+    return dFdp;
+}
+
+void SystemSolver::accumulateAdjointGradients(Index gIndex)
+{
+    AdjointParameterDerivatives dFdp = adjointParameterDerivatives();
+    accumulateAdjointGradients(gIndex, dFdp);
+}
+
+// One objective's contribution to G_p, at the adjoint state solveAdjointState
+// has already left in adjoint_squ.
+//
+// Split out of the loop above rather than inlined into it because the two halves
+// have different preconditions: this one requires the adjoint *matrices* to be
+// the ones its caller wants, and initializeMatricesForAdjointSolve rebuilds them
+// from scratch. A test that zeroes a transposed coupling block to check the
+// block is read at all -- which is the only thing standing between a wrong
+// gradient and a silently plausible one, see
+// field_adjoint_tests/dropping_a_transposed_coupling_block_makes_the_gradient_wrong
+// -- cannot do that through computeAdjointGradients(), because the rebuild
+// happens after the zeroing and undoes it. With the accumulation callable on its
+// own the sequence is init, zero, solve, accumulate, and the block stays zeroed.
+void SystemSolver::accumulateAdjointGradients(Index gIndex, AdjointParameterDerivatives &dFdp)
+{
+    GlobalStateMatrix &dSigmadp = dFdp.dSigmadp;
+    GlobalStateMatrix &dSourcedp = dFdp.dSourcedp;
+    GlobalStateMatrix &dAuxdp = dFdp.dAuxdp;
+
     // The explicit half, dG/dp|explicit, seeded here rather than for every
     // objective before the loop. An objective owns its own rows of G_p and
     // nothing else writes them, so seeding and subtracting in one place makes

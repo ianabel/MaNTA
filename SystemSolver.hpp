@@ -1538,10 +1538,22 @@ class SystemSolver
         // does forwards: without one this *is* solveTransportAdjoint.
         void solveAdjointState();
 
+        // The adjoint problem's dF/dp -- dSigma/dp, dSources/dp and dAux/dp at
+        // every physics node -- at the state the solver is in (y, jt). It does
+        // not depend on the objective, so computeAdjointGradients evaluates it
+        // once and hands the same set to every objective's accumulation.
+        struct AdjointParameterDerivatives
+        {
+            GlobalStateMatrix dSigmadp, dSourcedp, dAuxdp;
+        };
+        AdjointParameterDerivatives adjointParameterDerivatives();
+
         // One objective's contribution to G_p, at whatever adjoint state and
         // adjoint matrices are currently in place. See the definition for why it
-        // is callable separately from computeAdjointGradients().
+        // is callable separately from computeAdjointGradients(). The one-argument
+        // form evaluates dF/dp itself; the loop passes the set it evaluated once.
         void accumulateAdjointGradients(Index gIndex);
+        void accumulateAdjointGradients(Index gIndex, AdjointParameterDerivatives &dFdp);
 
         // The transpose of solveTransportJac's bordered elimination. With
         // J = [[A, -V], [W^T, N]], the Schur complement onto the scalars is
