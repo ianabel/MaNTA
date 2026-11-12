@@ -182,9 +182,19 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
 
         pi = jnp.array(st.getPressure())
 
-        return G[0], G_p, pi, st
+        return G, G_p, pi, st
 
     solver_config = config["Solver"]
+    # BootstrapObjectives: the objective returns (G, p, <J||B>) rather than
+    # (G, p), the bootstrap current at MaNTA's nodes in A T m^-2. Its values
+    # come out of G and its tangent out of G_p, both traceable, rather than from
+    # getBootstrapCurrent, which reads the runner on the host.
+    bootstrap = bool(config.get("BootstrapObjectives", False))
+    n_nodes = b0 = 0
+    if bootstrap:
+        # the grid is fixed (StellaratorTransport refuses otherwise)
+        n_nodes = (len(solver_config["GridPoints"]) - 1) * (solver_config["PolynomialDegree"] + 1)
+        b0 = 1 + (n_nodes if config.get("PressureObjectives", False) else 0)
     time_march_solver_config = solver_config.copy()
     time_march_solver_config["SteadyStateSolver"] = "PseudoTransient"
     time_march_solver_config["restart"] = False
@@ -216,18 +226,31 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
 
             def true_fn():
                 # the objective alone: with PressureObjectives the runner
-                # carries the node pressures after it
-                return st.G()[0][:1]
+                # carries the node pressures after it, and with
+                # BootstrapObjectives the node bootstrap currents after those
+                G_all = st.G()[0]
+                if not bootstrap:
+                    return G_all[:1]
+                jnorm = st.params.constants.BootstrapCurrentNormalization()
+                return jnp.concatenate([G_all[:1], G_all[b0 : b0 + n_nodes] * jnorm])
 
             def false_fn():
-                return jnp.array([failure_value], dtype=cpu_fp_dtype)
+                out = jnp.array([failure_value], dtype=cpu_fp_dtype)
+                if not bootstrap:
+                    return out
+                return jnp.concatenate([out, jnp.zeros(n_nodes, dtype=cpu_fp_dtype)])
                 # ec = st2.run()
                 #
                 # return st2.G()[0]
 
-            G = jax.lax.cond(ec, true_fn, false_fn)
+            out = jax.lax.cond(ec, true_fn, false_fn)
+            G = out[:1]
 
         pi = jnp.array(st.getPressure())
+        if bootstrap:
+            jbs = jnp.asarray(out[1:], dtype=cpu_fp_dtype)
+            _release_if_concrete(st, (G, pi, jbs))
+            return G, pi, jbs
         _release_if_concrete(st, (G, pi))
         return G, pi
 
@@ -246,7 +269,8 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
         yancc_wrapper = yancc_data.from_fields(fields, grid, Vp, Vpp, **yancc_res)
 
         # runs MaNTA and returns the adjoints + pressure profile
-        G, G_p, pi, st = StellaratorFun(grad_config, yancc_wrapper, itg)
+        G_all, G_p, pi, st = StellaratorFun(grad_config, yancc_wrapper, itg)
+        G = G_all[0]
 
         # columns: the field's (np_field, incl. V' and V''), the ITG geometry's
         # (n_itg, zero without the ITG term), then one upper-boundary
@@ -309,9 +333,23 @@ def make_objective(config, yancc_res=None, normalization=None, failure_value=1e-
             ) * st.pnorm
             dpi = jnp.asarray(dpi, dtype=cpu_fp_dtype)
 
+        if bootstrap:
+            # node j's bootstrap current is objective b0 + j
+            jnorm = st.params.constants.BootstrapCurrentNormalization()
+            jbs = jnp.asarray(G_all[b0 : b0 + n_nodes] * jnorm, dtype=cpu_fp_dtype)
+            djbs = jnp.stack(
+                [
+                    sum(contract(G_p[(b0 + j) * npts : (b0 + j + 1) * npts]))
+                    for j in range(npts)
+                ]
+            ) * jnorm
+            djbs = jnp.asarray(djbs, dtype=cpu_fp_dtype)
+            _release_if_concrete(st, (G_all, G_p, pi))
+            return (G, pi, jbs), (dp, dpi, djbs)
+
         # what was read from the runner; dp and dpi are tracers whenever the
         # tangent is (DESC's Jacobian), and say nothing about the runner
-        _release_if_concrete(st, (G, G_p, pi))
+        _release_if_concrete(st, (G_all, G_p, pi))
         return (G, pi), (dp, dpi)
 
     return _objective_base

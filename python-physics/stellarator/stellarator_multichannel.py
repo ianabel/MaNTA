@@ -675,12 +675,23 @@ class StellaratorTransport(MaNTA.TransportSystem):
         # is the pressure there, so the adjoint returns d p(x_j) / d(geometry)
         # beside dG/d(geometry). objective.py contracts those rows with the
         # tangent, which is what gives the pressure profile a derivative.
+        # BootstrapObjectives: the same for the bootstrap current <J||B>, after
+        # the pressures when both are on. objective.py reads the node values
+        # back from G and their derivatives from G_p's rows, objective by
+        # objective in this order: G, pressures, bootstrap currents.
         self.pressure_objectives = bool(config_in.get("PressureObjectives", False))
-        if self.pressure_objectives:
+        self.bootstrap_objectives = bool(config_in.get("BootstrapObjectives", False))
+        if self.bootstrap_objectives and not self.params.config.evolveDensity:
+            raise ValueError(
+                "BootstrapObjectives needs evolveDensity: without electrons the "
+                "case carries no bootstrap current"
+            )
+        if self.pressure_objectives or self.bootstrap_objectives:
             if self.params.config.adaptiveGrid or solver_config.get("Superconvergent"):
                 raise ValueError(
-                    "PressureObjectives needs a fixed grid and the plain scheme: "
-                    "its objectives pick out the physics nodes by position"
+                    "PressureObjectives and BootstrapObjectives need a fixed grid "
+                    "and the plain scheme: their objectives pick out the physics "
+                    "nodes by position"
                 )
             weights = np.asarray(
                 MaNTA.getPhysicsWeights(
@@ -688,10 +699,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 )
             ).ravel()
             assert len(weights) == len(self.points)
-            g += [
-                partial(self.PressureAtNode, float(xj), float(wj))
-                for xj, wj in zip(self.points, weights)
-            ]
+            nodes_and_weights = list(zip(map(float, self.points), map(float, weights)))
+        if self.pressure_objectives:
+            g += [partial(self.PressureAtNode, xj, wj) for xj, wj in nodes_and_weights]
+        if self.bootstrap_objectives:
+            g += [partial(self.BootstrapAtNode, xj, wj) for xj, wj in nodes_and_weights]
 
         self.levels = []  # (cells, k) of each plan MaNTA handed over
         ### for adaptive grid problems ###
@@ -828,11 +840,16 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return G, G_p
 
     def getPressure(self, points=None):
+        """The pressure at the nodes, in Pa: ions and electrons with
+        evolveDensity, which is what DESC's force balance needs; the ion energy,
+        the one transported channel, without."""
         if self.params.config.evolveDensity:
-            ui = self.runner.Get_profile(Channel.IonEnergy) / self.vp
+            u = self.runner.Get_profile(Channel.IonEnergy) + self.runner.Get_profile(
+                Channel.ElectronEnergy
+            )
         else:
-            ui = self.runner.Get_profile(0) / self.vp
-        return 2.0 / 3.0 * ui * self.pnorm
+            u = self.runner.Get_profile(0)
+        return 2.0 / 3.0 * u / self.vp * self.pnorm
 
     def getBootstrapCurrent(self, points=None):
         """The bootstrap current <J||B> [A T m^-2] after a run, at `points` or,
@@ -929,12 +946,25 @@ class StellaratorTransport(MaNTA.TransportSystem):
         return n * Ti * self.tauE(field, vp, vpp, geometry, state, x, params)
 
     def PressureAtNode(self, xj, wj, field, vp, vpp, geometry, state, x, params):
-        """The ion pressure at the physics node x_j, in units of n0 T0, as an
+        """The pressure at the physics node x_j, in units of n0 T0, as an
         objective: MaNTA reports sum_m w_m g(x_m), so g is p / w_j at x_j and
-        zero at every other node. Physics nodes are interior, so V' > 0."""
-        channel = Channel.IonEnergy if params.config.evolveDensity else 0
-        p = 2.0 / 3.0 * state.Variable[channel] / vp
+        zero at every other node. Physics nodes are interior, so V' > 0. The
+        same pressure getPressure reports: ions and electrons with
+        evolveDensity."""
+        if params.config.evolveDensity:
+            u = state.Variable[Channel.IonEnergy] + state.Variable[Channel.ElectronEnergy]
+        else:
+            u = state.Variable[0]
+        p = 2.0 / 3.0 * u / vp
         return jnp.where(jnp.abs(x - xj) < 1e-12, p / wj, 0.0 * p)
+
+    def BootstrapAtNode(self, xj, wj, field, vp, vpp, geometry, state, x, params):
+        """The bootstrap current <J||B> at the physics node x_j, in
+        BootstrapCurrentNormalization, as an objective: p/w_j at x_j and zero
+        elsewhere, as PressureAtNode. It reads the aux variable, so its
+        derivative reaches the adjoint through dG/d(phi)."""
+        jbs = StellaratorState.bootstrap_of(state, params)
+        return jnp.where(jnp.abs(x - xj) < 1e-12, jbs / wj, 0.0 * jbs)
 
     def ITGHeatFlux(self, field, vp, vpp, geometry, state, x, params):
         """V' <q_ITG . grad rho>, the NN ITG ion heat flux, in the units MaNTA
