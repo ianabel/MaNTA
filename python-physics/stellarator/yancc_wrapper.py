@@ -7,6 +7,7 @@ os.environ.pop("LD_LIBRARY_PATH", None)  # Required for Perlmutter to work prope
 import yancc
 from yancc.field import Field
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from pitch_grids import AdaptivePitchGrid
 
 import jax
 import jax.numpy as jnp
@@ -78,6 +79,9 @@ class yancc_data(eqx.Module):
     rho: Float[ArrayLike, "..."]
     nx: int
     na: int
+    # "uniform", or "adaptive" for a grid clustered per solve (pitch_grids.py)
+    pitch_grid: str = eqx.field(static=True)
+    pitch_floor: float = eqx.field(static=True)
 
     eq: Optional[Equilibrium]  # used for re-evaluating the field for adaptive mesh runs
     nt: Optional[int]
@@ -97,6 +101,8 @@ class yancc_data(eqx.Module):
         eq=None,
         nt=None,
         nz=None,
+        pitch_grid: str = "uniform",
+        pitch_floor: float = 0.2,
     ):
 
         self.fields = fields
@@ -116,7 +122,20 @@ class yancc_data(eqx.Module):
         # Cached per resolution: a yancc_data is built at every objective
         # evaluation, and a fresh lambda under jit compiled again each time.
         self.speedgrid = _speedgrid(nx)
-        self.pitchgrid = _pitchgrid(na)
+        # "adaptive": a stand-in the solve turns into yancc's
+        # DKEGaussianPitchAngleGrid for its own species, field and Er
+        # (pitch_grids.resolve_pitchgrid). It depends on the plasma, so it
+        # cannot be built here or cached.
+        if pitch_grid == "uniform":
+            self.pitchgrid = _pitchgrid(na)
+        elif pitch_grid == "adaptive":
+            self.pitchgrid = AdaptivePitchGrid(na, pitch_floor)
+        else:
+            raise ValueError(
+                f"pitch_grid must be 'uniform' or 'adaptive', not {pitch_grid!r}"
+            )
+        self.pitch_grid = pitch_grid
+        self.pitch_floor = pitch_floor
 
         self.na = na
         self.nx = nx
@@ -167,6 +186,8 @@ class yancc_data(eqx.Module):
         eq=None,
         grid=None,
         cell_boundaries=None,
+        pitch_grid="uniform",
+        pitch_floor=0.2,
     ):
 
         if eq is None:
@@ -196,6 +217,8 @@ class yancc_data(eqx.Module):
             eq=eq,
             nt=nt,
             nz=nz,
+            pitch_grid=pitch_grid,
+            pitch_floor=pitch_floor,
         )
 
     # for constructing from data passed by DESC
@@ -241,7 +264,10 @@ class yancc_data(eqx.Module):
         )
 
     @classmethod
-    def from_fields(cls, fields, grid, V_r, V_rr, scale=1.0, nx=5, na=43):
+    def from_fields(
+        cls, fields, grid, V_r, V_rr, scale=1.0, nx=5, na=43,
+        pitch_grid="uniform", pitch_floor=0.2,
+    ):
         return cls(
             fields=fields,
             grid=grid,
@@ -250,6 +276,8 @@ class yancc_data(eqx.Module):
             Vpp=V_rr,
             nx=nx,
             na=na,
+            pitch_grid=pitch_grid,
+            pitch_floor=pitch_floor,
         )
 
     # for evaluating equilibrium at new rho for adaptive meshing
@@ -260,5 +288,6 @@ class yancc_data(eqx.Module):
                 "from_other requires the old object to have an Equilibrium"
             )
         return cls.from_eq(
-            rho, other.nx, other.na, other.nt, other.nz, other.eq, other.grid
+            rho, other.nx, other.na, other.nt, other.nz, other.eq, other.grid,
+            pitch_grid=other.pitch_grid, pitch_floor=other.pitch_floor,
         )
