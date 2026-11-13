@@ -15,13 +15,17 @@ each:
   narrows as nu falls, and na is what has to resolve it;
 * nu * D11 across that range, which is flat in the 1/nu regime (it is the
   eps_eff^(3/2) coefficient), and its ratio to the reference resolution's;
-* yancc's relative residual and convergence flag for every solve: a solve that
-  did not converge is no evidence either way.
+* yancc's relative residual, convergence flag and matrix-vector product count
+  for every solve: a solve that did not converge is no evidence either way, and
+  the count separates slow convergence from a costlier iteration.
 
 The last resolution given is the reference. Collisionality is yancc's nuhat =
 nu / v [1/m]; nu* = nuhat R0 / iota is printed beside it as the size-free
 measure. Monoenergetic only: no speed grid, so a resolution here is
 na,ntheta,nzeta (the stellarator objective's na,nx,ntheta,nzeta less nx).
+A "g" after na (45g,17,27) uses yancc's MDKEGaussianPitchAngleGrid, which
+clusters nodes around xi = 0 more tightly as nu falls -- on yancc's
+nonuniform branch only, until that merges.
 
     python mdke_resolution_scan.py --resolutions 45,17,27:121,33,53
     python mdke_resolution_scan.py --eqs W7-X --rho 0.2,0.5,0.8 \\
@@ -39,12 +43,16 @@ import numpy as np
 
 
 def parse_resolutions(text):
+    """na,ntheta,nzeta[:...] -> [(na, nt, nz, gaussian)]; a "g" after na
+    (45g,17,27) asks for the clustered pitch grid."""
     out = []
     for part in text.split(":"):
-        na, nt, nz = (int(v) for v in part.split(","))
+        na, nt, nz = part.split(",")
+        gaussian = na.endswith("g")
+        na, nt, nz = int(na.rstrip("g")), int(nt), int(nz)
         if nt % 2 == 0 or nz % 2 == 0:
             raise SystemExit(f"ntheta and nzeta must be odd, got {part}")
-        out.append((na, nt, nz))
+        out.append((na, nt, nz, gaussian))
     return out
 
 
@@ -108,51 +116,67 @@ def main():
     names = args.eqs.split(",")
     rhos = [float(r) for r in args.rho.split(",")]
     resolutions = parse_resolutions(args.resolutions)
+    tags = [f"{na}{'g' if g else ''},{nt},{nz}" for na, nt, nz, g in resolutions]
     nus = np.logspace(np.log10(args.nu_max), np.log10(args.nu_min), args.nnu)
     mg = {"smooth_solver": args.smoother, "max_grids": args.grids}
 
     @eqx.filter_jit
-    def d11(field, pitchgrid, nu, er):
+    def d11(field, na, gaussian, nu, er):
+        if gaussian:
+            # depends on nu and E*, so built per solve, inside the jit
+            from yancc import MDKEGaussianPitchAngleGrid
+
+            pitchgrid = MDKEGaussianPitchAngleGrid(na, field, er, nu)
+        else:
+            pitchgrid = UniformPitchAngleGrid(na)
         sol, info = solve_mdke(
             field, pitchgrid, er, nu, multigrid_options=mg, rtol=args.rtol
         )
-        return sol.get("Dij")[0, 0], info["res1"], info["success1"]
+        return sol.get("Dij")[0, 0], info["res1"], info["success1"], info["nmv1"]
 
     shape = (len(names), len(rhos), len(resolutions), len(nus))
     D = np.full(shape, np.nan)
     res = np.full(shape, np.nan)
     ok = np.zeros(shape, bool)
+    nmv = np.zeros(shape, int)
     wall = np.full(shape, np.nan)
     nustar_per_nuhat = np.full((len(names), len(rhos)), np.nan)
 
     for a, name in enumerate(names):
         eq = load_eq(name)
         for b, rho in enumerate(rhos):
-            for c, (na, nt, nz) in enumerate(resolutions):
+            for c, (na, nt, nz, gaussian) in enumerate(resolutions):
                 field = Field.from_desc(eq, rho, nt, nz)
-                pitchgrid = UniformPitchAngleGrid(na)
                 if c == len(resolutions) - 1:
                     nustar_per_nuhat[a, b] = float(
                         field.R_major / jnp.abs(field.iota)
                     )
                 for d, nu in enumerate(nus):
                     t = time.perf_counter()
-                    out = d11(field, pitchgrid, jnp.asarray(nu), jnp.asarray(args.erhohat))
-                    D[a, b, c, d], res[a, b, c, d], ok[a, b, c, d] = (
-                        float(out[0]), float(out[1]), bool(out[2])
+                    out = d11(
+                        field, na, gaussian, jnp.asarray(nu), jnp.asarray(args.erhohat)
+                    )
+                    D[a, b, c, d], res[a, b, c, d], ok[a, b, c, d], nmv[a, b, c, d] = (
+                        float(out[0]), float(out[1]), bool(out[2]), int(out[3])
                     )
                     wall[a, b, c, d] = time.perf_counter() - t
                     print(
-                        f"{name} rho={rho} res={na},{nt},{nz} nuhat={nu:.2e}: "
+                        f"{name} rho={rho} res={tags[c]} nuhat={nu:.2e}: "
                         f"D11={D[a, b, c, d]:.4e} res={res[a, b, c, d]:.1e} "
+                        f"matvecs={nmv[a, b, c, d]} "
                         f"{'ok' if ok[a, b, c, d] else 'NOT CONVERGED'} "
                         f"{wall[a, b, c, d]:.1f}s",
                         flush=True,
                     )
 
     lnu = np.log(nus)
-    slope = np.diff(np.log(np.abs(D)), axis=-1) / np.diff(lnu)
-    tag = [f"{na},{nt},{nz}" for na, nt, nz in resolutions]
+    # a repeated nu (--nu-min = --nu-max, to time a warm solve) has no slope
+    dlnu = np.diff(lnu)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        slope = np.where(
+            dlnu != 0, np.diff(np.log(np.abs(D)), axis=-1) / np.where(dlnu != 0, dlnu, 1), np.nan
+        )
+    tag = tags
     width = max(len(t) for t in tag)
 
     print("\nslope d ln D11 / d ln nu between neighbouring nuhat (-1 = 1/nu)")
@@ -188,8 +212,8 @@ def main():
     if args.out:
         np.savez(
             args.out, names=np.array(names), rho=np.array(rhos),
-            resolutions=np.array(resolutions), nuhat=nus, D11=D, slope=slope,
-            residual=res, converged=ok, wall=wall,
+            resolutions=np.array(tags), nuhat=nus, D11=D, slope=slope,
+            residual=res, converged=ok, matvecs=nmv, wall=wall,
             nustar_per_nuhat=nustar_per_nuhat, erhohat=args.erhohat,
         )
         print(f"\nwrote {args.out}")
