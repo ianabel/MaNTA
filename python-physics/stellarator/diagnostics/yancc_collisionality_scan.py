@@ -33,6 +33,10 @@ changes. Ti = Te. Only yancc, DESC and jax are needed, not MaNTA.
         --tmin 300 --tmax 2e4 --ntemps 16 \\
         --resolutions 45,7,17,25:81,11,25,37 --out scan.npz --plot scan.png
 
+A "g" after na (45g,7,17,25) uses the adaptive pitch grid MaNTA builds with
+pitch_grid="adaptive" (pitch_grids.py): yancc's DKEGaussianPitchAngleGrid,
+rebuilt for each solve's plasma and Er. It needs yancc's nonuniform branch.
+
 A name that is not a file is taken as a DESC example, rescaled as
 runStellarator.py does (a = 1.7 m, <B> = 5.86 T).
 
@@ -77,14 +81,20 @@ def load_equilibrium(name):
 
 
 def parse_resolutions(text):
-    """'na,nx,nt,nz:na,nx,nt,nz' -> [(na, nx, nt, nz), ...]"""
+    """'na,nx,nt,nz:na,nx,nt,nz' -> [(na, nx, nt, nz), ...]; a "g" after na
+    (adaptive_flags) is dropped here."""
     out = []
     for item in text.split(":"):
-        vals = tuple(int(v) for v in item.split(","))
+        vals = tuple(int(v.rstrip("g")) for v in item.split(","))
         if len(vals) != 4:
             sys.exit(f"a resolution is na,nx,ntheta,nzeta; got {item!r}")
         out.append(vals)
     return out
+
+
+def adaptive_flags(text):
+    """Which resolutions ask for the adaptive pitch grid: a "g" after na."""
+    return [item.split(",")[0].endswith("g") for item in text.split(":")]
 
 
 def scan(args):
@@ -106,6 +116,11 @@ def scan(args):
     rhos = [float(r) for r in args.rho.split(",")]
     temps = np.logspace(np.log10(args.tmin), np.log10(args.tmax), args.ntemps)
     resolutions = parse_resolutions(args.resolutions)
+    adaptive = adaptive_flags(args.resolutions)
+    if any(adaptive):
+        # the grid MaNTA builds with pitch_grid="adaptive"
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from pitch_grids import AdaptivePitchGrid, resolve_pitchgrid
 
     def plasma(T):
         n = args.n
@@ -124,13 +139,18 @@ def scan(args):
     nustar = np.full((2, len(rhos), len(temps)), np.nan)
 
     for ir, (na, nx, nt, nz) in enumerate(resolutions):
-        pitch, speed = UniformPitchAngleGrid(na), MaxwellSpeedGrid(nx)
+        speed = MaxwellSpeedGrid(nx)
+        pitch = AdaptivePitchGrid(na) if adaptive[ir] else UniformPitchAngleGrid(na)
 
         @eqx.filter_jit
         def solve(field, T):
             ion, ele = plasma(T)
+            pg = pitch
+            if adaptive[ir]:
+                # rebuilt for each solve's plasma and Er, as in MaNTA
+                pg = resolve_pitchgrid(pitch, field, [ion, ele], args.er_over_t * T)
             sol, info = solve_dke(
-                field, pitch, speed, [ion, ele],
+                field, pg, speed, [ion, ele],
                 Erho=args.er_over_t * T,
                 rtol=args.rtol, throw=False, verbose=args.verbose,
                 multigrid_options={"smooth_solver": args.smoother,
@@ -140,7 +160,8 @@ def scan(args):
             return (jnp.reshape(sol.get("J_rho"), ()), gamma[0], gamma[1],
                     info["res"], info["niter"], info["success"])
 
-        print(f"\n=== na={na} nx={nx} ntheta={nt} nzeta={nz} ===", flush=True)
+        g = " (adaptive pitch grid)" if adaptive[ir] else ""
+        print(f"\n=== na={na} nx={nx} ntheta={nt} nzeta={nz}{g} ===", flush=True)
         print(f"{'rho':>6} {'T[eV]':>9} {'nu*_i':>9} {'nu*_e':>9} {'J[A/m3]':>11} "
               f"{'cancel':>9} {'res':>9} {'niter':>5} {'ok':>3} {'s':>6}", flush=True)
         for ip, rho in enumerate(rhos):
@@ -170,6 +191,7 @@ def scan(args):
     if args.out:
         np.savez(args.out, rho=np.array(rhos), T=temps, nustar_i=nustar[0],
                  nustar_e=nustar[1], resolutions=np.array(resolutions),
+                 adaptive=np.array(adaptive),
                  n=args.n, er_over_t=args.er_over_t, rtol=args.rtol, **out)
         print(f"\nwrote {args.out}")
     if args.plot:
@@ -242,6 +264,8 @@ def memory_worker(args):
 
 
 def memory(args):
+    if any(adaptive_flags(args.resolutions)):
+        sys.exit("--jacrev measures uniform pitch grids only; drop the g")
     """Run memory_worker per (resolution, batch); fit and project."""
     batches = [int(b) for b in args.batch.split(",")]
     resolutions = parse_resolutions(args.resolutions)

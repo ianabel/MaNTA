@@ -6,6 +6,7 @@ from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 from yancc.species import LocalMaxwellian, Electron
 from yancc.solve import solve_dke
 import jax
+from pitch_grids import resolve_pitchgrid
 
 
 def _species(state: StellaratorState, params: StellaratorParams, evolveDensity):
@@ -50,6 +51,9 @@ def yancc_moments(species, Erho, field, pitchgrid, speedgrid, evolveDensity, f1=
     else:
         rtol, max_grids = 1e-5, 3
 
+    # an AdaptivePitchGrid becomes this solve's grid here, where the plasma it
+    # clusters for is known (pitch_grids.py)
+    pitchgrid = resolve_pitchgrid(pitchgrid, field, species, Erho)
     sol, info = solve_dke(
         field,
         pitchgrid,
