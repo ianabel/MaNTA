@@ -1540,7 +1540,9 @@ class SystemSolver
 
         // One objective's contribution to G_p, at whatever adjoint state and
         // adjoint matrices are currently in place. See the definition for why it
-        // is callable separately from computeAdjointGradients().
+        // is callable separately from computeAdjointGradients(). This form
+        // evaluates dF/dp itself; the loop passes the set it evaluated once to
+        // the overload beside adjointParameterDerivatives.
         void accumulateAdjointGradients(Index gIndex);
 
         // The transpose of solveTransportJac's bordered elimination. With
@@ -2149,6 +2151,22 @@ class SystemSolver
 
         // How many of those nodes each cell has.
         Index physicsNodesPerCell() const { return superconvergent ? k + 2 : k + 1; }
+
+        // The adjoint problem's dF/dp at the state the solver is in (y, jt), for
+        // every row of the residual: dSigma/dp, dSources/dp and dAux/dp at every
+        // physics node, dG_s/dp for each scalar row and dR_f/dp for each field
+        // row (empty where the row reads no parameter). None of it depends on
+        // the objective, so computeAdjointGradients evaluates it once and hands
+        // the same set to every objective's accumulation, together with the
+        // nodes it was taken at, which a coupled run's explicit dG/dp reads too.
+        struct AdjointParameterDerivatives
+        {
+            PhysicsNodes nodes;
+            GlobalStateMatrix dSigmadp, dSourcedp, dAuxdp;
+            std::vector<Matrix> dScalarGdp, dFieldRdp;
+        };
+        AdjointParameterDerivatives adjointParameterDerivatives();
+        void accumulateAdjointGradients(Index gIndex, AdjointParameterDerivatives &dFdp);
 
         // ( X, phi_i )_K for a physics value X sampled on the cell's physics
         // nodes: A9 times the star-node values with the superconvergent scheme,
