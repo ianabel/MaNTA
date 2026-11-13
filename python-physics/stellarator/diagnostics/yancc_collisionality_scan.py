@@ -37,7 +37,8 @@ A "g" after na (45g,7,17,25) uses the adaptive pitch grid MaNTA builds with
 pitch_grid="adaptive" (pitch_grids.py): yancc's DKEGaussianPitchAngleGrid,
 rebuilt for each solve's plasma and Er. It needs yancc's nonuniform branch.
 
-A name that is not a file is taken as a DESC example, rescaled as
+A DESC family file loads its final equilibrium; file.h5:0 picks the first
+(any index works). A name that is not a file is taken as a DESC example, rescaled as
 runStellarator.py does (a = 1.7 m, <B> = 5.86 T).
 
 With --jacrev it measures memory instead of scanning: for each resolution, the
@@ -71,10 +72,14 @@ def load_equilibrium(name):
     import desc.examples
     import desc.io
 
-    if os.path.isfile(name):
-        eq = desc.io.load(name)
-        if hasattr(eq, "__len__"):  # an EquilibriaFamily: the final equilibrium
-            eq = eq[-1]
+    # "family.h5:0" picks one equilibrium of a family; without it, the final one
+    path, _, index = name.rpartition(":") if ":" in name else (name, "", "")
+    if os.path.isfile(path):
+        eq = desc.io.load(path)
+        if hasattr(eq, "__len__"):  # an EquilibriaFamily
+            eq = eq[int(index) if index else -1]
+        elif index:
+            sys.exit(f"{path} holds one equilibrium; drop the :{index}")
         return eq
     eq = desc.examples.get(name)
     return desc.compat.rescale(eq, L=("a", 1.7), B=("<B>", 5.86), copy=True, verbose=0)

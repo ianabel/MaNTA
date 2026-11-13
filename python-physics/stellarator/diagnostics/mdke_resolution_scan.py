@@ -32,7 +32,7 @@ nonuniform branch only, until that merges.
         --nu-min 1e-5 --nu-max 1e-1 --nnu 9 --out mdke.npz --plot mdke.png
 
 Equilibria are DESC example names (W7-X, ARIES-CS, precise_QH, ...) or .h5
-files (the last of a family). Needs only yancc, DESC and jax.
+files (the last of a family, or file.h5:0 for the first). Needs only yancc, DESC and jax.
 """
 
 import argparse
@@ -60,9 +60,15 @@ def load_eq(name):
     import desc.examples
     import desc.io
 
-    if os.path.isfile(name):
-        eq = desc.io.load(name)
-        return eq[-1] if hasattr(eq, "__len__") else eq
+    # "family.h5:0" picks one equilibrium of a family; without it, the final one
+    path, _, index = name.rpartition(":") if ":" in name else (name, "", "")
+    if os.path.isfile(path):
+        eq = desc.io.load(path)
+        if hasattr(eq, "__len__"):
+            return eq[int(index) if index else -1]
+        if index:
+            raise SystemExit(f"{path} holds one equilibrium; drop the :{index}")
+        return eq
     return desc.examples.get(name)
 
 
