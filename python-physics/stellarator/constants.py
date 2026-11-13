@@ -43,11 +43,6 @@ class PlasmaConstants(eqx.Module):
         self.B0 = _B0
         self.cs0 = jnp.sqrt(2 * self.T0 / self.IonSpecies.mass)
 
-        print(
-            f"Normalizing particle rate: {self.DensityEquationNormalization()} #/m^3/s"
-        )
-        print(f"Normalizing heat rate: {self.HeatEquationNormalization()} W/m^3")
-
     @staticmethod
     def CoulombLogarithm_ei(n_cgs, T_eV):
         # NRL formulary, electron-ion, T_e > 10 eV. The one formula both the

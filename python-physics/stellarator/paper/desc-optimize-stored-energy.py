@@ -78,8 +78,8 @@ def make_config(Spi=300.0, Sn=1.2):
         "ECHCenter": 0.0,
         "ECHPower": 0.0,
         "ECHWidth": 0.1,
-        "EdgeTemperature": 1.5,
-        "EdgeDensity": 0.5,
+        "EdgeTemperature": 1.0,
+        "EdgeDensity": 1.0,
         "ADCoefficient": 0.0,
         "n0": 3.0,
         "T0": 3.0,
@@ -112,7 +112,7 @@ def make_config(Spi=300.0, Sn=1.2):
 # False reads them as numbers in the new units. keep_physics = False
 
 keep_physics = False
-append = False
+append = True
 # the cold MaNTA solve before optimising. Appending usually skips it; then the
 # consistency options need the loaded equilibrium to come from a consistency
 # run, whose profiles they continue (see below)
@@ -133,12 +133,12 @@ initial_run = not append
 # BootstrapObjectives in objective.py), so DESC's model sees how a boundary
 # step moves them.
 pressure_consistency = True
-bootstrap_consistency = True
+bootstrap_consistency = False
 consistency = pressure_consistency or bootstrap_consistency
 # weights relative to stored_energy_weight, on mismatches normalised by MaNTA's
 # peak pressure and peak |<J.B>|
 pressure_weight = 1.0
-bootstrap_weight = 1.0
+bootstrap_weight = 0.1
 # L = M = N for DESC. At 4 the interior was poorly determined: a boundary change
 # of 7e-6 moved it by 1.4% and G by 4%, which stalled the trust region, and
 # <J.B> at zero current was numerical noise the size of the bootstrap current.
@@ -184,7 +184,7 @@ solver_config = {
     "LowerBoundary": 0.0,
     "UpperBoundary": rho_upper,
     "Relative_tolerance": rtol,
-    "Absolute_tolerance": [atol],
+    "Absolute_tolerance": atol,
     "delta_t": 1.0,
     "initialTimestep": 0.1,
     "MinStepSize": 1e-9,
@@ -196,11 +196,10 @@ solver_config = {
     "SteadyStateStepDiagnostics": True,
     # "tauScaling": "Diffusive",
     # "tauUpdate": "ContinuationStep",
-    "SteadyStateSolver": "Newton",
     "NewtonJacobianReuse": 4,
     "NewtonMaxIterations": 25,
     "MaxRejectedSteps": 10,
-    "restart": True,
+    "restart": False,
     "zeroFlux": True,
     "solveAdjoint": False,
     "PseudoTransientSERRate": 0.5,
@@ -232,7 +231,7 @@ pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
 desc_pressure = SplineProfile(jnp.zeros_like(pressure_rho), pressure_rho)
 #
 
-# # create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
+# create initial equilibrium. Psi chosen to give B ~ 1 T. Could also give profiles here,
 # # default is zero pressure and zero current
 # this is usually all you need to solve a fixed boundary equilibrium
 #
@@ -578,59 +577,9 @@ config = normalized(
     }
 )
 
-
-# fig, ax = plt.subplots()
-# eq2 = eq.copy()
-# fam2 = EquilibriaFamily(eq2)
-# niters = 3
-# for k in range(niters):
-#     eq2 = eq2.copy()
-#
-#     fig, ax = plot_1d(eq2, "pressure", label="DESC " + str(k), ax=ax)
-#
-#     yancc_wrapper = yancc_data.from_eq(
-#         points, eq=eq2, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-#     )
-#     pressure_rho = jnp.concatenate([jnp.zeros(1), yancc_rho, jnp.ones(1)])
-#     st = StellaratorTransport(
-#         config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq2.params_dict)
-#     )
-#     st.run()
-#
-#     pi = st.getPressure()
-#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-#     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-#     eq2.pressure = SplineProfile(pi_manta, pressure_rho)
-#     # fit the current profile to a power series, with c_0=c_1=0
-#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])
-#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-#     # re-solve the equilibrium
-#     eq2, _ = eq2.solve(objective="force", optimizer="lsq-exact", verbose=3)
-#     fam2.append(eq2)
-#     eqs.append(eq2)
-# eq_self_consistent = eq2.copy()
-# # #
-# ax.legend()
-# # fig.savefig("initial_self_consistent_pressure.png")
-# # # # %%
-# # #
-# # plot_comparison(eqs=[eq_init, eq2], labels=["Initial", "self-consistent"])
-# #
-# # plt.show()
-# eq = eq2.copy()
-# #
-# # %%
-#
-
 manta_objective = make_objective(
     config, yancc_res=yancc_res, normalization=normalization
 )
-
-# def manta_yancc_fun(fields, grid, Vprime):
-
-#     stored_energy, pressure = Objective(fields, grid, Vprime)
-
-#     return stored_energy, pressure
 
 
 def objective_from_user_fun(grid, data, params=None, desc_jb=None):
@@ -807,7 +756,7 @@ stored_energy_weight = 20.0
 # jnp.append(stored_energy_weight)
 objective_from_user_weight = stored_energy_weight
 fig, ax = plt.subplots()
-max_it = 5
+max_it = 8
 
 eqfam = EquilibriaFamily(eq)
 # ks = [1, 2, eq.M + 1]
@@ -908,80 +857,83 @@ eq, info_out = eq.optimize(
     verbose=3,
     copy=True,
 )
+
 stored_energy_history.attach(info_out, key="stored_energy_history")
 # objective_from_user_fun returns 1 / g, first when it returns the consistency
 # residuals beside it
 _h = np.asarray(info_out["stored_energy_history"])
 info_out["stored_energy_history"] = 1.0 / (_h[:, 0] if _h.ndim > 1 else _h)
-print("stored energy per iteration:", info_out["stored_energy_history"])
-np.save(eq_name + "_stored_energy_history.npy", info_out["stored_energy_history"])
-
-# %%
-
-# %%
 eqfam.append(eq.copy())
 
 eqs.append(eq.copy())
-fig, ax = plot_comparison(eqs=[eq_init, eq], labels=["Initial", "optimized"])
 
-fig.savefig("figs/" + eq_name + "comparison")
+W = info_out["stored_energy_history"]
 
 eq_sc = eqfam[-1].copy()
-# final self consistency
-# niters = 2
-# fig, ax = plt.subplots()
-# for k in range(niters):
-#     fig, ax = plot_1d(eq_sc, "pressure", label="DESC " + str(k), ax=ax)
+if jax.process_index() == 0:
+    print("stored energy per iteration:", info_out["stored_energy_history"])
+    np.save(eq_name + "_stored_energy_history.npy", info_out["stored_energy_history"])
 
-#     yancc_wrapper = yancc_data.from_eq(
-#         points, eq=eq_sc, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
-#     )
+    # %%
 
-#     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
-#     st.run()
+    # %%
+    fig, ax = plot_comparison(eqs=[eq_init, eq], labels=["Initial", "optimized"])
 
-#     pi = st.getPressure()
+    fig.savefig("figs/" + eq_name + "comparison")
+    # final self consistency
+    # niters = 2
+    # fig, ax = plt.subplots()
+    # for k in range(niters):
+    #     fig, ax = plot_1d(eq_sc, "pressure", label="DESC " + str(k), ax=ax)
 
-#     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
-#     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
-#     eq_sc.pressure = SplineProfile(pi_manta, pressure_rho)
-#     # fit the current profile to a power series, with c_0=c_1=0
+    #     yancc_wrapper = yancc_data.from_eq(
+    #         points, eq=eq_sc, nt=yancc_ntheta, nz=yancc_nzeta, **yancc_res
+    #     )
 
-#     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])ordering differs from Braginskii's mostly in permitting a mean flow ordered at the sound speed (e.g., allowing M~ or >1), which the standard Braginskii subsonic-flow ordering does not accommodate. The orderings otherwise differ in the collisional stress closures (e.g. the parallel/gyroviscous stress), which enter terms not retained in this study. The global, long-wavelength (k_\parallel= or ~0) KH and interchange modes examined here are MHD-scale and not governed by the fine-scale velocity-space resonances that demand a kinetic treatment, so a drift-reduced fluid description is appropriate for them. A fully kinetic description would be required for sub-ion-Larmor-scale turbulent transport in reactor-relevant, lower-collisionality regimes, which is outside the present scope.
-#     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
-#     # re-solve the equilibrium
-#     eq_sc, _ = eq_sc.solve(
-#         objective="force", x_scale="ess", optimizer="lsq-exact", verbose=3
-#     )
+    #     st = StellaratorTransport(config, yancc_wrapper=yancc_wrapper)
+    #     st.run()
 
-# eqfam.append(eq_sc)
-# ax.legend()
-# fig.savefig("figs/" + eq_name + "final_pressure_comparison.png")
-eqs.save(eq_name + "_all_equilibria.h5")
-# %%
+    #     pi = st.getPressure()
 
-# %%
+    #     pi_manta = jnp.concatenate([jnp.array([pi[0]]), pi, jnp.zeros(1)])
+    #     ax.plot(pressure_rho, pi_manta, label="MANTA" + str(k))
+    #     eq_sc.pressure = SplineProfile(pi_manta, pressure_rho)
+    #     # fit the current profile to a power series, with c_0=c_1=0
 
-fig, ax = plot_comparison(eqs=[eqs[0], eq], labels=["Initial", "optimized"])
-fig.savefig("figs/" + eq_name + "final_comparison.png")
-fig, ax = plot_boundaries(eqs=[eqs[0], eq], labels=["Initial", "optimized"])
-fig.savefig("figs/" + eq_name + "final_comparison_boundary.png")
-# %%
-# eq = desc.io.load("../python/eq2optimized_equilibrium.h5")#desc.examples.get("ESTELL")
-# plot_boozer_surface(eq_init, fieldlines=8)
-fig, ax = plot_boozer_surface(eqfam[-1], fieldlines=8)
-fig.savefig("figs/" + eq_name + "final_boozer_surface.png")
-fig, ax = plot_qs_error(eqfam[-1])
-fig.savefig("figs/" + eq_name + "final_qs_error.png")
+    #     # XX = np.fliplr(np.vander(rho, eq2.L + 1)[:, :-2])ordering differs from Braginskii's mostly in permitting a mean flow ordered at the sound speed (e.g., allowing M~ or >1), which the standard Braginskii subsonic-flow ordering does not accommodate. The orderings otherwise differ in the collisional stress closures (e.g. the parallel/gyroviscous stress), which enter terms not retained in this study. The global, long-wavelength (k_\parallel= or ~0) KH and interchange modes examined here are MHD-scale and not governed by the fine-scale velocity-space resonances that demand a kinetic treatment, so a drift-reduced fluid description is appropriate for them. A fully kinetic description would be required for sub-ion-Larmor-scale turbulent transport in reactor-relevant, lower-collisionality regimes, which is outside the present scope.
+    #     # eq2.c_l = np.pad(np.linalg.lstsq(XX, current, rcond=None)[0], (2, 0))
+    #     # re-solve the equilibrium
+    #     eq_sc, _ = eq_sc.solve(
+    #         objective="force", x_scale="ess", optimizer="lsq-exact", verbose=3
+    #     )
 
-fig, ax = plt.subplots()
-W = info_out["stored_energy_history"]
-ax.plot(np.arange(len(W)), W, "o-")
-ax.set_xlabel("iteration")
-ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-ax.set_ylabel("stored energy $G$")
-ax.set_title("MaNTA objective over the optimisation")
-fig.savefig("figs/" + eq_name + "stored_energy_history.png", dpi=200)
-plt.show()
+    # eqfam.append(eq_sc)
+    # ax.legend()
+    # fig.savefig("figs/" + eq_name + "final_pressure_comparison.png")
+    eqs.save(eq_name + "_all_equilibria.h5")
+    # %%
+
+    # %%
+
+    fig, ax = plot_comparison(eqs=[eqs[0], eq], labels=["Initial", "optimized"])
+    fig.savefig("figs/" + eq_name + "final_comparison.png")
+    fig, ax = plot_boundaries(eqs=[eqs[0], eq], labels=["Initial", "optimized"])
+    fig.savefig("figs/" + eq_name + "final_comparison_boundary.png")
+    # %%
+    # eq = desc.io.load("../python/eq2optimized_equilibrium.h5")#desc.examples.get("ESTELL")
+    # plot_boozer_surface(eq_init, fieldlines=8)
+    fig, ax = plot_boozer_surface(eqfam[-1], fieldlines=8)
+    fig.savefig("figs/" + eq_name + "final_boozer_surface.png")
+    fig, ax = plot_qs_error(eqfam[-1])
+    fig.savefig("figs/" + eq_name + "final_qs_error.png")
+
+    fig, ax = plt.subplots()
+    ax.plot(np.arange(len(W)), W, "o-")
+    ax.set_xlabel("iteration")
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    ax.set_ylabel("stored energy $G$")
+    ax.set_title("MaNTA objective over the optimisation")
+    fig.savefig("figs/" + eq_name + "stored_energy_history.png", dpi=200)
+    plt.show()
 
 #

@@ -14,12 +14,12 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 def load(eq, fname):
 
     data = Dataset(fname)
-    x = np.array(data.variables["x"])
-    nv = np.array(data.groups["Density"].variables["u"])
-    uiv = np.array(data.groups["IonEnergy"].variables["u"])
-    uev = np.array(data.groups["ElectronEnergy"].variables["u"])
+    x = np.array(data.variables["x"][:])
+    nv = np.array(data.groups["Density"].variables["u"][:])
+    uiv = np.array(data.groups["IonEnergy"].variables["u"][:])
+    uev = np.array(data.groups["ElectronEnergy"].variables["u"][:])
 
-    Er = np.array(data.variables["Er"])
+    Er = np.array(data.variables["Er"][:])
     data.close()
 
     desc_grid = desc.grid.LinearGrid(rho=x, M=eq.M_grid, N=eq.N_grid, NFP=eq.NFP)

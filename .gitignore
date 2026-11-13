@@ -33,6 +33,7 @@ python/random/
 .clang-format
 compile_commands.json
 *.npy
+*.npz
 *.png
 *.eps
 tags
