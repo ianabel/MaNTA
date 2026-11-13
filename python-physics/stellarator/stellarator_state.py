@@ -230,6 +230,17 @@ class StellaratorState(eqx.Module):
             params,
         )
 
+    @classmethod
+    def from_state_vmap(cls, state: State, x, vp, vpp, params: StellaratorParams):
+        def is_nonempty_array(leaf):
+            return eqx.is_array(leaf) and leaf.size > 0
+
+        dynamic_state, static_state = eqx.partition(state, is_nonempty_array)
+
+        return jax.vmap(
+            StellaratorState.from_state, in_axes=(State.vmap_axes(), 0, 0, 0, None)
+        )(dynamic_state, x, vp, vpp, params)
+
     @staticmethod
     def Er_of(state: State, x, vp, vpp, params: StellaratorParams):
         """Er, from wherever ErModel keeps it: the aux variable, or the

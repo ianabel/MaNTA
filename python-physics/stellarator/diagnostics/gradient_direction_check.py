@@ -67,7 +67,7 @@ DEGREE = 4
 TAU = 0.5
 
 
-def make_config(Spi=600.0, Sn=1.2):
+def make_config(Spi=250.0, Sn=1.2):
     """paper/desc-optimize-stored-energy.py's make_config, as run there."""
     return {
         "ParticleSourceCenter": 0.2,
@@ -79,8 +79,8 @@ def make_config(Spi=600.0, Sn=1.2):
         "ECHCenter": 0.0,
         "ECHPower": 0.0,
         "ECHWidth": 0.1,
-        "EdgeTemperature": 1.5,
-        "EdgeDensity": 0.5,
+        "EdgeTemperature": 1.0,
+        "EdgeDensity": 1.0,
         "ADCoefficient": 0.0,
         "n0": 3.0,
         "T0": 3.0,
@@ -183,7 +183,7 @@ def jacobian_at(res, args, eq, V0, nodes, restart, name):
         "Normalization": normalization,
     }
     manta_objective = make_objective(
-        config, yancc_res={"na": na, "nx": nx}, normalization=normalization
+        config, yancc_res={"na": na, "nx": nx}, normalization=normalization, mode="fwd"
     )
     itg_builder = make_itg_builder(st_config, eq, RHO_UPPER)
     G_seen = []
@@ -452,7 +452,7 @@ def main():
         default=5,
         help="boundary modes with |m| or |n| above this are fixed (driver: 5)",
     )
-    p.add_argument("--Spi", type=float, default=600.0)
+    p.add_argument("--Spi", type=float, default=250.0)
     p.add_argument("--Sn", type=float, default=1.2)
     p.add_argument(
         "--keep-pressure",

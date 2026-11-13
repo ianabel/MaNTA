@@ -80,20 +80,28 @@ def main():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--eqs", default="W7-X,ARIES-CS,precise_QH")
+    p.add_argument("--eqs", default="HELIOTRON,ATF,W7-X,DSHAPE")
     p.add_argument("--rho", default="0.5")
-    p.add_argument("--resolutions", default="45,17,27:121,33,53",
-                   help="na,ntheta,nzeta[:...]; the last is the reference")
-    p.add_argument("--nu-min", type=float, default=1e-5, help="nuhat = nu/v [1/m]")
+    p.add_argument(
+        "--resolutions",
+        default="45,17,27:171,43,73",
+        help="na,ntheta,nzeta[:...]; the last is the reference",
+    )
+    p.add_argument("--nu-min", type=float, default=5e-5, help="nuhat = nu/v [1/m]")
     p.add_argument("--nu-max", type=float, default=1e-1)
     p.add_argument("--nnu", type=int, default=9)
-    p.add_argument("--erhohat", type=float, default=0.0,
-                   help="E_rho / v [V s/m]; 0 keeps the 1/nu regime uncut")
-    p.add_argument("--band", type=float, default=0.15,
-                   help="|s + 1| within this counts as 1/nu")
-    p.add_argument("--rtol", type=float, default=1e-6)
-    p.add_argument("--grids", type=int, default=3, help="multigrid max_grids")
-    p.add_argument("--smoother", default="banded")
+    p.add_argument(
+        "--erhohat",
+        type=float,
+        default=0.0,
+        help="E_rho / v [V s/m]; 0 keeps the 1/nu regime uncut",
+    )
+    p.add_argument(
+        "--band", type=float, default=0.15, help="|s + 1| within this counts as 1/nu"
+    )
+    p.add_argument("--rtol", type=float, default=1e-5)
+    p.add_argument("--grids", type=int, default=4, help="multigrid max_grids")
+    p.add_argument("--smoother", default="dense")
     p.add_argument("--out", help=".npz to write the results to")
     p.add_argument("--plot", help="image of nu*D11 against nu")
     args = p.parse_args()
@@ -132,14 +140,16 @@ def main():
                 field = Field.from_desc(eq, rho, nt, nz)
                 pitchgrid = UniformPitchAngleGrid(na)
                 if c == len(resolutions) - 1:
-                    nustar_per_nuhat[a, b] = float(
-                        field.R_major / jnp.abs(field.iota)
-                    )
+                    nustar_per_nuhat[a, b] = float(field.R_major / jnp.abs(field.iota))
                 for d, nu in enumerate(nus):
                     t = time.perf_counter()
-                    out = d11(field, pitchgrid, jnp.asarray(nu), jnp.asarray(args.erhohat))
+                    out = d11(
+                        field, pitchgrid, jnp.asarray(nu), jnp.asarray(args.erhohat)
+                    )
                     D[a, b, c, d], res[a, b, c, d], ok[a, b, c, d] = (
-                        float(out[0]), float(out[1]), bool(out[2])
+                        float(out[0]),
+                        float(out[1]),
+                        bool(out[2]),
                     )
                     wall[a, b, c, d] = time.perf_counter() - t
                     print(
@@ -165,8 +175,11 @@ def main():
             print(f"  {'nu*':>{width}s} " + " ".join(f"{m * k:9.1e}" for m in mids))
             for c in range(len(resolutions)):
                 flags = "" if ok[a, b, c].all() else "   (some solves NOT converged)"
-                print(f"  {tag[c]:>{width}s} "
-                      + " ".join(f"{s:+9.3f}" for s in slope[a, b, c]) + flags)
+                print(
+                    f"  {tag[c]:>{width}s} "
+                    + " ".join(f"{s:+9.3f}" for s in slope[a, b, c])
+                    + flags
+                )
             print(f"  1/nu range (|s+1| <= {args.band}), and nu*D11 there:")
             ref = D[a, b, -1] * nus
             for c in range(len(resolutions)):
@@ -187,10 +200,18 @@ def main():
 
     if args.out:
         np.savez(
-            args.out, names=np.array(names), rho=np.array(rhos),
-            resolutions=np.array(resolutions), nuhat=nus, D11=D, slope=slope,
-            residual=res, converged=ok, wall=wall,
-            nustar_per_nuhat=nustar_per_nuhat, erhohat=args.erhohat,
+            args.out,
+            names=np.array(names),
+            rho=np.array(rhos),
+            resolutions=np.array(resolutions),
+            nuhat=nus,
+            D11=D,
+            slope=slope,
+            residual=res,
+            converged=ok,
+            wall=wall,
+            nustar_per_nuhat=nustar_per_nuhat,
+            erhohat=args.erhohat,
         )
         print(f"\nwrote {args.out}")
 
@@ -201,17 +222,25 @@ def main():
         import matplotlib.pyplot as plt
 
         fig, axs = plt.subplots(
-            len(rhos), len(names), figsize=(4 * len(names), 3 * len(rhos)),
-            squeeze=False, layout="constrained",
+            len(rhos),
+            len(names),
+            figsize=(4 * len(names), 3 * len(rhos)),
+            squeeze=False,
+            layout="constrained",
         )
         for a, name in enumerate(names):
             for b, rho in enumerate(rhos):
                 ax = axs[b, a]
                 for c in range(len(resolutions)):
-                    line, = ax.loglog(nus, nus * D[a, b, c], "o-", ms=3, label=tag[c])
+                    (line,) = ax.loglog(nus, nus * D[a, b, c], "o-", ms=3, label=tag[c])
                     bad = ~ok[a, b, c]
-                    ax.loglog(nus[bad], (nus * D[a, b, c])[bad], "x",
-                              color=line.get_color(), ms=8)
+                    ax.loglog(
+                        nus[bad],
+                        (nus * D[a, b, c])[bad],
+                        "x",
+                        color=line.get_color(),
+                        ms=8,
+                    )
                 ax.set_title(f"{name}, rho = {rho}")
                 ax.set_xlabel("nuhat = nu / v [1/m]")
                 ax.set_ylabel("nuhat * D11")

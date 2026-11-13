@@ -60,7 +60,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 from manta.jax import State
-from itg_wrapper import make_itg_builder, itg_at, A_OVER_LT_RANGE
+from itg_wrapper import make_itg_builder, itg_at, itg_rho_at_nodes, A_OVER_LT_RANGE
 from stellarator_multichannel import StellaratorTransport
 from stellarator_state import StellaratorState
 
@@ -70,7 +70,7 @@ fam = desc.io.load(family)
 eq_init = fam[0]
 eq_final = fam[-1]
 st_config = ns["st_config"]
-itg_builder = make_itg_builder(st_config, eq_init, ns["rho_upper"])
+# itg_builder = make_itg_builder(st_config, eq_init, ns["rho_upper"])
 
 rho = jnp.linspace(0.05, 0.9, 37)
 aLT_scan = jnp.linspace(*A_OVER_LT_RANGE, 291)
@@ -86,6 +86,7 @@ def solve(eq, name):
     )
     solver = {**ns["initial_solver_config"], "OutputFilename": "marginal_" + name}
     config = ns["normalized"]({"Stellarator": st_config, "Solver": solver})
+    itg_builder = make_itg_builder(st_config, eq, ns["rho_upper"])
     itg = itg_at(itg_builder, eq.params_dict)
     st = StellaratorTransport(config, yancc_wrapper=yw, itg=itg)
     ok = st.run()
@@ -102,19 +103,15 @@ def solve(eq, name):
 
     _, vp, vpp = yw.get_fields_at_rho(rho)
     z = jnp.zeros((len(rho), 1))
-    state = State.from_manta(
-        {
-            "Variable": jnp.asarray(ui)[:, None],
-            "Derivative": jnp.asarray(dui)[:, None],
-            "VariableDot": z,
-            "Flux": z,
-            "Aux": jnp.zeros((len(rho), 0)),
-            "Scalars": [],
-        }
+    state = State(
+        jnp.asarray(ui)[:, None],
+        jnp.asarray(dui)[:, None],
+        z,
+        z,
+        jnp.zeros((len(rho), 0)),
+        [],
     )
-    s = jax.vmap(
-        StellaratorState.from_state, in_axes=(State.vmap_axes(), 0, 0, 0, None)
-    )(state, rho, vp, vpp, st.params)
+    s = StellaratorState.from_state_vmap(state, rho, vp, vpp, st.params)
     aLT = -s.dTidrho / s.Ti
     aLn = -s.dndrho / s.n
 

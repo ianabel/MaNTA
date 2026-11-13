@@ -64,7 +64,7 @@ import manta as MaNTA
 eq_in = "eq_itg"  # initial equilibrium: the first of this family
 eq_name = "eq_itg_flux_no_nc"  # what this run writes
 fname = "stellarator_opt" + eq_name
-append = False
+append = True
 use_default = True
 
 # --- pressure self-consistency with MaNTA, inside the one eq.optimize call ----
@@ -79,11 +79,12 @@ use_default = True
 pressure_consistency = True
 # relative to stored_energy_weight, on the mismatch normalised by MaNTA's peak
 # pressure: below a percent it barely registers beside the stored energy
-pressure_weight = 1.0
+pressure_weight = 0.5
 # L = M = N for DESC. At 4 the interior was poorly determined: a boundary change
 # of 7e-6 moved it by 1.4% and G by 4%, which stalled the trust region. None
 # keeps the resolution of the loaded equilibrium.
-desc_resolution = 8 if pressure_consistency else None
+desc_resolution = 8
+# desc_resolution = 8 if pressure_consistency else None
 # every equilibrium solve, including each trial point's inside the proximal
 # projection, converged to this: at DESC's default tolerance the interior
 # depended on the path taken to a point, and G with it
@@ -300,10 +301,11 @@ itg_builder = make_itg_builder(
 )
 
 config = normalized({"Stellarator": st_config, "Solver": initial_solver_config})
-st = StellaratorTransport(
-    config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict)
-)
-st.run()
+if not append:
+    st = StellaratorTransport(
+        config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict)
+    )
+    st.run()
 
 points_np = np.asarray(points)
 # Appending onto a consistency run: its pressure is already the power series
@@ -474,14 +476,14 @@ def fun_mirror_ratio(grid, data):
 # instead -- one backward pass, not a forward one per tangent. Forward mode over
 # the optimiser's 126 tangents peaked at 18.6 GB; reverse, 7.0 GB, agreeing
 # with forward-mode JVPs to 4e-8
-jac_chunk_size = None
+jac_chunk_size = 8
 
 obj_mirror_ratio = ObjectiveFromUser(
     fun=fun_mirror_ratio,
     thing=eq,
     grid=yancc_desc_grid,
-    bounds=(0.0, 0.3),
-    weight=100.0,
+    bounds=(0.0, 0.2),
+    weight=10.0,
     name="my mirror ratio",
     jac_chunk_size=jac_chunk_size,
 )
@@ -507,7 +509,7 @@ objectives = [
         deriv_mode="rev",  # a scalar: see jac_chunk_size above
         # with the pressure residual it is a vector: a row at a time keeps the
         # backward pass through DESC's geometry and the ITG proxy small
-        # **(dict(jac_chunk_size=1) if pressure_consistency else {}),
+        **(dict(jac_chunk_size=1) if pressure_consistency else {}),
     ),
 ]
 
@@ -548,7 +550,7 @@ eq, info_out = eq.optimize(
     ftol=1e-4,
     xtol=1e-6,
     gtol=1e-6,
-    **({"options": {"solve_options": tight_solve}} if pressure_consistency else {}),
+    # Trucwe **({"options": {"solve_options": tight_solve}} if pressure_consistency else {}),
     verbose=3,
     copy=True,
 )

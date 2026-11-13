@@ -1,0 +1,385 @@
+{
+ "resolutions": {
+  "low": [
+   45,
+   7,
+   17,
+   27
+  ],
+  "high": [
+   99,
+   7,
+   27,
+   33
+  ]
+ },
+ "runs": {
+  "low": {
+   "G": [
+    7.429994496219891
+   ],
+   "wall_seconds": 856.4946238994598,
+   "yancc_residual_evaluations": 4,
+   "yancc_jacobian_evaluations": 2,
+   "steady_solves": [
+    {
+     "solver": "Newton on 9 cells at k = 4, NewtonStep test at 0.33",
+     "outcome": "converged: ss|d| = 0.298413 after 1 steps.",
+     "steps": 1
+    },
+    {
+     "solver": "Newton on 9 cells at k = 4, tolerance 1e+10",
+     "outcome": "the initial state is already converged; nothing to do.",
+     "steps": 1
+    },
+    {
+     "solver": "Newton on 9 cells at k = 4, tolerance 1e+10",
+     "outcome": "the initial state is already converged; nothing to do.",
+     "steps": 0
+    }
+   ]
+  },
+  "refined": {
+   "G": [
+    6.716215267430967
+   ],
+   "wall_seconds": 2932.996786594391,
+   "yancc_residual_evaluations": 5,
+   "yancc_jacobian_evaluations": 2,
+   "steady_solves": [
+    {
+     "solver": "Newton on 9 cells at k = 4, NewtonStep test at 0.33",
+     "outcome": "converged: ss|d| = 0.157183 after 1 steps.",
+     "steps": 1
+    },
+    {
+     "solver": "Newton on 9 cells at k = 4, tolerance 1e+10",
+     "outcome": "the initial state is already converged; nothing to do.",
+     "steps": 0
+    }
+   ]
+  },
+  "high": {
+   "G": [
+    6.718016909635477
+   ],
+   "wall_seconds": 2817.3480257987976,
+   "yancc_residual_evaluations": 4,
+   "yancc_jacobian_evaluations": 2,
+   "steady_solves": [
+    {
+     "solver": "Newton on 9 cells at k = 4, NewtonStep test at 0.33",
+     "outcome": "converged: ss|d| = 0.00929072 after 1 steps.",
+     "steps": 1
+    },
+    {
+     "solver": "Newton on 9 cells at k = 4, tolerance 1e+10",
+     "outcome": "the initial state is already converged; nothing to do.",
+     "steps": 0
+    }
+   ]
+  }
+ },
+ "comparisons": {
+  "low_vs_high": {
+   "gradient_scaled": {
+    "cosine": 0.9991036469623785,
+    "low_is_descent_for_high": true,
+    "norm_ratio_low_over_high": 0.6572930439876807
+   },
+   "gradient_unscaled": {
+    "cosine": 0.9835553274616197,
+    "low_is_descent_for_high": true,
+    "norm_ratio_low_over_high": 0.6788533208260147
+   },
+   "gauss_newton_step_scaled": {
+    "cosine": 0.9991036469623786,
+    "high_objective_change_along_low_step": -11.01373227255002,
+    "high_objective_change_along_high_step": -8.862939934323053
+   },
+   "manta_term_gradient_scaled": {
+    "cosine": 0.9991036469623785,
+    "low_is_descent_for_high": true
+   },
+   "top_parameters": [
+    {
+     "index": 144,
+     "high": -50.38695119620344,
+     "low": -33.18440463609089,
+     "same_sign": true
+    },
+    {
+     "index": 149,
+     "high": 25.667712633925948,
+     "low": 16.333766500556486,
+     "same_sign": true
+    },
+    {
+     "index": 82,
+     "high": -21.004995418197577,
+     "low": -13.5957816739988,
+     "same_sign": true
+    },
+    {
+     "index": 139,
+     "high": 18.24626367577877,
+     "low": 11.67641076324857,
+     "same_sign": true
+    },
+    {
+     "index": 69,
+     "high": 18.152879350733784,
+     "low": 11.705886340061626,
+     "same_sign": true
+    },
+    {
+     "index": 130,
+     "high": -15.17684166556822,
+     "low": -9.75621570408565,
+     "same_sign": true
+    },
+    {
+     "index": 70,
+     "high": 13.266028890377914,
+     "low": 9.726719390232235,
+     "same_sign": true
+    },
+    {
+     "index": 129,
+     "high": -10.160485311866172,
+     "low": -7.015029208246754,
+     "same_sign": true
+    },
+    {
+     "index": 75,
+     "high": -9.85846306515535,
+     "low": -6.317829897986258,
+     "same_sign": true
+    },
+    {
+     "index": 63,
+     "high": 8.460947876375519,
+     "low": 5.460261960471331,
+     "same_sign": true
+    }
+   ],
+   "sign_agreement_weighted_by_high": 0.9996925593297471,
+   "G": {
+    "low": [
+     7.429994496219891
+    ],
+    "high": [
+     6.718016909635477
+    ]
+   },
+   "f_manta": {
+    "low": [
+     2.6917920343245565
+    ],
+    "high": [
+     2.9770690173932906
+    ]
+   }
+  },
+  "refined_vs_high": {
+   "gradient_scaled": {
+    "cosine": 0.9999997956126377,
+    "low_is_descent_for_high": true,
+    "norm_ratio_low_over_high": 1.0018025759044487
+   },
+   "gradient_unscaled": {
+    "cosine": 0.9999876293744864,
+    "low_is_descent_for_high": true,
+    "norm_ratio_low_over_high": 1.0010679077125662
+   },
+   "gauss_newton_step_scaled": {
+    "cosine": 0.9999997956126375,
+    "high_objective_change_along_low_step": -8.851737843654785,
+    "high_objective_change_along_high_step": -8.862939934323053
+   },
+   "manta_term_gradient_scaled": {
+    "cosine": 0.9999997956126377,
+    "low_is_descent_for_high": true
+   },
+   "top_parameters": [
+    {
+     "index": 144,
+     "high": -50.38695119620344,
+     "low": -50.48390797438976,
+     "same_sign": true
+    },
+    {
+     "index": 149,
+     "high": 25.667712633925948,
+     "low": 25.723050922577166,
+     "same_sign": true
+    },
+    {
+     "index": 82,
+     "high": -21.004995418197577,
+     "low": -21.044646114711107,
+     "same_sign": true
+    },
+    {
+     "index": 139,
+     "high": 18.24626367577877,
+     "low": 18.285384353820923,
+     "same_sign": true
+    },
+    {
+     "index": 69,
+     "high": 18.152879350733784,
+     "low": 18.181314343773444,
+     "same_sign": true
+    },
+    {
+     "index": 130,
+     "high": -15.17684166556822,
+     "low": -15.195183301415193,
+     "same_sign": true
+    },
+    {
+     "index": 70,
+     "high": 13.266028890377914,
+     "low": 13.279145463815356,
+     "same_sign": true
+    },
+    {
+     "index": 129,
+     "high": -10.160485311866172,
+     "low": -10.175905678978008,
+     "same_sign": true
+    },
+    {
+     "index": 75,
+     "high": -9.85846306515535,
+     "low": -9.881047519108932,
+     "same_sign": true
+    },
+    {
+     "index": 63,
+     "high": 8.460947876375519,
+     "low": 8.47113363496914,
+     "same_sign": true
+    }
+   ],
+   "sign_agreement_weighted_by_high": 1.0,
+   "G": {
+    "low": [
+     6.716215267430967
+    ],
+    "high": [
+     6.718016909635477
+    ]
+   },
+   "f_manta": {
+    "low": [
+     2.977867623896195
+    ],
+    "high": [
+     2.9770690173932906
+    ]
+   }
+  },
+  "low_vs_refined": {
+   "gradient_scaled": {
+    "cosine": 0.9990857267739128,
+    "low_is_descent_for_high": true,
+    "norm_ratio_low_over_high": 0.6561103552706107
+   },
+   "gradient_unscaled": {
+    "cosine": 0.9834565296100839,
+    "low_is_descent_for_high": true,
+    "norm_ratio_low_over_high": 0.6781291414857062
+   },
+   "gauss_newton_step_scaled": {
+    "cosine": 0.9990857267739128,
+    "high_objective_change_along_low_step": -11.033387459644,
+    "high_objective_change_along_high_step": -8.867695585449171
+   },
+   "manta_term_gradient_scaled": {
+    "cosine": 0.9990857267739128,
+    "low_is_descent_for_high": true
+   },
+   "top_parameters": [
+    {
+     "index": 144,
+     "high": -50.48390797438976,
+     "low": -33.18440463609089,
+     "same_sign": true
+    },
+    {
+     "index": 149,
+     "high": 25.723050922577166,
+     "low": 16.333766500556486,
+     "same_sign": true
+    },
+    {
+     "index": 82,
+     "high": -21.044646114711107,
+     "low": -13.5957816739988,
+     "same_sign": true
+    },
+    {
+     "index": 139,
+     "high": 18.285384353820923,
+     "low": 11.67641076324857,
+     "same_sign": true
+    },
+    {
+     "index": 69,
+     "high": 18.181314343773444,
+     "low": 11.705886340061626,
+     "same_sign": true
+    },
+    {
+     "index": 130,
+     "high": -15.195183301415193,
+     "low": -9.75621570408565,
+     "same_sign": true
+    },
+    {
+     "index": 70,
+     "high": 13.279145463815356,
+     "low": 9.726719390232235,
+     "same_sign": true
+    },
+    {
+     "index": 129,
+     "high": -10.175905678978008,
+     "low": -7.015029208246754,
+     "same_sign": true
+    },
+    {
+     "index": 75,
+     "high": -9.881047519108932,
+     "low": -6.317829897986258,
+     "same_sign": true
+    },
+    {
+     "index": 63,
+     "high": 8.47113363496914,
+     "low": 5.460261960471331,
+     "same_sign": true
+    }
+   ],
+   "sign_agreement_weighted_by_high": 0.9996920048900804,
+   "G": {
+    "low": [
+     7.429994496219891
+    ],
+    "high": [
+     6.716215267430967
+    ]
+   },
+   "f_manta": {
+    "low": [
+     2.6917920343245565
+    ],
+    "high": [
+     2.977867623896195
+    ]
+   }
+  }
+ }
+}
