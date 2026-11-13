@@ -23,14 +23,34 @@ import desc
 import interpax
 
 
+def _concrete(build):
+    """`build()`, a module of constants, with concrete arrays wherever it is called.
+
+    Runs as an ahead-of-time compiled executable. Calling one is not a primitive
+    bind, so no enclosing trace sees it: under a jit trace -- DESC's reverse
+    mode traces the objective as a custom_vjp function -- a plain (filter_)jit
+    call is staged into that trace and returns its tracers, which the caches
+    below would then hand to every later evaluation, long after the trace
+    ended. That only bit a caller whose first evaluation at a resolution was
+    traced (runStellarator.py warms the caches concretely at import, the
+    gradient direction check does not). ensure_compile_time_eval cannot
+    replace this: it runs the inner jit eagerly too, and orthax's error_if
+    trips on the recurrence evaluated that way. Bit-identical to the
+    filter_jit result it replaces.
+    """
+    static = eqx.partition(eqx.filter_eval_shape(build), eqx.is_array)[1]
+    compiled = jax.jit(lambda: eqx.filter(build(), eqx.is_array)).lower().compile()
+    return eqx.combine(compiled(), static)
+
+
 @functools.lru_cache(maxsize=None)
 def _speedgrid(nx):
-    return eqx.filter_jit(lambda: MaxwellSpeedGrid(nx))()
+    return _concrete(lambda: MaxwellSpeedGrid(nx))
 
 
 @functools.lru_cache(maxsize=None)
 def _pitchgrid(na):
-    return eqx.filter_jit(lambda: UniformPitchAngleGrid(na))()
+    return _concrete(lambda: UniformPitchAngleGrid(na))
 
 
 class yancc_data(eqx.Module):
@@ -85,7 +105,7 @@ class yancc_data(eqx.Module):
         self.Vpp = Vpp
         self.rho = rho
 
-        # Built under a jit so their arrays are concrete wherever this runs.
+        # Built so their arrays are concrete wherever this runs (_concrete).
         # DESC computes the objective's JVP under a vmap over tangents, and
         # MaxwellSpeedGrid calls jnp.linalg.pinv, a custom_jvp function that
         # comes out of a vmap trace as a BatchTracer even with no batched
