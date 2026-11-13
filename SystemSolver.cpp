@@ -5474,17 +5474,15 @@ void SystemSolver::computeAdjointGradients()
 
 SystemSolver::AdjointParameterDerivatives SystemSolver::adjointParameterDerivatives()
 {
-    AdjointParameterDerivatives dFdp{GlobalStateMatrix(nVars), GlobalStateMatrix(nVars),
-                                     GlobalStateMatrix(nAux)};
-
     // dF/dp is evaluated at the same state, and with the same geometry, as the
     // residual it differentiates: dSigmaFn_dp on a geometry-dependent case reads
     // State::geom exactly as SigmaFn does. Without the geometry the adjoint's F_p
     // is the derivative of a different function from the one the solver
     // converged, and the symptom is a plausible wrong gradient beside a correct G.
-    PhysicsNodes nodes = physicsNodesAt(y, jt);
-    std::vector<Position> const &points = nodes.points;
-    GlobalState &states = nodes.states;
+    AdjointParameterDerivatives dFdp{physicsNodesAt(y, jt), GlobalStateMatrix(nVars),
+                                     GlobalStateMatrix(nVars), GlobalStateMatrix(nAux), {}, {}};
+    std::vector<Position> const &points = dFdp.nodes.points;
+    GlobalState const &states = dFdp.nodes.states;
 
     const Index derivK = superconvergent ? k + 1 : k;
 
@@ -5501,6 +5499,59 @@ SystemSolver::AdjointParameterDerivatives SystemSolver::adjointParameterDerivati
     }
     adjointProblem->ComputePhysicsDerivatives({dFdp.dSigmadp, dFdp.dSourcedp, dFdp.dAuxdp},
                                               states, points);
+
+    const bool spatial = adjointProblem->areParametersSpatial();
+    const Index np = adjointProblem->getNp();
+    const Index cols = spatial ? nCells * physicsNodesPerCell() : 1;
+
+    // The scalar rows' dG_s/dp. Those rows are ScalarG itself, evaluated as the
+    // residual evaluates it, so dG_s/dp takes the same arguments.
+    if (nScalars > 0)
+    {
+        const GlobalState scalarStates = y.evalOnNodes();
+        const GlobalState scalarStates_dt = dydt.evalOnNodes();
+        const Vector &weights = integrator.integrationWeights(y.getBasis(), grid);
+        const Matrix &phiBoundary = integrator.phiBoundary(y.getBasis(), grid);
+
+        for (Index s = 0; s < nScalars; ++s)
+        {
+            Matrix dGsdp = adjointProblem->dScalarG_dp(s, scalarStates, scalarStates_dt, y.getPoints(),
+                                                       weights, phiBoundary, jt);
+            if (dGsdp.rows() != np || dGsdp.cols() != cols)
+                throw std::runtime_error(
+                    "Adjoint hook \"dScalarG_dp\" returned a (" + std::to_string(dGsdp.rows()) +
+                    ", " + std::to_string(dGsdp.cols()) + ") array for scalar " +
+                    std::to_string(s) + "; it must be (np, " +
+                    (spatial ? "nPoints" : "1") + ") = (" + std::to_string(np) + ", " +
+                    std::to_string(cols) + ")" +
+                    (spatial ? ", one column per physics node" : ", or a length-np vector") + ".");
+            dFdp.dScalarGdp.push_back(std::move(dGsdp));
+        }
+    }
+
+    // The field rows' dR/dp, the same way. An empty matrix is the default and
+    // means the row does not read the parameters. Only with the field's unknowns
+    // in the state: an equilibrium model's own parameters are its response's
+    // business.
+    if (fieldModel)
+    {
+        const GlobalState fieldStates = fieldStatesAt(y, dydt);
+        const Vector &weights = integrator.integrationWeights(y.getBasis(), grid);
+        const Vector psi = y.getField(), dpsidt = dydt.getField();
+
+        for (Index f = 0; f < nField; ++f)
+        {
+            Matrix dRdp =
+                adjointProblem->dFieldResidual_dp(f, psi, dpsidt, fieldStates, y.getPoints(), weights, jt);
+            if (dRdp.size() != 0 && (dRdp.rows() != np || dRdp.cols() != cols))
+                throw std::runtime_error(
+                    "Adjoint hook \"dFieldResidual_dp\" returned a (" + std::to_string(dRdp.rows()) + ", " +
+                    std::to_string(dRdp.cols()) + ") array for field row " + std::to_string(f) +
+                    "; it must be (np, " + (spatial ? "nPoints" : "1") + ") = (" + std::to_string(np) + ", " +
+                    std::to_string(cols) + "), or empty if the row does not read the parameters.");
+            dFdp.dFieldRdp.push_back(std::move(dRdp));
+        }
+    }
     return dFdp;
 }
 
@@ -5547,7 +5598,7 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex, AdjointParameterDeri
     Matrix dGdp;
     if (fieldModel || reducedCoupling())
     {
-        PhysicsNodes nodes = physicsNodesAt(y, jt);
+        PhysicsNodes const &nodes = dFdp.nodes;
         dGdp = adjointProblem->dGFndpAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(y), nPhys, y,
                                              superconvergent ? postprocessor.get() : nullptr);
     }
@@ -5679,68 +5730,25 @@ void SystemSolver::accumulateAdjointGradients(Index gIndex, AdjointParameterDeri
         }
     }
 
-    // The scalar rows' share, -z_mu^T dG_s/dp. Those rows are ScalarG itself,
-    // evaluated as the residual evaluates it, so dG_s/dp takes the same
-    // arguments.
-    if (nScalars > 0)
+    // The scalar rows' share, -z_mu^T dG_s/dp, and the field rows', -z_psi^T
+    // dR/dp, an empty dR/dp being a row that reads no parameter.
+    const Index np = adjointProblem->getNp();
+    for (Index s = 0; s < static_cast<Index>(dFdp.dScalarGdp.size()); ++s)
     {
-        const GlobalState scalarStates = y.evalOnNodes();
-        const GlobalState scalarStates_dt = dydt.evalOnNodes();
-        const Vector &weights = integrator.integrationWeights(y.getBasis(), grid);
-        const Matrix &phiBoundary = integrator.phiBoundary(y.getBasis(), grid);
-        const Index np = adjointProblem->getNp();
-        const Index cols = spatial ? nPoints : 1;
-
-        for (Index s = 0; s < nScalars; ++s)
-        {
-            const Matrix dGsdp = adjointProblem->dScalarG_dp(
-                s, scalarStates, scalarStates_dt, y.getPoints(), weights, phiBoundary, jt);
-            if (dGsdp.rows() != np || dGsdp.cols() != cols)
-                throw std::runtime_error(
-                    "Adjoint hook \"dScalarG_dp\" returned a (" + std::to_string(dGsdp.rows()) +
-                    ", " + std::to_string(dGsdp.cols()) + ") array for scalar " +
-                    std::to_string(s) + "; it must be (np, " +
-                    (spatial ? "nPoints" : "1") + ") = (" + std::to_string(np) + ", " +
-                    std::to_string(cols) + ")" +
-                    (spatial ? ", one column per physics node" : ", or a length-np vector") + ".");
-
-            if (spatial)
-                G_p.block(gIndex * nPoints, 0, nPoints, np) -= adjoint_mu(s) * dGsdp.transpose();
-            else
-                G_p.row(gIndex) -= adjoint_mu(s) * dGsdp.transpose();
-        }
+        if (spatial)
+            G_p.block(gIndex * nPoints, 0, nPoints, np) -= adjoint_mu(s) * dFdp.dScalarGdp[s].transpose();
+        else
+            G_p.row(gIndex) -= adjoint_mu(s) * dFdp.dScalarGdp[s].transpose();
     }
-
-    // The field rows' share, -z_psi^T dR/dp, the same way. An empty matrix is
-    // the default and means the rows do not read the parameters. Only with the
-    // field's unknowns in the state: an equilibrium model's own parameters are
-    // its response's business.
-    if (fieldModel)
+    for (Index f = 0; f < static_cast<Index>(dFdp.dFieldRdp.size()); ++f)
     {
-        const GlobalState fieldStates = fieldStatesAt(y, dydt);
-        const Vector &weights = integrator.integrationWeights(y.getBasis(), grid);
-        const Vector psi = y.getField(), dpsidt = dydt.getField();
-        const Index np = adjointProblem->getNp();
-        const Index cols = spatial ? nPoints : 1;
-
-        for (Index f = 0; f < nField; ++f)
-        {
-            const Matrix dRdp =
-                adjointProblem->dFieldResidual_dp(f, psi, dpsidt, fieldStates, y.getPoints(), weights, jt);
-            if (dRdp.size() == 0)
-                continue;
-            if (dRdp.rows() != np || dRdp.cols() != cols)
-                throw std::runtime_error(
-                    "Adjoint hook \"dFieldResidual_dp\" returned a (" + std::to_string(dRdp.rows()) + ", " +
-                    std::to_string(dRdp.cols()) + ") array for field row " + std::to_string(f) +
-                    "; it must be (np, " + (spatial ? "nPoints" : "1") + ") = (" + std::to_string(np) + ", " +
-                    std::to_string(cols) + "), or empty if the row does not read the parameters.");
-
-            if (spatial)
-                G_p.block(gIndex * nPoints, 0, nPoints, np) -= adjoint_field(f) * dRdp.transpose();
-            else
-                G_p.row(gIndex) -= adjoint_field(f) * dRdp.transpose();
-        }
+        Matrix const &dRdp = dFdp.dFieldRdp[f];
+        if (dRdp.size() == 0)
+            continue;
+        if (spatial)
+            G_p.block(gIndex * nPoints, 0, nPoints, np) -= adjoint_field(f) * dRdp.transpose();
+        else
+            G_p.row(gIndex) -= adjoint_field(f) * dRdp.transpose();
     }
 }
 

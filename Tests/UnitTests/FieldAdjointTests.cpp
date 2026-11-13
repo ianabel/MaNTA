@@ -918,11 +918,16 @@ public:
 class GainAdjoint : public ClosedFormAdjoint
 {
 public:
-    explicit GainAdjoint(bool declares_ = true) : declares(declares_) { np = NP_GAIN; }
+    explicit GainAdjoint(bool declares_ = true, Index ng_ = 1) : declares(declares_)
+    {
+        np = NP_GAIN;
+        ng = ng_;
+    }
 
     Matrix dFieldResidual_dp(Index f, Vector const &psi, Vector const &dpsidt, GlobalState const &states,
                              std::vector<Position> const &points, Vector const &weights, Time t) override
     {
+        ++fieldParameterCalls;
         if (!declares)
             return ClosedFormAdjoint::dFieldResidual_dp(f, psi, dpsidt, states, points, weights, t);
         Matrix d = Matrix::Zero(NP_GAIN, 1);
@@ -931,12 +936,14 @@ public:
     }
 
     bool declares;
+    long fieldParameterCalls = 0;
 };
 
-AdjointRun gainRun(Vector const &p, Index nCells, Index k, std::string const &stem, bool declares = true)
+AdjointRun gainRun(Vector const &p, Index nCells, Index k, std::string const &stem, bool declares = true,
+                   Index ng = 1)
 {
     return buildRun(std::make_unique<ClosedFormCoupledDiffusion>(Vector(p.head(NP))),
-                    std::make_unique<GainAdjoint>(declares), std::make_shared<GainField>(p(P_GAIN)),
+                    std::make_unique<GainAdjoint>(declares, ng), std::make_shared<GainField>(p(P_GAIN)),
                     nCells, k, stem, SystemSolver::FieldSolveMode::Exact);
 }
 
@@ -1754,6 +1761,29 @@ BOOST_AUTO_TEST_CASE(a_parameter_in_the_field_row_reaches_the_gradient)
     BOOST_TEST(run.objective() == exactGainG(KAPPA0, S0_0, GAIN0), boost::test_tools::tolerance(1e-8));
     BOOST_TEST(relativeError(adjointGrad, analytic) < 1e-7);
     BOOST_TEST(adjointGrad(P_GAIN) == fd, boost::test_tools::tolerance(1e-6));
+}
+
+BOOST_AUTO_TEST_CASE(the_field_rows_parameter_derivative_is_evaluated_once_per_gradient)
+{
+    // dR/dp depends on the state, not on the objective, so a gradient asks for
+    // it once per field row whatever ng is. Two objectives here -- the same one
+    // twice -- and one field row, so one call; and the shared evaluation is
+    // applied to both, so each row is the one-objective gradient bit for bit.
+    auto one = gainRun(gainParameters(), 4, 3, "field_adjoint_gain_once_1");
+    integrateQuietly(one);
+    auto two = gainRun(gainParameters(), 4, 3, "field_adjoint_gain_once_2", /*declares=*/true, /*ng=*/2);
+    integrateQuietly(two);
+
+    BOOST_TEST(static_cast<GainAdjoint &>(*one.adjoint).fieldParameterCalls == 1);
+    BOOST_TEST(static_cast<GainAdjoint &>(*two.adjoint).fieldParameterCalls == 1);
+
+    const Vector reference = one.gradient();
+    BOOST_TEST(reference(P_GAIN) > 0.1, "not vacuous: the field row's share is nonzero");
+    for (Index g = 0; g < 2; ++g)
+    {
+        const Vector row = two->G_p.row(g).transpose();
+        BOOST_TEST(std::memcmp(row.data(), reference.data(), row.size() * sizeof(double)) == 0);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(an_adjoint_problem_that_declares_no_field_derivative_reads_as_independent)
