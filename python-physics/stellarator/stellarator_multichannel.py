@@ -568,6 +568,21 @@ def per_process_files(solver_config):
     return out
 
 
+def padded_batch(m, batch_size, use_batching):
+    """(rounds, padded size) of a batch of m points.
+
+    useBatching splits it into rounds of batch_size points, each one vmap;
+    without, it is one vmap over all m, padded only so the device mesh splits
+    it evenly. Every array a batch is evaluated with -- fields, states,
+    positions -- is padded to this one size, or the vmap refuses them.
+    """
+    if use_batching:
+        rounds = -(-m // batch_size)
+        return rounds, rounds * batch_size
+    n = len(jax.devices())
+    return 0, -(-m // n) * n
+
+
 def _pad_state(tree, pad_width):
     """Pads all array leaves of a PyTree along axis 0 by repeating the last entry."""
     dynamic, static = eqx.partition(tree, eqx.is_array)
@@ -727,7 +742,9 @@ class StellaratorTransport(MaNTA.TransportSystem):
             solver_config["MeshAdaptationThreshold"] = 1.25
             solver_config["DegreeTolerance"] = 1e-6
             solver_config["PhysicsParallelism"] = self.batch_size
-            solver_config["MaxPhysicsBatch"] = self.max_batch
+            if self.params.config.useBatching:
+                # without it every batch is one vmap, of any size
+                solver_config["MaxPhysicsBatch"] = self.max_batch
             solver_config.pop("GridPoints", None)
 
         self.adjointProblem = StellaratorAdjointProblem(
@@ -1176,15 +1193,17 @@ class StellaratorTransport(MaNTA.TransportSystem):
                         "Params cannot be keyed by batch size on this plan"
                     )
                 continue
-            if m > self.max_batch:
+            if self.params.config.useBatching and m > self.max_batch:
                 raise RuntimeError(
                     f"the plan announces a batch of {m} points, past the {self.max_batch} "
-                    f"this case holds at once ({self.batch_size / len(jax.devices())} rounds of {self.batch_size})"
+                    f"this case holds at once ({self.nchunks} rounds of {self.batch_size})"
                 )
             points_of[m] = points
 
-            rounds = -(-m // self.batch_size)
-            pad_width = rounds * self.batch_size - m
+            rounds, size = padded_batch(
+                m, self.batch_size, self.params.config.useBatching
+            )
+            pad_width = size - m
 
             # don't pad the field itself, just evaluate at the padded points
             fields_interp, vp_interp, vpp_interp = self.yancc_wrapper.get_fields_at_rho(
@@ -1236,20 +1255,11 @@ class StellaratorTransport(MaNTA.TransportSystem):
                 f"a batch of {m} points that the evaluation plan did not announce"
             )
 
+        # rounds is 0 without useBatching: one vmap over the whole batch
         rounds, fields, vp, vpp = self.layout[m]
-        if self.params.config.useBatching:
-            pad = rounds * self.batch_size - m
-            states = _pad_state(_states, pad)
-            positions = jnp.pad(_positions, (0, pad), mode="edge")
-        else:
-            rounds = 0
-            ndevices = len(jax.devices())
-            pad = 0
-            if m % ndevices != 0:
-                pad += ndevices - m % ndevices
-
-            states = _pad_state(_states, pad)
-            positions = jnp.pad(_positions, (0, pad), mode="edge")
+        pad = padded_batch(m, self.batch_size, self.params.config.useBatching)[1] - m
+        states = _pad_state(_states, pad)
+        positions = jnp.pad(_positions, (0, pad), mode="edge")
 
         if warm:
             f1 = self._f1.get(m)
@@ -1336,8 +1346,10 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         npoints = len(points)
 
         self.batch_size = transport_system.batch_size
-        rounds = -(-npoints // self.batch_size)
-        self.pad_width = rounds * self.batch_size - npoints
+        self.use_batching = transport_system.params.config.useBatching
+        # rounds is 0 without useBatching: one vmap over every node
+        self.nrounds, size = padded_batch(npoints, self.batch_size, self.use_batching)
+        self.pad_width = size - npoints
         self.field, self.vp, self.vpp = self.yancc_wrapper.get_fields_at_rho(
             jnp.pad(points, (0, self.pad_width), mode="edge")
         )
@@ -1455,8 +1467,7 @@ class StellaratorAdjointProblem(MaNTA.AdjointProblem):
         positions = jnp.pad(_positions, (0, self.pad_width), mode="edge")
         states = _pad_state(_states, self.pad_width)
 
-        rounds = -(-self.npoints // self.batch_size)
-        nchunks = 0 if self.batch_size == 0 else rounds
+        nchunks = self.nrounds
         # dke_field_jac itself for the bare neoclassical flux, so the traced
         # function -- and with it JAX's persistent-cache key -- is what it
         # always was; anything wrapped (the ITG term, a diffusive Er) is
