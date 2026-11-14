@@ -17,6 +17,8 @@ goes on working: its methods override these. Such a case's adjoint has no
 `params` to differentiate, and `dScalarG_dp` says so rather than assume zero.
 """
 
+from functools import partial
+
 import jax
 
 from .state import ScalarG_Decorator, ScalarGPrime_Decorator
@@ -51,10 +53,18 @@ class ScalarConstraints:
         with, and with respect to its time derivative (identically zero for an
         algebraic scalar).
         """
+        return self._scalar_gradients(states, states_dot, integrator, t, self.params)
+
+    # Compiled once per shape, gradients and all. Taking jax.grad of `scalar`
+    # afresh on every call re-transforms it each time -- even a jitted `scalar`
+    # -- instead of running compiled code, and ScalarGPrime is called on every
+    # Jacobian build.
+    @partial(jax.jit, static_argnames=("self",))
+    def _scalar_gradients(self, states, states_dot, integrator, t, params):
         grad = jax.grad(self.scalar, argnums=(1, 2))
         dG, dGdot = [], []
         for s in range(self.nScalars):
-            d, ddot = grad(s, states, states_dot, integrator, t, self.params)
+            d, ddot = grad(s, states, states_dot, integrator, t, params)
             dG.append(d)
             dGdot.append(ddot)
         return [dG, dGdot]
