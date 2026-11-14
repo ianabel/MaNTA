@@ -139,6 +139,17 @@ consistency = pressure_consistency or bootstrap_consistency
 # peak pressure and peak |<J.B>|
 pressure_weight = 1.0
 bootstrap_weight = 0.1
+# How the pressure mismatch is measured. "relative": (p_MaNTA - p_DESC) / peak p,
+# so a 10% error costs the same at any beta. "beta": the mismatch in units of
+# beta, 2 mu_0 dp / B0^2 (B0 the fixed normalisation's <|B|>_rms), divided by
+# beta_error_tol -- the error counts only as far as it can move the equilibrium.
+# Measured by re-solving DESC equilibria at <beta> = 0 to 1% (eq5, iota ~ 0.4;
+# eq_itg_flux, iota ~ 1.1-1.2; both A ~ 8): a pressure error moves |B| on the
+# transport grid by rms dB/B = (0.4-1.4) d<beta>, linearly, with the same slope at
+# every base beta, and not scaling like A / iota^2. So d<beta> is the quantity,
+# and beta_error_tol is roughly the tolerable relative error in |B|.
+pressure_error_metric = "beta"
+beta_error_tol = 1e-4
 # L = M = N for DESC. At 4 the interior was poorly determined: a boundary change
 # of 7e-6 moved it by 1.4% and G by 4%, which stalled the trust region, and
 # <J.B> at zero current was numerical noise the size of the bootstrap current.
@@ -436,6 +447,21 @@ if consistency:
             verbose=1,
             **{**tight_solve, "maxiter": 500},
         )
+    if pressure_consistency:
+        # Pa per unit of the pressure residual (see pressure_error_metric)
+        if pressure_error_metric == "relative":
+            pressure_error_scale = p_ref
+        elif pressure_error_metric == "beta":
+            # B0 is held fixed with the normalisation, so the scale cannot be
+            # traded against the geometry
+            p_mag = normalization["B0"] ** 2 / (2 * 4e-7 * np.pi)
+            pressure_error_scale = beta_error_tol * p_mag
+            print(
+                f"pressure residual in beta: peak beta {p_ref / p_mag:.2e}, so a "
+                f"unit residual is {pressure_error_scale / p_ref:.2e} of peak p"
+            )
+        else:
+            raise ValueError(f"unknown pressure_error_metric {pressure_error_metric!r}")
     if continue_current:
         j_ref = float(np.abs(JdotB_at(eq, points_np)).max())
         print("current: continuing the loaded equilibrium's current profile")
@@ -637,8 +663,8 @@ def objective_from_user_fun(grid, data, params=None, desc_jb=None):
     if pressure_consistency:
         p_edge_target = manta_pressure[-1] * (1.0 - RHO_EDGE) / (1.0 - points_np[-1])
         p_edge = desc_pressure(GRID_EDGE, params["p_l"])
-        r_p = jnp.concatenate([manta_pressure - desc_p, p_edge_target - p_edge]) / p_ref
-        residuals.append(pressure_weight * r_p)
+        dp = jnp.concatenate([manta_pressure - desc_p, p_edge_target - p_edge])
+        residuals.append(pressure_weight * dp / pressure_error_scale)
         errors["pressure"] = (manta_pressure, desc_p)
     if bootstrap_consistency:
         manta_jb = out[2]
