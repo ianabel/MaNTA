@@ -1071,7 +1071,13 @@ void SystemSolver::integrate(double tFinal)
 	if (IDA_mem == nullptr)
 		throw std::logic_error("integrate() called before initialize()");
 
-	if (t0 > tFinal)
+	// tFinal bounds only a run that ends there. With steady-state termination
+	// armed, the steady solvers never advance time and the time loop runs past
+	// tFinal until the steady test passes, so tFinal is not an end -- run_ss()
+	// passes 0 -- and a start after it is not an error: a case whose inputs
+	// switch on in time (a ramp, a controller) is steady-solved from a t_initial
+	// past the switch-on, since every time-dependent input is frozen there.
+	if (!TerminateOnSteadyState && t0 > tFinal)
 	{
     logmsg<LOG_LEVEL::ERROR>("Initial time t = {} is after the end of the simulation at t = {}", t0, tFinal);
 		throw std::runtime_error("Simulation ends before it begins.");

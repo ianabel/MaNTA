@@ -772,7 +772,10 @@ documents; on this table's configuration both steady modes beat it.
    past the transient, for a fraction of the work.
 
    Explicitly time-dependent data — boundary values, sources — is frozen at
-   ``t_initial``. There is no time axis to evaluate it on.
+   ``t_initial``. There is no time axis to evaluate it on. So a case whose inputs
+   switch on or decay in time — a ramp, a start-up source, a controller — is
+   steady-solved at the state they reach: set ``t_initial`` past the switch-on.
+   ``t_final`` plays no part, and a ``t_initial`` beyond it is accepted.
 
 .. _steady-state-test:
 

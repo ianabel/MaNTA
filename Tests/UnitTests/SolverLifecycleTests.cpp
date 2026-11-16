@@ -570,6 +570,62 @@ BOOST_AUTO_TEST_CASE(a_failed_run_still_frees_its_resources)
     removeOutput(stem);
 }
 
+BOOST_AUTO_TEST_CASE(a_steady_solve_may_start_after_t_final)
+{
+    // run_ss() calls runSolver(0), and integrate() used to refuse any t0 past
+    // tFinal before it knew the run was a steady one -- so no steady solve could
+    // start at t_initial > 0. That is the only way to steady-solve a case whose
+    // inputs switch on in time, since a steady solve freezes them at t_initial.
+    // Every steady mode, TimeMarch included: armed termination runs its time
+    // loop past tFinal. a_failed_run_still_frees_its_resources pins that a
+    // transient started after tFinal is still refused.
+    //
+    // TestDiffusion's lower boundary is u(0, t) = exp(-pi^2 t / 4), so the
+    // answers also pin what t_initial means. PseudoTransient and Newton freeze
+    // the datum at t_initial = 1 and land on exp(-pi^2/4) (1 - x); TimeMarch
+    // advances time, the datum decays, and it lands near zero.
+    for (auto mode : {SystemSolver::SteadyMode::PseudoTransient,
+                      SystemSolver::SteadyMode::Newton,
+                      SystemSolver::SteadyMode::TimeMarch})
+    {
+        const std::string stem = "lifecycle_late_steady";
+        Grid grid(0.0, 1.0, nCells);
+        TestDiffusion problem(lifecycle_config);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(mode);
+        sys.setSteadyStateTolerance(1e-10);
+        sys.setInitialTime(1.0);
+
+        std::string message;
+        {
+            CapturedOutput quiet;
+            try
+            {
+                sys.runSolver(0.0);
+            }
+            catch (std::runtime_error const &e)
+            {
+                message = e.what();
+            }
+        }
+        BOOST_TEST(message.empty(), message);
+
+        const Vector u = sample(sys);
+        const double frozen = std::exp(-M_PI_2 * M_PI_2);
+        for (Index i = 0; i < u.size(); ++i)
+        {
+            const double x = 0.1 + 0.2 * i;
+            if (mode == SystemSolver::SteadyMode::TimeMarch)
+                BOOST_TEST(std::abs(u(i)) < 1e-6, "u(" << x << ") = " << u(i));
+            else
+                BOOST_TEST(u(i) == frozen * (1.0 - x), boost::test_tools::tolerance(1e-8));
+        }
+
+        removeOutput(stem);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(aggressive_timesteps_is_accepted_and_gives_the_same_answer)
 {
     // IDASetEtaMax changes how fast IDA may grow the step, not what it converges
