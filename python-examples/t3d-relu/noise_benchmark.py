@@ -7,7 +7,7 @@
 Every run is a steady solve of `relu_ke.ReluKeCase` with T3D's noise (uniform,
 +-`noise`, fresh every call) at one seed, one Jacobian and one stopping test:
 either `SteadyStateTest = "Residual"` at a `SteadyStateTolerance` (`--tol`), or
-`"NewtonStep"` at `Relative_tolerance = Absolute_tolerance` (`--ns-rtol`), with
+`"NewtonStep"` at `RelativeTolerance = AbsoluteTolerance` (`--ns-rtol`), with
 `SuppressAlgebraicError` so that only u is tested -- the noisy flux puts its
 noise straight into sigma, an algebraic unknown no step can damp. The
 Jacobians are:
@@ -49,8 +49,8 @@ def configuration(cells, degree, tolerance, test="Residual"):
         "GridSize": cells,
         "LowerBoundary": 0.0,
         "UpperBoundary": 0.8,
-        "Relative_tolerance": tolerance if newton_step else 1.0e-8,
-        "Absolute_tolerance": tolerance if newton_step else 1.0e-8,
+        "RelativeTolerance": tolerance if newton_step else 1.0e-8,
+        "AbsoluteTolerance": tolerance if newton_step else 1.0e-8,
         "delta_t": 1.0e-2,
         "SteadyStateTest": test,
         "SuppressAlgebraicError": newton_step,
@@ -166,7 +166,7 @@ def main():
     p.add_argument("--tol", type=float, nargs="+", default=[3.0, 5.0, 10.0, 20.0],
                    help="SteadyStateTolerance for the Residual test, absolute")
     p.add_argument("--ns-rtol", type=float, nargs="*", default=[1e-2, 3e-3],
-                   help="Relative_tolerance = Absolute_tolerance for the NewtonStep test")
+                   help="RelativeTolerance = AbsoluteTolerance for the NewtonStep test")
     p.add_argument("--workers", type=int, default=6)
     p.add_argument("--csv")
     args = p.parse_args()

@@ -51,8 +51,8 @@ def configuration(cells, degree, tolerance):
         "GridSize": cells,
         "LowerBoundary": 0.0,
         "UpperBoundary": 1.0,
-        "Relative_tolerance": 1.0e-10,
-        "Absolute_tolerance": 1.0e-10,
+        "RelativeTolerance": 1.0e-10,
+        "AbsoluteTolerance": 1.0e-10,
         "delta_t": 1.0,
         # This study measures the residual test -- its tolerances are multiples
         # of eps in ||F|| -- so it names it rather than taking the default.
