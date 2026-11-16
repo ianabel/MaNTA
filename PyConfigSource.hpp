@@ -72,7 +72,7 @@ public:
             case ConfigSchema::Type::String: return obj.cast<std::string>();
             case ConfigSchema::Type::DoubleList:
                 // A bare number is accepted where a list is wanted, which is
-                // what Absolute_tolerance has always allowed on the TOML side.
+                // what AbsoluteTolerance has always allowed on the TOML side.
                 try
                 {
                     return obj.cast<std::vector<double>>();

@@ -120,6 +120,22 @@ class JAXTransportSystem(ScalarConstraints, MaNTA.TransportSystem):
     def dSources_dudot( self, index, state, x, t ):
         return self.dSourcedvar(index,state,x,t, self.params).VariableDot
     
+    # The geometry a field or equilibrium model supplies, through the same
+    # gradients: the coupled Jacobian's first factor, for a case declaring
+    # geometryDerivatives = Analytic. Only called with a model attached, so the
+    # Geometry component is there to read.
+    @MaNTA_Decorator
+    def dSigmaFn_dGeometry( self, index, state, x, t ):
+        return self.dSigmadvar(index,state,x,t, self.params).Geometry
+
+    @MaNTA_Decorator
+    def dSources_dGeometry( self, index, state, x, t ):
+        return self.dSourcedvar(index,state,x,t, self.params).Geometry
+
+    @MaNTA_Decorator
+    def dAuxG_dGeometry( self, index, state, x, t ):
+        return self.dAuxdvars(index,state,x,t, self.params).Geometry
+
     @MaNTA_Decorator
     def AuxG( self, index, state, x, t):
         return self.aux(index, state, x, t, self.params)

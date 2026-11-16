@@ -397,6 +397,33 @@ def test_a_wrongly_shaped_dScalarG_dp_is_reported(tmp_path, spatial):
         runner.run_ss()
 
 
+@pytest.mark.parametrize("spatial", [False, True], ids=["number", "field"])
+def test_dScalarG_dp_is_evaluated_once_per_gradient(tmp_path, spatial):
+    """dG_s/dp depends on the state, not on the objective, so one gradient asks
+    for it once per scalar whatever ng is: two calls here, with two objectives,
+    rather than four. The gradient itself is the finite-difference test's."""
+
+    class Counting(CombinedAdjoint):
+        def __init__(self, ts, spatial):
+            super().__init__(ts, spatial)
+            self.calls = []
+
+        def dScalarG_dp(self, s, *args):
+            self.calls.append(s)
+            return super().dScalarG_dp(s, *args)
+
+    points = physics_points(False)
+    system = Combined(False, True, spatial, points, *(v * np.ones(len(points)) for v in (KAPPA, S0, C0)))
+    adjoint = Counting(system, spatial)
+    system.createAdjointProblem = lambda: adjoint
+    runner = MaNTA.Runner(system)
+    runner.configure(config(tmp_path, False))
+    runner.run_ss()
+
+    assert adjoint.ng == 2
+    assert sorted(adjoint.calls) == [0, 1]
+
+
 def test_the_corrected_objective_sees_the_scalars(tmp_path):
     """estimateObjective's dG/dy includes dG/dmu, so G_1 corrects to second order.
 

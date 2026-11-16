@@ -91,7 +91,7 @@ SystemSolver::estimateDiscretisationError(AdjointProblem &objective, DGSoln cons
         throw std::invalid_argument(
             "The discretisation estimate cannot be made with global scalars: its adjoint "
             "does not carry the scalar bordering.");
-    if (fieldModel)
+    if (fieldModel || equilibriumModel)
         throw std::invalid_argument(
             "The discretisation estimate cannot be made with a field model attached: the "
             "enriched residual has no field rows.");

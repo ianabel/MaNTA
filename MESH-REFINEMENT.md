@@ -220,9 +220,9 @@ this tree has one benchmark on each side of the classical hp criterion.
 **Per-cell degrees are a much larger change than they look.** `DGSolnImpl`
 holds one `const Index k` and one `const BasisType Basis` by value, and there
 are ~320 `(k+1)` sites in the core — 200 in `SystemSolver.cpp`, 74 in
-`Matrices.cpp`. That is the same single-`k` assumption `TODO` records as the
-blocker for paper II's HDG+ family. A global-`k` loop is cheap; per-cell is a
-project.
+`Matrices.cpp`. Paper II's HDG+ family, with different degrees per field,
+would run into the same single-`k` assumption. A global-`k` loop is cheap;
+per-cell is a project.
 
 ## 7. The modal-decay sensor works, and drives it from the decay *rate*
 
@@ -531,6 +531,20 @@ Diagnosed one config key at a time on the meshes that failed, at `9+1`, `k = 5`:
   cells and is measuring the error those cells *propagate* rather than the error
   they contain. Either way there is a floor near 1e-7 in the quantity anyone would
   quote, and it arrives just as the solver does.
+
+**Re-measured 2026-11-07, and the "nothing got through" half no longer holds.**
+The `TimeMarch` ladder reproduces to four figures, `sigma = 0.25` included, but
+`MinStepSize = 1e-12` no longer rescues it (220 s, then the same corrector
+failure, before and after the cold-start `y'` fix alike). Meanwhile `Newton` and
+`PseudoTransient`, with `SteadyStateTest = "Residual"`, solve every rung down to
+`h0 = 2.6e-15` and all 112 gradings of a wider sweep, of which `TimeMarch`
+fails 61. The error bottoms at 1.385e-07 at `sigma = 0.25` and rises below it, so
+the law's wall is real and the solver's is `TimeMarch`'s alone.
+Once the cold-start `y'` solve converged (it had stalled on this problem's
+`delta_t = 1e3`), the default `TimeMarch` ladder stopped a rung earlier, at
+`sigma = 0.4`, and `MinStepSize = 1e-12` recovers `sigma = 0.35` and 0.3 again;
+`sigma = 0.25` still fails at every setting. `docs/adaptivity.rst` has the
+current numbers.
 
 So the reachable gain from redistribution on this problem is a little over four
 orders of magnitude at fixed DOF, and both walls sit at about the same place. **A
@@ -1102,8 +1116,9 @@ build, and it is a much smaller change than what follows here.
 **So the rest of this section is kept as a scoping record, not as a plan.** It is
 still the right analysis of what per-cell degrees would cost, and the structural
 finding below — that the global condensed system is `k`-free — is worth having
-whenever this comes back, e.g. for paper II's HDG+ family, which `TODO` records as
-blocked on the same single-`k` assumption. It should not be started for adaptivity.
+whenever this comes back, e.g. for paper II's HDG+ family, which needs different
+degrees per field and so rests on the same single-`k` assumption. It should not be
+started for adaptivity.
 
 ### What would have justified beginning
 

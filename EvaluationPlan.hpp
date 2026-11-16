@@ -50,8 +50,10 @@ enum class EvaluationKind
     ScalarConstraint,  // ScalarG, and InitialScalarDerivative, on the k+1 basis nodes
     ScalarJacobian,    // ScalarGPrime, on the k+1 basis nodes
     ScalarCoupling,    // dSources_dScalars, pointwise at the physics nodes
-    FieldCoupling,     // dSigmaFn_dGeometry, dSources_dGeometry and dAuxG_dGeometry,
-                       // pointwise at the physics nodes, with a field model attached
+    FieldCoupling,     // with a field model coupled, d(physics)/d(geometry) at the physics
+                       // nodes: dSigmaFn_dGeometry, dSources_dGeometry and dAuxG_dGeometry
+                       // pointwise, or, for a case declaring them Differenced, nGeometry + 1
+                       // batched ComputePhysics calls
     Adjoint,           // adjointDerivativesAt(): derivatives at the physics nodes
     InitialProjection, // InitialValue, InitialDerivative and InitialAuxValue, pointwise at
                        // each cell's Gauss points, L2-projected onto the basis

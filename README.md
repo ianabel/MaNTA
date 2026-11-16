@@ -29,36 +29,33 @@ You will need to download this codebase and compile it in order to run MaNTA
 
 To compile and use MaNTA you will need a system with the following
 
- - A C++23 compliant C++ compiler: **g++ 15 or newer**, or **clang++ 18 or newer**.
+ - A C++23 compliant C++ compiler: **g++ 14.3 or newer**, or **clang++ 18 or newer**.
    Verified by hand on clang++ 18, clang++ 19 and clang++ 21 -- each builds the
    solver, the pybind11 module and all three test suites clean under
    `-Wall -Werror`. Pick one when you configure the build directory:
    `cmake -B build -DCMAKE_CXX_COMPILER=clang++-19`.
 
-   > **Health warning: avoid g++ 14 if you can.** Something in it breaks on this
-   > tree at the release flags (`-O3 -flto -march=native`), and the symptom is a
-   > wrong number rather than an error: adding any member to `SystemSolver` makes
-   > one of the Jacobian tests fail about half the time, with an O(1) error, and no
-   > sanitiser reports anything. g++ 15, g++ 16 and every clang tested are clean.
-   > The build prints a warning if it sees g++ 14. It still compiles, and the
-   > solver's own output was reproducible in the case measured, so this is a
-   > recommendation rather than a hard floor -- but the numbers from a g++ 14
-   > release build are not ones this project can vouch for. `CLAUDE.md` and `TODO`
-   > have the reproduction; the root cause is not yet known.
+   > **Health warning: avoid g++ 14.2.** At the release flags
+   > (`-O3 -flto -march=native`) it miscompiled this tree, and the symptom was a
+   > wrong number rather than an error: adding any member to `SystemSolver` made
+   > one of the Jacobian tests fail about half the time, with an O(1) error, and
+   > no sanitiser reported anything. **g++ 14.3 does not**: CI builds and runs
+   > every suite on the ubuntu-24.04 image's g++ 14.3.0 and on AlmaLinux 10's
+   > system gcc 14.3.1 -- RHEL 10's compiler -- and the reproduction passes on
+   > 14.3.0 with the member in place. Whether 14.3 fixed it or the test misses it
+   > is not known, so the build still prints a warning when it sees g++ 14.
+   > `CLAUDE.md` and `TODO` have the reproduction.
 
-   CI runs seven build legs: g++ 15, g++ 16, clang++ 19, clang++ 20, clang++ 21,
-   and then g++ 15 and clang++ 19 again against Eigen 5.0.1. **g++ 14 and clang++ 18
-   are deliberately not among them** -- the first for the reason above, the second
-   because guarding it would mean maintaining clang-18 `-Werror` compliance and its
-   C++23 support has gaps. Both are therefore unguarded and can regress without
-   anyone noticing. Note what dropping g++ 14 costs: it is the compiler in Ubuntu
-   noble's archive, so the version most people will have by default is now the one
-   least tested here.
+   CI's ubuntu legs are g++ 14, 15 and 16 and clang++ 19, 20 and 21, then g++ 15
+   and clang++ 19 again against Eigen 5.0.1; its container legs are Fedora and
+   AlmaLinux 10. **clang++ 18 is deliberately not among them**: guarding it would
+   mean maintaining clang-18 `-Werror` compliance, and its C++23 support has gaps,
+   so it is unguarded and can regress without anyone noticing.
 
    The lower bound on gcc was measured, not guessed: **g++ 13 cannot build MaNTA at
    all**, because libstdc++ 13 has no `<print>` and the output layer uses
-   `std::print` throughout. g++ 14 builds it -- the bound moved to 15 on the
-   miscompile above, not on a language feature. clang++ 18 took one source change to admit --
+   `std::print` throughout. g++ 14 builds it; the floor is 14.3 because of the
+   miscompile above, not a language feature. clang++ 18 took one source change to admit --
    `PyGrid.hpp` used to declare `constexpr Vector getNodes(...)`, and a dynamic
    Eigen vector is not a literal type; C++23 permits that under P2448R2 provided the
    function is never constant-evaluated, which clang 18 does not implement. That
@@ -413,4 +410,4 @@ For a summary of contributors, see the [contributors](http://github.com/ianabel/
 
 ## License
 
-This project is licensed under the 3-Clause BSD Licence - see the [LICENSE.md](LICENSE.md) file for details
+This project is licensed under the 3-Clause BSD Licence - see the [LICENCE.md](LICENCE.md) file for details

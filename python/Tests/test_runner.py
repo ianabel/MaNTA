@@ -227,6 +227,56 @@ def test_explicit_grid_points_are_honoured(tmp_path):
     assert len(u) > 0
 
 
+def _jax_array(points):
+    jnp = pytest.importorskip("jax.numpy")
+    return jnp.asarray(points)
+
+
+@pytest.mark.parametrize(
+    "as_arraylike",
+    [
+        tuple,
+        np.asarray,
+        lambda p: np.asarray(p, dtype=np.float32),
+        lambda p: np.asarray(p)[:, None][:, 0],  # a strided view
+        _jax_array,
+    ],
+    ids=["tuple", "numpy", "numpy-float32", "numpy-view", "jax"],
+)
+def test_grid_points_may_be_any_arraylike(tmp_path, as_arraylike):
+    """GridPoints as a driver builds it -- usually a numpy array, not a list.
+
+    Every non-table entry of the dict goes through PyToml's tomlFromPy on its
+    way to the [configuration] table a geometry source reads, and that used to
+    handle a numpy *scalar* only: a numpy array reached item() and raised
+    "can only convert an array of size 1 to a Python scalar", a ValueError
+    naming no key, on every configure() of every driver that passes its nodes
+    as an array. The run is compared with the list one bit for bit, so a value
+    altered on the way through would fail as well as one refused. The points
+    are exact in float32, so the float32 and JAX (float32 by default) cases
+    hold the same numbers as the list.
+    """
+
+    points = [0.0, 0.125, 0.375, 0.625, 1.0]
+
+    def solve(grid_points):
+        runner = MaNTA.Runner(LinearDiffusion())
+        cfg = base_config(
+            tmp_path,
+            GridSize=len(points) - 1,
+            GridPoints=grid_points,
+            AbsoluteTolerance=np.asarray([1e-6]),
+        )
+        del cfg["LowerBoundary"]
+        del cfg["UpperBoundary"]
+        runner.configure(cfg)
+        runner.run(0.05)
+        return np.asarray(runner.getSolution(0, None))
+
+    reference = solve(points)
+    assert np.array_equal(solve(as_arraylike(points)), reference)
+
+
 # ------------------------------------------------------------------ runs --
 
 
@@ -531,18 +581,25 @@ def test_a_run_can_be_restarted_from_its_own_output():
 
     Output paths are cwd-relative (see the test above), so the files are named
     uniquely and cleaned up rather than placed under tmp_path.
+
+    At tight tolerances, as TestSolutions.py runs its round trips: a restart
+    re-initialises the integrator, so the two routes take different step
+    sequences, and at the default tolerances they legitimately differ by about
+    the tolerance itself -- which makes the comparison a test of IDA's step
+    choices rather than of the restart.
     """
     ref_name, split_name = "restart_reference", "restart_split"
+    tight = {"Relative_tolerance": 1e-6, "Absolute_tolerance": [1e-8], "MinStepSize": 1e-12}
     try:
         reference_runner = MaNTA.Runner(LinearDiffusion())
         reference_runner.configure(
-            _cwd_config(OutputFilename=ref_name, WriteOutput=True)
+            _cwd_config(OutputFilename=ref_name, WriteOutput=True, **tight)
         )
         reference_runner.run(0.4)
         reference = np.asarray(reference_runner.getSolution(0, XS_RESTART))
 
         first = MaNTA.Runner(LinearDiffusion())
-        first.configure(_cwd_config(OutputFilename=split_name, WriteOutput=True))
+        first.configure(_cwd_config(OutputFilename=split_name, WriteOutput=True, **tight))
         first.run(0.2)
 
         second = MaNTA.Runner(LinearDiffusion())
@@ -553,12 +610,13 @@ def test_a_run_can_be_restarted_from_its_own_output():
                 restart=True,
                 RestartFile=split_name + ".restart.nc",
                 t_initial=0.2,
+                **tight,
             )
         )
         second.run(0.4)
         restarted = np.asarray(second.getSolution(0, XS_RESTART))
 
-        assert np.allclose(restarted, reference, rtol=1e-3, atol=1e-6), (
+        assert np.allclose(restarted, reference, rtol=1e-5, atol=1e-8), (
             f"continuous={reference}\nrestarted={restarted}"
         )
     finally:

@@ -83,6 +83,21 @@ Value MatrixDiffusionTest::UpperBoundary(Index, Time) const
 	return 0.0;
 }
 
+// The lower datum decays with the exact solution, and a consistent algebraic y'
+// at t0 is solved from the data's explicit time derivatives (initialize, after
+// IDACalcIC). Left at the default zero, the cell at that end starts from a y'
+// that contradicts its own boundary.
+Value MatrixDiffusionTest::dLowerBoundary_dt(Index i, Time t) const
+{
+	const double e1 = -Lambda1 * M_PI_2 * M_PI_2 * a1 * ::exp(-(t * Lambda1 * M_PI_2 * M_PI_2));
+	const double e2 = -Lambda2 * M_PI_2 * M_PI_2 * a2 * ::exp(-(t * Lambda2 * M_PI_2 * M_PI_2));
+	if (i == 0)
+		return e1 + e2;
+	else if (i == 1)
+		return e1 - e2;
+	throw std::runtime_error("i > nVars in dLowerBoundary_dt");
+}
+
 Value MatrixDiffusionTest::SigmaFn(Index i, const State &s, Position, Time)
 {
 	Eigen::Map<const Vector> qVec(s.q().data(), s.q().size());

@@ -5,27 +5,26 @@ Prerequisites
 -------------
 
 **CMake 3.22 or newer**, with a generator — GNU make or Ninja — and a **C++23**
-compiler: g++ 15 or newer, or clang++ 18 or newer.
+compiler: g++ 14.3 or newer, or clang++ 18 or newer.
 
 .. warning::
 
-   **Avoid g++ 14 if you can.** Something in it breaks on this tree at the release
-   flags (``-O3 -flto -march=native``), and the symptom is a wrong number rather
-   than an error: adding any member to ``SystemSolver`` makes one of the Jacobian
-   tests fail about half the time, with an O(1) error, and no sanitiser reports
-   anything. g++ 15, g++ 16 and every clang tested are clean, and the build prints
-   a warning if it sees g++ 14.
+   **Avoid g++ 14.2.** At the release flags (``-O3 -flto -march=native``) it
+   miscompiled this tree, and the symptom was a wrong number rather than an error:
+   adding any member to ``SystemSolver`` made one of the Jacobian tests fail about
+   half the time, with an O(1) error, and no sanitiser reported anything.
 
-   It still compiles, and the solver's own output was reproducible in the case
-   measured, so this is a recommendation rather than a hard floor — but the
-   numbers from a g++ 14 release build are not ones this project can vouch for.
-   The root cause is not yet known; ``CLAUDE.md`` and ``TODO`` carry the
-   reproduction.
+   **g++ 14.3 does not.** CI builds and runs every suite on the ubuntu-24.04
+   image's g++ 14.3.0 and on AlmaLinux 10's system gcc 14.3.1 -- RHEL 10's
+   compiler, which RHEL keeps for the life of the release -- and the reproduction
+   passes on 14.3.0 with the member in place. Whether 14.3 fixed it or the test
+   misses it is not known, so the build still warns when it sees g++ 14;
+   ``CLAUDE.md`` and ``TODO`` carry the reproduction.
 
 The clang floor is measured rather than assumed, and so was the old gcc one:
 g++ 13 cannot build MaNTA at all — libstdc++ 13 has no ``<print>``, and the output
-layer uses ``std::print`` throughout. g++ 14 does build it; the floor moved to 15
-on the miscompile above, not on a language feature. clang++ 18 needed one source
+layer uses ``std::print`` throughout. g++ 14 does build it; the floor is 14.3 because
+of the miscompile above, not a language feature. clang++ 18 needed one source
 change to admit: ``PyGrid.hpp`` used to declare ``constexpr Vector
 getNodes(...)``, and a dynamically allocating Eigen vector is not a literal type,
 which C++23 permits only under P2448R2 — implemented by clang 19 but not clang 18.
@@ -33,11 +32,10 @@ That ``constexpr`` was decorative and is now ``inline``.
 
 clang++ 18, clang++ 19 and clang++ 21 have each been verified by hand to build the
 solver, the Python module and all three test suites clean under ``-Wall -Werror``.
-CI runs seven build legs: g++ 15, g++ 16, clang++ 19, clang++ 20 and clang++ 21
-against the distribution's Eigen, then g++ 15 and clang++ 19 again against Eigen
-5.0.1. g++ 14 and clang++ 18 are deliberately not among them, so both are verified
-rather than guarded — and since g++ 14 is what Ubuntu noble ships, the gcc most
-people have by default is now the one this project tests least.
+CI's ubuntu legs are g++ 14, 15 and 16 and clang++ 19, 20 and 21 against the
+distribution's Eigen, then g++ 15 and clang++ 19 again against Eigen 5.0.1; its
+container legs are Fedora and AlmaLinux 10. clang++ 18 is deliberately not among
+them, so it is verified rather than guarded.
 
 .. note::
 

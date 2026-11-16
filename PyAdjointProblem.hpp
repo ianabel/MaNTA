@@ -15,33 +15,8 @@ class PyAdjointProblem : public AdjointProblem,
 public:
   using AdjointProblem::AdjointProblem;
 
-  // We don't have the DGSoln object in Python, so we implement GFn and
-  // dGFndp here
-  Value GFn(Index gIndex, DGSoln &y) const override {
-    const auto states = y.evalOnNodes();
-    const auto points = y.getPoints();
-    Value out = 0.0;
-
-    Values g = gFn(gIndex, states, points);
-
-    for (size_t i = 0; i < y.getGrid().getNCells(); i++) {
-      const Interval &I = y.getGrid()[i];
-
-      // https://en.wikipedia.org/wiki/Newton%E2%80%93Cotes_formulas
-      // integrate interpolation to get weights
-      // compute integral as sum g * weights
-      const auto k = y.getBasis().Order();
-
-      const auto ind = Eigen::seq(i * (k + 1), (i + 1) * (k + 1) - 1);
-
-      const auto weights = y.getBasis().getIntegrationWeights(I);
-      const Vector g_cellwise = g(ind);
-      out += g_cellwise.dot(weights);
-    }
-
-    return out;
-  };
-
+  // We don't have the DGSoln object in Python, so GFn is AdjointProblem's
+  // nodal default, and dGFndp is implemented here from the batched dgFndp.
   Value dGFndp(Index i, Index pIndex, DGSoln &y) const override {
     throw std::runtime_error("Non-vectorized version of function \"dGFndp\" "
                              "deprecated.");
@@ -109,6 +84,13 @@ public:
 
     return explicitParameterDerivative(gIndex, y.evalOnNodes(), y.getPoints(),
                                        weights, nNodes);
+  }
+
+  // On the solver's own states, which carry geometry on a coupled run.
+  Matrix dGFndpAtNodes(Index gIndex, GlobalState const &states,
+                       std::vector<Position> const &points, Vector const &weights,
+                       Index nPerCell, DGSoln &, Postprocessor const *) const override {
+    return explicitParameterDerivative(gIndex, states, points, weights, nPerCell);
   }
 
   // At the star nodes, with u* and the star basis's weights b1: the derivative
@@ -184,7 +166,14 @@ public:
       // time); return;
     }
 
-    out = _override(gIndex, states, abscissae).cast<GlobalState>();
+    GlobalState result = _override(gIndex, states, abscissae).cast<GlobalState>();
+    // On a coupled run `out` carries one geometry row per slot, zeroed. An
+    // objective that reads no geometry returns none -- the caster leaves the
+    // block empty -- and assigning that over `out` would drop the rows rather
+    // than leave them zero. A dict with "Geometry" is dg/d(geometry) per node.
+    if (result.GeometryMatrix().rows() == 0)
+      result.GeometryMatrix() = out.GeometryMatrix();
+    out = result;
   };
 
   void ComputePhysicsDerivatives(

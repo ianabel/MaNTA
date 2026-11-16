@@ -1,6 +1,8 @@
 #ifndef TRANSPORTSYSTEM_HPP
 #define TRANSPORTSYSTEM_HPP
 
+#include <functional>
+
 #include "State.hpp"
 #include "Types.hpp"
 #include "SystemSpec.hpp"
@@ -184,35 +186,55 @@ public:
     restart_dYdt = std::make_shared<DGSoln>(nVars, *restart_grid, k, restart_dYdt_data.data(), nScalars, nAux, nField);
     restarting = true;
 
-    // Pull boundary conditions directly from restart values
-    Position xL = restart_grid->lowerBoundary();
-    Position xR = restart_grid->upperBoundary();
+    // Recover boundary data from the restarted profile -- but only for a case
+    // that has none of its own. The defaults below read uL/uR, and a case may
+    // fill them itself: AutodiffTransportSystem from its [AutodiffTransportSystem]
+    // uL/uR keys, AdjointPlasma from its edge values. Overwriting those with
+    // values sampled from the solution changed the problem being solved. HDG
+    // imposes a Neumann value weakly, so q_h at the face is not the datum: on
+    // ADTest, whose zero-flux axis resumed as q_h(0), the restarted run carried a
+    // spurious flux through the axis, landed 8.3e-4 off the uninterrupted run in
+    // q at rtol 1e-4, and at rtol 1e-6 failed its first step ten times with a
+    // dsm of 1.17 that no step size moved. So data the case owns is kept, and
+    // data an earlier restart recovered is recovered again, since it belongs to
+    // that restart rather than to the case.
+    const bool recoverLower = uL.size() != static_cast<size_t>(nVars) || lowerFromRestart;
+    const bool recoverUpper = uR.size() != static_cast<size_t>(nVars) || upperFromRestart;
+    if (!recoverLower && !recoverUpper)
+      return;
 
     uL.resize(nVars);
     uR.resize(nVars);
+    const Index lastFace = restart_grid->getNCells();
 
     for (Index i = 0; i < nVars; ++i)
     {
-      // q, not sigma. A Neumann boundary value is applied to q -- see
-      // SystemSolver.cpp's L_global assembly and docs/physics_interface.rst --
-      // so seeding it from sigma handed the resumed run the wrong quantity, and
-      // with the wrong sign into the bargain, since the stored sigma is
-      // -sigma_hat. For sigma_hat = kappa q that made the resumed boundary
-      // -kappa q rather than q: a sign flip even at kappa = 1. It stayed hidden
-      // because it needs three things at once -- a Neumann boundary, a *nonzero*
-      // value on it, and a case that does not override LowerBoundary, since an
-      // overriding case never reads these at all.
+      // A Dirichlet end's datum is the trace entry: the solver writes g_D(t)
+      // into it before every report, the restart file included, so it is the
+      // datum itself rather than u_h at the face, which misses it by the
+      // discretisation error there.
+      //
+      // q, not sigma, at a Neumann end. A Neumann boundary value is applied to
+      // q -- see SystemSolver.cpp's L_global assembly and
+      // docs/physics_interface.rst -- so seeding it from sigma handed the
+      // resumed run the wrong quantity, and with the wrong sign into the
+      // bargain, since the stored sigma is -sigma_hat. For sigma_hat = kappa q
+      // that made the resumed boundary -kappa q rather than q: a sign flip even
+      // at kappa = 1. It stayed hidden because it needs three things at once --
+      // a Neumann boundary, a *nonzero* value on it, and a case that does not
+      // override LowerBoundary, since an overriding case never reads these at
+      // all.
       // A Mixed end has one datum to recover and it is c, so evaluate the row's
       // own left-hand side on the restarted profile. Note `d` multiplies the
       // *stored* sigma, which is -sigma_hat, because that is what the assembly
       // multiplies -- reading the other one here is exactly the defect above,
       // one level up.
-      auto recover = [&](BoundaryCondition const &bc, Position x)
+      auto recover = [&](BoundaryCondition const &bc, Position x, Index face)
       {
         switch (bc.kind)
         {
         case BoundaryKind::Dirichlet:
-          return restart_Y->u(i)(x);
+          return restart_Y->lambda(i)[face];
         case BoundaryKind::Neumann:
           return restart_Y->q(i)(x);
         case BoundaryKind::Mixed:
@@ -222,9 +244,13 @@ public:
         return restart_Y->q(i)(x);
       };
 
-      uL[i] = recover(lowerBoundaryCondition(i), xL);
-      uR[i] = recover(upperBoundaryCondition(i), xR);
+      if (recoverLower)
+        uL[i] = recover(lowerBoundaryCondition(i), restart_grid->lowerBoundary(), 0);
+      if (recoverUpper)
+        uR[i] = recover(upperBoundaryCondition(i), restart_grid->upperBoundary(), lastFace);
     }
+    lowerFromRestart = lowerFromRestart || recoverLower;
+    upperFromRestart = upperFromRestart || recoverUpper;
   }
 
   bool isRestarting() const { return restarting; };
@@ -272,6 +298,13 @@ public:
   // nothing pointing at the boundary conditions. It says so now.
   virtual Value LowerBoundary(Index i, Time t) const { return boundaryFallback(uL, i, "LowerBoundary", "uL"); };
   virtual Value UpperBoundary(Index i, Time t) const { return boundaryFallback(uR, i, "UpperBoundary", "uR"); };
+
+  // d/dt of the two above. Zero by default, which is right for boundary data
+  // that does not depend on time; a case whose data does reports the
+  // derivative here, as it reports every other derivative. See the explicit
+  // time derivatives of the physics below for what reads it.
+  virtual Value dLowerBoundary_dt(Index, Time) const { return 0.0; }
+  virtual Value dUpperBoundary_dt(Index, Time) const { return 0.0; }
 
   // Not virtual: the boundary *kind* is part of what a case is, and lives in the
   // spec. Only the boundary *values* above depend on t and stay overridable.
@@ -351,6 +384,50 @@ public:
     return m_spec.anySourceReadsTimeDerivatives();
   }
 
+
+  /*
+      The explicit time dependence of the flux, the sources and the auxiliary
+      functions: their d/dt with every argument but t held fixed. Zero by
+      default, which is right for a case whose formulas do not depend on time
+      explicitly -- most of them. A case whose do reports the derivative here,
+      as it reports d/du, d/dq and the rest.
+
+      What reads them is the solver's dF/dt at fixed state
+      (SystemSolver::explicitTimeDerivative), whose algebraic rows are the G_t
+      in G_z z' = -G_t - G_u u': the equation for the algebraic components of
+      y' at a consistent state, solved on a projected restart. Leaving one zero
+      that is not makes those derivatives inexact, which costs the first step
+      error-test failures and nothing else.
+  */
+  virtual Value dSigmaFn_dt(Index, const State &, Position, Time) { return 0.0; }
+  virtual Value dSources_dt(Index, const State &, Position, Time) { return 0.0; }
+  virtual Value dAuxG_dt(Index, const State &, Position, Time) { return 0.0; }
+
+  // The batched form, in ComputePhysics' layout. Serial over the pointwise
+  // hooks above, for the reason the batched wrappers below are.
+  virtual PhysicsOutput ComputePhysicsTimeDerivatives(GlobalState const &states,
+                                                      std::vector<Position> const &abscissae, Time time)
+  {
+    PhysicsOutput out;
+    out[0].resize(nVars);
+    out[1].resize(nVars);
+    out[2].resize(nAux);
+    for (auto &p : out)
+      for (auto &v : p)
+        v.setZero(states.size());
+    for (size_t j = 0; j < states.size(); ++j)
+    {
+      const State s = states[j];
+      for (Index i = 0; i < nVars; ++i)
+      {
+        out[0][i](j) = dSigmaFn_dt(i, s, abscissae[j], time);
+        out[1][i](j) = dSources_dt(i, s, abscissae[j], time);
+      }
+      for (Index i = 0; i < nAux; ++i)
+        out[2][i](j) = dAuxG_dt(i, s, abscissae[j], time);
+    }
+    return out;
+  }
 
  /*
  * Compute all fluxes and sources 
@@ -555,6 +632,14 @@ public:
     return 0.0;
   }
 
+  // d/dt of ScalarG with every other argument held fixed: its explicit time
+  // dependence, zero by default. See dSigmaFn_dt.
+  virtual Value dScalarG_dt(Index, GlobalState const &, GlobalState const &, std::vector<Position> const &,
+                            Values const &, Matrix const &, Time)
+  {
+    return 0.0;
+  }
+
   /*
       dG_s/d(state) and dG_s/d(state_dot), for every s at once.
 
@@ -688,6 +773,17 @@ public:
     return;
   }
 
+  // What the solver calls: initialiseDiagnostics with the state the run starts
+  // from available, through initialDiagnosticState(), for a diagnostic whose t0
+  // slice is a function of it as every later slice writeDiagnostics writes is.
+  // Not a second virtual: a case overriding the one above keeps being called.
+  void initialiseDiagnosticsAt(DGSoln const &y, DGSoln const &dydt, double t, NetCDFIO &nc)
+  {
+    m_initialDiagnosticState = {&y, &dydt, t};
+    initialiseDiagnostics(nc);
+    m_initialDiagnosticState = {};
+  }
+
   virtual void writeDiagnostics(DGSoln const &y, DGSoln const &dydt, double t, NetCDFIO &nc, size_t tIndex)
   {
     writeDiagnostics(y, t, nc, tIndex);
@@ -706,6 +802,42 @@ public:
 
   std::map<int, std::string> subVars = {{0, "u"}, {1, "q"}, {2, "sigma"}, {3, "S"}};
 
+  /// The geometry at x for the state y. Set by the solver that runs this case --
+  /// in initialize(), to its own geometryAt when a field or equilibrium model is
+  /// attached, or cleared when there is none -- so a case can fill State::geom
+  /// outside the residual path, where the solver fills it. Diagnostics are the
+  /// one such place.
+  ///
+  /// `slots` names the geometry the source supplies, in State::geom's order --
+  /// the field or equilibrium model's spec, which is the only thing that knows
+  /// them. A Python case's state view indexes geom by these names.
+  using GeometryProvider = std::function<void(VectorRef out, DGSoln const &y, Position x, Time t)>;
+  void setGeometryProvider(std::vector<std::string> slots, GeometryProvider provider)
+  {
+    geometryNames = provider ? std::move(slots) : std::vector<std::string>{};
+    nGeometryProvided = static_cast<Index>(geometryNames.size());
+    geometryProvider = std::move(provider);
+  }
+
+  /// The names of the geometry slots this case is being handed, or none when
+  /// no field or equilibrium model is attached.
+  std::vector<std::string> const &geometrySlotNames() const { return geometryNames; }
+
+protected:
+  /// Fill s.geom() at x for the state y, as the residual would. Leaves it empty
+  /// when no field or equilibrium model is attached, which is what the residual
+  /// does too.
+  void fillGeometry(State &s, DGSoln const &y, Position x, Time t) const
+  {
+    if (!geometryProvider)
+      return;
+    Vector g = Vector::Zero(nGeometryProvided);
+    geometryProvider(g, y, x, t);
+    s.geom() = g;
+  }
+
+public:
+
   virtual std::string getAdjointNames(Index pIndex) const { return "p" + std::to_string(pIndex); }
 
   std::optional<std::reference_wrapper<Values>> getSourceCache(Index var) { 
@@ -718,6 +850,10 @@ public:
   }
 
 private:
+  GeometryProvider geometryProvider;
+  std::vector<std::string> geometryNames;
+  Index nGeometryProvided = 0;
+
   // Shared by the two boundary defaults above. Not .at(): out_of_range names a
   // vector, not the thing the case has to do about it.
   Value boundaryFallback(std::vector<Value> const &values, Index i,
@@ -735,6 +871,21 @@ private:
   }
 
 protected:
+  struct InitialDiagnosticState
+  {
+    DGSoln const *y = nullptr;
+    DGSoln const *dydt = nullptr;
+    double t = 0.0;
+  };
+  /// The state initialiseDiagnosticsAt was called with, while it runs; empty
+  /// otherwise (a direct initialiseDiagnostics call has no state to offer).
+  InitialDiagnosticState const &initialDiagnosticState() const { return m_initialDiagnosticState; }
+
+private:
+  InitialDiagnosticState m_initialDiagnosticState;
+
+protected:
+
   bool restarting = false;
   std::vector<double> restart_Y_data;
   std::vector<double> restart_dYdt_data;
@@ -748,6 +899,10 @@ protected:
   std::vector<Values> m_sourceCache; // since sources might be expensive to calculate, cache them for use in outputs
 
   std::vector<Value> uL, uR;
+  // Whether uL and uR were recovered by setRestartValues rather than set by
+  // the case, so that a later restart recovers them again and never overwrites
+  // a case's own.
+  bool lowerFromRestart = false, upperFromRestart = false;
 
   // Shared rather than copied: the solver keeps no copy of its own, and a case
   // that ignores the plan should not pay for one.

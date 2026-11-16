@@ -92,16 +92,18 @@ jobs:
           #                 the project to clang-18 -Werror compliance, and P2448R2
           #                 was only the first C++23 gap. It is verified, not
           #                 guarded -- expect it to rot.
-          # g++-14 is deliberately absent. It miscompiles this tree at the release
-          # flags -- -O3 -flto -march=native, all three required -- and the symptom
-          # is a wrong number rather than a diagnostic: adding any member to
-          # SystemSolver makes the AuxDiffusion cases of
-          # the_assembled_jacobian_matches_a_finite_difference_of_the_residual fail
-          # about half their runs. See CLAUDE.md and TODO. A leg that fails half the
-          # time for reasons unrelated to the change under review is worse than no
-          # leg, so it is gone rather than marked flaky, and noble's archive
-          # compiler is therefore *not* covered here. That is a real gap: the
-          # nearest thing to it is the Fedora container job, which only compiles.
+          # g++-14 is the ubuntu-24.04 image's (14.3.0 there now) and RHEL 10's
+          # system compiler for the life of that release, so it is worth knowing
+          # whether this tree is safe to build with it. 14.2.0 miscompiled it at
+          # -O3 -flto -march=native once SystemSolver's member layout changed: the
+          # finite-difference reference in a test translation unit lost a column,
+          # on the AuxDiffusion case that SolveJacTests'
+          # an_aux_jacobian_matches_a_finite_difference_of_its_residual carries.
+          # 14.3.0 passes every suite, padded member included. This leg, and the
+          # almalinux:10 one below, are how a recurrence would be seen. See
+          # CLAUDE.md and TODO.
+          - cxx: g++-14
+            pkg: g++-14
           #
           # Not in the noble archive (which stops at g++-14), so these two legs need
           # the toolchain PPA -- g++-15 there is 15.2.0-14ubuntu1~24~ppa1 and
@@ -444,6 +446,13 @@ jobs:
             openmp: 'ON'
             omp_threads: 4
             label: 'fedora:latest, OpenMP'
+          # RHEL 10's system compiler, which stays gcc 14 for the life of the
+          # release: the toolchain this tree's g++-14 warning is about, and the
+          # one the ubuntu matrix stopped testing when it dropped g++-14. Its
+          # Eigen and netCDF come from EPEL, and its BLAS from CRB.
+          - image: almalinux:10
+            el: true
+            label: 'almalinux:10, gcc 14'
     container: ${{ matrix.image }}
     # As on the ubuntu OpenMP leg: -fopenmp loads libgomp, and that alone is enough
     # for a dispatching BLAS to start threading itself and change reduction order.
@@ -469,6 +478,10 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          if [ "${{ matrix.el || false }}" = true ]; then
+            dnf -y install --setopt=install_weak_deps=False dnf-plugins-core epel-release
+            dnf config-manager --set-enabled crb
+          fi
           dnf -y install --setopt=install_weak_deps=False \
             gcc-c++ cmake wget tar gzip \
             boost-devel \
@@ -706,3 +719,130 @@ jobs:
         with:
           name: coverage-report
           path: build-coverage/coverage/
+
+  # The Sphinx build, with -W, as Read the Docs runs it. It is the only check on
+  # the reST -- a broken cross-reference or a label deleted by a conflict
+  # resolution compiles everywhere else -- and before this leg the first thing to
+  # notice one was a Read the Docs build of main.
+  #
+  # It runs cmake/MantaDocs.cmake in script mode, which is exactly what the `docs`
+  # target runs, rather than configuring the project to reach the target: that
+  # would need SUNDIALS, Eigen, netCDF and a compiler for a job that uses none of
+  # them. Python 3.14 because .readthedocs.yaml says so; the pins are
+  # docs/requirements.txt's, the same file RTD installs.
+  #
+  # One failure here is not ours: conf.py's intersphinx fetches objects.inv from
+  # docs.python.org and numpy.org, and a timeout is a warning, so under -W it
+  # fails the leg. Rerun it; .readthedocs.yaml has the longer note.
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Build the documentation
+        run: |
+          cmake -DDOCS_VENV="$PWD/build/venv-docs" \
+                -DDOCS_HTML="$PWD/build/docs/html" \
+                -DDOCS_DOCTREES="$PWD/build/docs/doctrees" \
+                -DVENV_PYTHON=python3 \
+                -DSOURCE_DIR="$PWD" \
+                -P cmake/MantaDocs.cmake
+
+      - name: Nothing was written outside the build tree
+        run: |
+          status=$(git status --porcelain --ignored)
+          stray=$(printf '%s\n' "$status" | grep -vE '^(!!|\?\?) build/' | grep -v '^$' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the docs build wrote into the source tree"
+            echo "$stray"
+            exit 1
+          fi
+
+  # The two routes docs/out_of_tree.rst describes for working outside this
+  # repository, run the way a user runs them, from directories outside the
+  # checkout: a C++ case compiled against an *installed* MaNTA with
+  # `pkg-config --cflags manta` and loaded through PhysicsPlugins, and a Python
+  # case in a package of its own run by the `manta` command after `pip install .`
+  # into a fresh virtualenv. The ctest suites never leave the build tree, so
+  # neither route was checked by anything but hand: the install rules, manta.pc,
+  # the plugin ABI flags and setup.py could all break with every leg green.
+  #
+  # Tests/OutOfTree/run-out-of-tree.sh does the work, so a local run is the same
+  # command; docs/out_of_tree.rst includes the example files it runs, so the
+  # documented examples are the tested ones.
+  out-of-tree:
+    name: Out of tree
+    runs-on: ubuntu-latest
+    env:
+      MKL_NUM_THREADS: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Add the toolchain PPA
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends software-properties-common
+          sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-15 cmake wget pkg-config \
+            libboost-dev \
+            libeigen3-dev \
+            libnetcdf-dev libnetcdf-c++4-dev \
+            libblas-dev liblapack-dev
+
+      - name: Cache SUNDIALS
+        id: cache-sundials
+        uses: actions/cache@v4
+        with:
+          path: sundials/install
+          key: sundials-${{ env.SUNDIALS_VERSION }}-${{ runner.os }}-cc-default-${{ hashFiles('build_sundials') }}
+
+      - name: Build SUNDIALS
+        if: steps.cache-sundials.outputs.cache-hit != 'true'
+        run: ./build_sundials
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Configure
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-15 \
+            -DSUNDIALS_ROOT="$PWD/sundials/install" \
+            -DPython3_EXECUTABLE="$(which python)" \
+            -DMANTA_TESTS=OFF
+
+      # Everything the install installs, which is not the unit tests.
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Install, build a plugin, pip install, and run both
+        run: CXX=g++-15 PYTHON="$(which python)" Tests/OutOfTree/run-out-of-tree.sh build "$RUNNER_TEMP/out-of-tree"
+
+      - name: Nothing was written outside the build tree
+        run: |
+          status=$(git status --porcelain --ignored)
+          stray=$(printf '%s\n' "$status" | grep -vE '^(!!|\?\?) (build/|sundials/)' | grep -v '^$' || true)
+          if [ -n "$stray" ]; then
+            echo "::error::the out-of-tree run wrote into the source tree"
+            echo "$stray"
+            exit 1
+          fi

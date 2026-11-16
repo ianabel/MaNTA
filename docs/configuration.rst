@@ -33,8 +33,8 @@ A minimal file
    t_final = 1.0
    delta_t = 0.1
 
-   Relative_tolerance = 1.0e-3
-   Absolute_tolerance = 1.0e-3
+   RelativeTolerance = 1.0e-3
+   AbsoluteTolerance = 1.0e-3
 
    [DiffusionProblem]
 
@@ -105,18 +105,48 @@ Problem definition
        :ref:`mixed condition <mixed-boundaries>` with :math:`d = 1` when it is set
        and :math:`b = 1` when it is not, so the per-variable, per-end version of
        the same choice is available to a case through its own spec.
+   * - ``EquilibriumModel``
+     - ``""``
+     - Name of a registered equilibrium model to take the geometry from, as
+       registered by ``REGISTER_EQUILIBRIUM_MODEL_IMPL`` or
+       ``manta.registerEquilibriumModel``, in place of a
+       ``FieldModel``: the two are refused together. It has no unknowns, so
+       ``FieldCoupling`` is ``consistent`` or ``reduced`` for it, ``coupled``
+       being refused, and ``auto`` chooses as :ref:`native-coupling-mode`
+       describes. An unrecognised name is an error listing what *is*
+       registered; ``ThetaPinchPressureBalance`` is the one in this tree. See
+       :ref:`native-equilibrium`, and :ref:`field-from-python` for the dict.
+   * - ``FieldCoupling``
+     - ``"auto"``
+     - How the ``FieldModel`` is attached. ``coupled`` puts its unknowns in the
+       DAE and its derivatives in the Jacobian, and is refused for a case
+       declaring no geometry derivatives. ``consistent`` runs it as a black
+       box: solved to convergence at each transport state the physics is
+       evaluated at, held as a cache rather than as unknowns, with no Jacobian
+       coupling and no adjoint (a run asking for one is refused); a model whose
+       field has a differential DOF cannot run that way. ``reduced`` runs it the
+       same way and puts its response to the transport state into the Jacobian,
+       so Newton converges as it does coupled, with no unknowns added, and
+       solves an adjoint through its transposed response; it is refused for a
+       case declaring no geometry derivatives and a field with dynamics (see
+       :ref:`field-tier-1`). ``auto``
+       never picks it: with the model's own unknowns to hand, ``coupled`` is the
+       same Jacobian without the equilibrium solves. ``auto`` chooses from
+       what the case and the model supply and what the run needs — see
+       :ref:`field-coupling-mode`; for an ``EquilibriumModel``, see
+       :ref:`native-coupling-mode`. Anything but ``auto`` is refused without a
+       ``FieldModel`` or an ``EquilibriumModel``.
    * - ``FieldModel``
-     - ``""``, *file only*
+     - ``""``
      - Name of a registered magnetic-field model to couple to, as registered by
        ``REGISTER_FIELD_MODEL_IMPL``. Absent — the default — means no coupling,
        and an uncoupled run's ``.nc`` is bit-for-bit what it was before the
        feature existed. Its ``.restart.nc`` is not, by exactly one scalar:
        ``RestartData/nField`` is written on every run, and reads back as ``0``.
        An unrecognised name is an error listing what *is* registered;
-       note that no field model is registered in this tree yet. Like
-       ``TransportSystem`` this is a ``ProblemSelection`` key, so passing it to
-       ``Runner.configure`` is an error rather than being ignored. See
-       :doc:`field_coupling`.
+       ``ThetaPinchEquilibrium`` is the one in this tree. A
+       ``Runner.configure`` dict names one the same way, with the model's
+       table nested under its name. See :doc:`field_coupling`.
    * - ``GradedGridBoundary``
      - ``false``
      - Grade the grid *geometrically* towards the ends of the domain instead of
@@ -225,15 +255,17 @@ Three things to expect:
   law above breaks once :math:`h_0` is small — an 11× reduction bought 1.19× —
   because the cells that are *not* the innermost stop resolving the singularity
   well enough to stay negligible.
-* **The time integrator is the ceiling, not the discretisation.** Past roughly
-  :math:`h_0 / \mathrm{span} = 10^{-6}` IDA's corrector starts failing at
-  ``|h| = MinStepSize``, whose default is ``1e-7``; lowering it to ``1e-12`` bought
-  one further level. Below about :math:`10^{-7}` nothing got through — neither
-  ``MinStepSize``, nor ``SuppressAlgebraicError``, nor the tolerances, nor either
-  continuation mode — and below :math:`10^{-8}` ``IDACalcIC`` cannot build a
-  consistent initial condition at all. A warning is logged past
-  :math:`10^{-6}` saying so, because the failure that follows points at IDA rather
-  than at the mesh.
+* **A time-marching run's ceiling is the time integrator, not the
+  discretisation.** From about :math:`h_0 / \mathrm{span} = 10^{-5}` IDA's
+  corrector can fail at ``|h| = MinStepSize``, and lowering ``MinStepSize`` to
+  ``1e-12`` buys about a decade. Past roughly :math:`10^{-6}` no setting gets
+  through. Below about
+  :math:`3 \times 10^{-8}`, ``IDACalcIC`` cannot build a consistent initial
+  condition at all. A ``Newton`` or ``PseudoTransient`` steady solve does not
+  have this limit: it has been run to :math:`10^{-15}`, given a steady test tight
+  enough to resolve the error (:ref:`adaptivity-h0` has the measurements). A
+  warning is logged past :math:`10^{-6}`, because the failure that follows points
+  at IDA rather than at the mesh.
 * **Grading into the upper end is slightly less exact than into the lower**, and
   irreducibly so: the boundary next to ``UpperBoundary`` is a number near it, so
   the narrowest cell's *width* is a difference of nearly equal numbers and carries
@@ -265,13 +297,26 @@ Time integration
        ``delta_t`` and asks IDA for the solution there; IDA chooses its own
        internal steps and takes as many as it needs. ``delta_t`` also seeds the
        initial step guess for ``IDACalcIC``.
-   * - ``Relative_tolerance``
+   * - ``RelativeTolerance``
      - ``1e-3``
-     - IDA's relative tolerance.
-   * - ``Absolute_tolerance``
+     - IDA's relative tolerance. ``Relative_tolerance`` is a deprecated
+       spelling of this and still works, with a warning.
+   * - ``AbsoluteTolerance``
      - ``1e-3``
-     - IDA's absolute tolerance. Either a single value or an array with one
-       entry per variable.
+     - The absolute tolerance: either a single value or an array with one
+       entry per variable; any other length is refused. It is the floor of
+       IDA's error weights, and so of the ``"NewtonStep"`` steady test, which
+       is made in them (see :ref:`steady-state-test`).
+       ``Absolute_tolerance`` is a deprecated
+       spelling of this and still works, with a warning.
+   * - ``ErrorWeights``
+     - ``"AlgebraicMax"``
+     - How that absolute tolerance is applied to each class of unknown in IDA's
+       error weights: ``AlgebraicMax`` (``sigma``, ``q`` and the auxiliary
+       variables floored at ``RelativeTolerance`` times their largest
+       magnitude on the grid), ``Pointwise``, ``AllMax``, ``Derivative``,
+       ``DerivativeLocal``, ``Hybrid`` or ``HybridLocal``. See
+       :ref:`error-weights`.
    * - ``MinStepSize``
      - ``1e-7``
      - Steps smaller than this end the run.
@@ -309,12 +354,13 @@ Time integration
        ``SteadyStateSolve`` simply sets the tolerance. ``Runner.run_ss()`` arms it
        whether or not either key was given, and falls back to ``1e-3``.
 
-       What its value is compared against depends on the method:
-       :math:`\mathrm{d}y/\mathrm{d}t` under ``SteadyStateSolver = TimeMarch``,
-       and a mesh-independent weighted norm of the steady residual under
-       ``SteadyStateTest = "Residual"`` — see :ref:`steady-merit-function`. The
-       default test, ``"NewtonStep"``, does not read it: it converges to
-       ``Relative_tolerance`` and ``Absolute_tolerance`` — see
+       What its value is compared against depends on ``SteadyStateTest``, and
+       on nothing else: under ``"Residual"`` it bounds a mesh-independent
+       weighted norm of the steady residual, whichever ``SteadyStateSolver``
+       reaches the state — ``TimeMarch`` makes the same test at each output
+       time; see :ref:`steady-merit-function`. The default test,
+       ``"NewtonStep"``, does not read it: it converges to
+       ``RelativeTolerance`` and ``AbsoluteTolerance`` — see
        :ref:`steady-state-test`.
    * - ``ObjectiveDecreaseTolerance``
      - ``0.0`` — off
@@ -485,7 +531,7 @@ Adjoints and superconvergence
      - ``1e-6``
      - Target for ``DegreeAdaptation`` under the solution target: the estimated
        :math:`L^2` error relative to the solution's own :math:`L^2` norm, worst
-       variable, floored by ``Absolute_tolerance``. Refused under
+       variable, floored by ``AbsoluteTolerance``. Refused under
        ``AdaptationTarget = "Objective"``, whose target is ``ObjectiveTolerance``.
    * - ``MaxPolynomialDegree``
      - ``10``
@@ -604,31 +650,42 @@ the coupling on.
      - ``"iterative"``
      - How the coupled Jacobian is solved. ``iterative`` is block Gauss–Seidel
        between the transport and field blocks with Irons–Tuck acceleration, at
-       one transport solve per sweep. ``exact`` forms the Schur complement onto
-       the field block, at :math:`\texttt{nField}+1` transport solves per
-       Jacobian solve.
+       one transport solve per sweep. ``krylov`` is GMRES on the transport
+       increment with the field eliminated, also at one transport solve per
+       iteration, stopping on the same test. ``exact`` forms the Schur
+       complement onto the field block, at :math:`\texttt{nField}+1` transport
+       solves per Jacobian solve. Under ``FieldCoupling = "reduced"`` the same
+       three solve the reduced Jacobian, ``iterative`` going on to ``krylov`` at
+       its cap and ``exact`` assembling the reduced system, one transport solve
+       per geometry value at every physics node -- see :ref:`field-tier-1`.
    * - ``FieldSolveTolerance``
+     - ``1e-4``
+     - Where the forward sweep stops: once one sweep changes the whole Newton
+       increment -- transport and field -- by less than this in the run's
+       error-weighted RMS norm, the norm IDA's own tests are in, where its
+       Newton iteration stops at 0.33; or by less than a millionth of the
+       increment when that is larger, which only ``IDACalcIC``'s first step
+       reaches. Measured in IDA's terms because IDA is
+       what reads the answer: see :ref:`field-solve` for what a 2-norm test, a
+       looser bound and a relative one each cost. Reaching the cap escalates to the exact solve rather than
+       returning an under-converged answer.
+   * - ``FieldSolveAdjointTolerance``
      - ``1e-8``
-     - Where the sweep stops — **one key, two tests**, because the two
-       directions have different things available to measure. Forward, it is a
-       relative *change*: the sweep stops once
-       :math:`\|\delta\psi\| \le \texttt{tol}\,\|\psi\|` for the unaccelerated
-       iterate. In the adjoint it is a relative *backward error*: the field row
+     - Where the adjoint sweep stops: a relative *backward error*. The field row
        of the transposed system holds identically at every iterate, so the
-       residual of the pair returned is exactly
-       :math:`A_2^{T}\,\delta z_\psi`, and the sweep stops once that is below
-       ``tol`` times the norm of the right-hand side. Both are scale
-       equivariant, so neither has an absolute floor, and neither returns an
-       under-converged answer — reaching the cap escalates to the exact solve.
+       residual of the pair returned is exactly :math:`A_2^{T}\,\delta z_\psi`,
+       and the sweep stops once that is below this times the norm of the
+       right-hand side. Reaching the cap escalates to the exact solve.
    * - ``FieldSolveMaxSweeps``
      - ``20``
-     - Sweep cap for the forward solve. Reaching it escalates to the exact
-       solve; it does not return an under-converged answer.
+     - Sweep cap for the forward solve, and the Krylov dimension of
+       ``krylov`` (restarted up to four times). Reaching it escalates -- to the
+       exact solve, or under ``FieldCoupling = "reduced"`` to ``krylov`` -- and
+       never returns an under-converged answer.
    * - ``FieldSolveMaxAdjointSweeps``
      - ``100``
      - The same cap for the adjoint solve. Separate, and larger, because the
-       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest —
-       five field unknowns have been measured needing 13–38 sweeps.
+       adjoint always runs at :math:`c_j = 0` where the coupling is stiffest.
 
 .. important::
 

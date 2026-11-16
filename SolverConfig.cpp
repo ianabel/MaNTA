@@ -10,6 +10,7 @@
 #include "SystemSolver.hpp"
 #include "gridStructures.hpp"
 
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -300,8 +301,9 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(TauKappa, std::string);
     READ(delta_t, double);
     READ(t_initial, double);
-    READ(Relative_tolerance, double);
-    READ(Absolute_tolerance, std::vector<double>);
+    READ(RelativeTolerance, double);
+    READ(ErrorWeights, std::string);
+    READ(AbsoluteTolerance, std::vector<double>);
     READ(MinStepSize, double);
     READ(initialTimestep, double);
     READ(OutputPoints, int);
@@ -313,7 +315,6 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(WriteDebugDatFiles, bool);
     READ(zeroFlux, bool);
     READ(AggressiveTimesteps, bool);
-    READ(SuppressAlgebraicError, bool);
     READ(ForceConsistentIC, bool);
     READ(SteadyStateSolver, std::string);
     READ(PseudoTransientInitialStep, double);
@@ -356,10 +357,13 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(TransportSystem, std::string);
     READ(PhysicsPlugins, std::vector<std::string>);
     READ(FieldModel, std::string);
+    READ(EquilibriumModel, std::string);
+    READ(FieldCoupling, std::string);
     READ(FieldSolve, std::string);
     READ(FieldSolveTolerance, double);
     READ(FieldSolveMaxSweeps, int);
     READ(FieldSolveMaxAdjointSweeps, int);
+    READ(FieldSolveAdjointTolerance, double);
 #undef READ
 
     // Those whose presence, rather than value, is the signal.
@@ -369,6 +373,8 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
         c.SteadyStateTolerance = std::get<double>(source.get(*s, Type::Double));
     if (auto s = spelling("Superconvergent"))
         c.Superconvergent = std::get<bool>(source.get(*s, Type::Bool));
+    if (auto s = spelling("SuppressAlgebraicError"))
+        c.SuppressAlgebraicError = std::get<bool>(source.get(*s, Type::Bool));
     c.LowerBoundaryFractionGiven = spelling("LowerBoundaryFraction").has_value();
     c.UpperBoundaryFractionGiven = spelling("UpperBoundaryFraction").has_value();
     c.CellsGiven = spelling("GridSize").has_value() || spelling("GridPoints").has_value();
@@ -392,6 +398,25 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
 
     if (c.OutputFilename.empty())
         c.OutputFilename = source.outputFilenameFallback();
+
+    if (c.FieldCoupling != "auto" && c.FieldCoupling != "coupled" && c.FieldCoupling != "reduced" &&
+        c.FieldCoupling != "consistent")
+        throw std::invalid_argument(
+            "FieldCoupling must be \"auto\", \"coupled\", \"reduced\" or \"consistent\"; got \"" +
+            c.FieldCoupling + "\".");
+
+    // One source of geometry, refused here rather than first at attach time
+    // (checkGeometrySource) so a config file says so before anything is built;
+    // and a native equilibrium has no unknowns to couple.
+    if (!c.EquilibriumModel.empty() && !c.FieldModel.empty())
+        throw std::invalid_argument("FieldModel = \"" + c.FieldModel + "\" and EquilibriumModel = \"" +
+                                    c.EquilibriumModel +
+                                    "\" are both given; a run has one source of geometry. Give one.");
+    if (!c.EquilibriumModel.empty() && c.FieldCoupling == "coupled")
+        throw std::invalid_argument("FieldCoupling = \"coupled\" puts a field model's unknowns into the DAE, "
+                                    "and EquilibriumModel = \"" +
+                                    c.EquilibriumModel +
+                                    "\" has none. Use \"reduced\", \"consistent\" or \"auto\".");
 
     // The alias machinery warns that the *name* changed. It cannot know that the
     // *mesh* changed too, and it did: High_Grid_Boundary spaced its boundary-layer
@@ -811,14 +836,14 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
             config.GradingRatio, end);
 
         // The narrowest cell, relative to the domain, and the reason to say so.
-        // MESH-REFINEMENT.md §9 measured the solver -- not the method -- as the
-        // ceiling on how hard this can be graded: on Shestakov's problem IDA's
-        // corrector failed at h = 1e-7, which is MinStepSize's own default, once
-        // the narrowest cell was around 1e-6 of the span, and below about 1e-7 no
-        // setting of any key got through. The law that makes grading worth doing
-        // was still holding at the last mesh that converged, so a run that dies
-        // here has not run out of accuracy to gain, and the failure will point at
-        // IDA rather than at the mesh.
+        // On Shestakov's problem (docs/adaptivity.rst, "What grading buys") a
+        // time-marching run fails once the narrowest cell is around 1e-6 of the
+        // span -- IDA's corrector at |h| = MinStepSize, and no setting of
+        // MinStepSize, SuppressAlgebraicError or the tolerances gets past it,
+        // though a lower MinStepSize buys the decade above -- while Newton and
+        // PseudoTransient solve the same meshes down to 1e-15. So
+        // the failure that follows points at IDA, not at the mesh, and the run has
+        // not run out of accuracy to gain.
         //
         // Taken as a min over every cell rather than from whichever end is graded,
         // so it stays right for Both and cannot be wrong for one end.
@@ -830,10 +855,11 @@ std::unique_ptr<Grid> configuredGrid(SolverConfig const &config)
         if (span > 0.0 && narrowest / span < 1.0e-6)
             logmsg<LOG_LEVEL::WARNING>(
                 "The graded mesh's narrowest cell is {:.2e} of the domain. Past "
-                "roughly 1e-6 the time integrator, not the discretisation, is the "
-                "limit: expect IDA corrector failures at |h| = MinStepSize, and try "
-                "lowering MinStepSize (1e-12 bought one more level where this was "
-                "measured) before suspecting the mesh.", narrowest / span);
+                "roughly 1e-6 a time-marching run is limited by the time integrator, "
+                "not the discretisation: expect IDA corrector failures at "
+                "|h| = MinStepSize that no setting cures. A Newton or "
+                "PseudoTransient steady solve is not limited this way.",
+                narrowest / span);
 
         return std::make_unique<Grid>(points);
     }
@@ -961,7 +987,21 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     // -- but it also means a block dropped from here un-configures *both*
     // surfaces at once, where the same slip used to affect one.
     system.setOutputCadence(config.delta_t);
-    system.setTolerances(config.Absolute_tolerance, config.Relative_tolerance);
+    system.setTolerances(config.AbsoluteTolerance, config.RelativeTolerance);
+    {
+        using W = SystemSolver::ErrorWeights;
+        static const std::map<std::string, W> schemes{
+            {"Pointwise", W::Pointwise},       {"AlgebraicMax", W::AlgebraicMax},
+            {"AllMax", W::AllMax},             {"Derivative", W::Derivative},
+            {"DerivativeLocal", W::DerivativeLocal}, {"Hybrid", W::Hybrid},
+            {"HybridLocal", W::HybridLocal}};
+        auto it = schemes.find(config.ErrorWeights);
+        if (it == schemes.end())
+            throw std::invalid_argument("ErrorWeights must be one of Pointwise, AlgebraicMax, AllMax, Derivative, "
+                                        "DerivativeLocal, Hybrid or HybridLocal; got \"" +
+                                        config.ErrorWeights + "\".");
+        system.setErrorWeights(it->second);
+    }
     system.setTau(config.tau);
     system.setMaxPhysicsBatch(config.MaxPhysicsBatch);
 
@@ -1089,7 +1129,8 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         if (config.SteadyStateSolver == "TimeMarch")
             throw std::invalid_argument(
                 "SteadyStateTest = \"Objective\" applies to SteadyStateSolver = "
-                "\"PseudoTransient\" or \"Newton\"; a time march stops on dy/dt instead.");
+                "\"PseudoTransient\" or \"Newton\"; a time march stops on \"Residual\" or "
+                "\"NewtonStep\".");
         if (config.ObjectiveBudget.size() != 2)
             throw std::invalid_argument(std::format(
                 "ObjectiveBudget is the array [discretisation, algebraic]; got {} values.",
@@ -1120,13 +1161,16 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
     else if (config.FieldSolve == "exact")
         system.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+    else if (config.FieldSolve == "krylov")
+        system.setFieldSolveMode(SystemSolver::FieldSolveMode::Krylov);
     else
-        throw std::invalid_argument(
-            "FieldSolve must be \"iterative\" or \"exact\"; got \"" + config.FieldSolve + "\".");
+        throw std::invalid_argument("FieldSolve must be \"iterative\", \"krylov\" or \"exact\"; got \"" +
+                                    config.FieldSolve + "\".");
 
     system.setFieldSolveTolerance(config.FieldSolveTolerance);
     system.setFieldSolveMaxSweeps(config.FieldSolveMaxSweeps);
     system.setFieldSolveMaxAdjointSweeps(config.FieldSolveMaxAdjointSweeps);
+    system.setFieldSolveAdjointTolerance(config.FieldSolveAdjointTolerance);
 
     if (config.PseudoTransientInitialStep > 0.0)
         system.setPseudoTransientInitialStep(config.PseudoTransientInitialStep);
@@ -1189,4 +1233,135 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
     }
 
     // Zero is off, and the setter rejects anything negative.
+}
+
+FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                      bool fieldHasDynamics)
+{
+    const bool derivatives = spec.geometryDerivatives != GeometryDerivatives::None;
+
+    if (config.FieldCoupling == "consistent")
+        return FieldCouplingMode::Consistent;
+
+    if (config.FieldCoupling == "coupled" || config.FieldCoupling == "reduced")
+    {
+        if (!derivatives)
+            throw std::invalid_argument(
+                "FieldCoupling = \"" + config.FieldCoupling +
+                "\" needs the transport system's derivatives in the "
+                "geometry, and it declares none (geometryDerivatives = None). Use \"consistent\" "
+                "or \"auto\".");
+        if (config.FieldCoupling == "coupled")
+            return FieldCouplingMode::Coupled;
+
+        // The reduced mode runs the field as an equilibrium, so what that
+        // cannot carry it cannot either -- and it has no adjoint yet.
+        if (fieldHasDynamics)
+            throw std::invalid_argument(
+                "FieldCoupling = \"reduced\" runs the field as an equilibrium of the transport "
+                "state, and this field has dynamics (a differential field unknown, or a field row "
+                "reading du/dt). Use \"coupled\".");
+        return FieldCouplingMode::Reduced;
+    }
+
+    // "auto". What forces the coupled field: the black-box mode can neither
+    // carry a field with dynamics of its own nor differentiate through one.
+    std::vector<std::string> needs;
+    if (fieldHasDynamics)
+        needs.emplace_back(
+            "the field has dynamics (a differential field unknown, or a field row reading du/dt)");
+    if (config.solveAdjoint || config.SteadyStateTest == "Objective")
+        needs.emplace_back("an adjoint is solved (solveAdjoint, or SteadyStateTest = \"Objective\")");
+
+    if (!derivatives)
+    {
+        if (!needs.empty())
+        {
+            std::string why = needs.front();
+            for (size_t i = 1; i < needs.size(); ++i)
+                why += ", and " + needs[i];
+            throw std::invalid_argument(
+                "The field must be coupled because " + why +
+                ", but the transport system declares no derivatives in the geometry "
+                "(geometryDerivatives = None).");
+        }
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, since the transport system "
+                                "declares no derivatives in the geometry.");
+        return FieldCouplingMode::Consistent;
+    }
+    if (!needs.empty())
+        return FieldCouplingMode::Coupled;
+
+    // A steady solve -- PseudoTransient or Newton; TimeMarch integrates, and is
+    // a transient for this purpose -- with derivatives the solver has to
+    // difference: nGeometry + 1 value evaluations per Jacobian build cost more
+    // than the black box's slower Newton does.
+    const bool steady = config.SteadyStateTolerance.has_value() || config.SteadyStateSolve;
+    if (spec.geometryDerivatives == GeometryDerivatives::Differenced && steady &&
+        config.SteadyStateSolver != "TimeMarch")
+    {
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, for a steady solve with "
+                                "differenced geometry derivatives.");
+        return FieldCouplingMode::Consistent;
+    }
+    return FieldCouplingMode::Coupled;
+}
+
+// See the declaration. The rule is the field model's with "reduced" in place of
+// "coupled", except that a model's differenced response sends steady solves to
+// "consistent": it changes no transport cost, but makes tier 1's steady solves
+// spend several times tier 0's equilibrium solves to save under a fifth of its
+// physics (docs/field_coupling.rst has the table).
+FieldCouplingMode chooseEquilibriumCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                            bool differencedResponse)
+{
+    const bool derivatives = spec.geometryDerivatives != GeometryDerivatives::None;
+    const bool adjoint = config.solveAdjoint || config.SteadyStateTest == "Objective";
+
+    if (config.FieldCoupling == "coupled")
+        throw std::invalid_argument("FieldCoupling = \"coupled\" is not available to a native equilibrium "
+                                    "model, which has no unknowns. Use \"reduced\" or \"consistent\".");
+    if (config.FieldCoupling == "consistent")
+    {
+        if (adjoint)
+            throw std::invalid_argument(
+                "FieldCoupling = \"consistent\" cannot solve an adjoint (solveAdjoint, or SteadyStateTest = "
+                "\"Objective\"): the black box has no response to transpose. Use \"reduced\".");
+        return FieldCouplingMode::Consistent;
+    }
+    if (config.FieldCoupling == "reduced")
+    {
+        if (!derivatives)
+            throw std::invalid_argument(
+                "FieldCoupling = \"reduced\" needs the transport system's derivatives in the geometry, and it "
+                "declares none (geometryDerivatives = None). Use \"consistent\" or \"auto\".");
+        return FieldCouplingMode::Reduced;
+    }
+
+    // "auto".
+    if (adjoint)
+    {
+        if (!derivatives)
+            throw std::invalid_argument(
+                "An adjoint is solved (solveAdjoint, or SteadyStateTest = \"Objective\"), which with a native "
+                "equilibrium model needs FieldCoupling = \"reduced\", but the transport system declares no "
+                "derivatives in the geometry (geometryDerivatives = None).");
+        return FieldCouplingMode::Reduced;
+    }
+    if (!derivatives)
+    {
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, since the transport system "
+                                "declares no derivatives in the geometry.");
+        return FieldCouplingMode::Consistent;
+    }
+    const bool steady = config.SteadyStateTolerance.has_value() || config.SteadyStateSolve;
+    if (steady && config.SteadyStateSolver != "TimeMarch" &&
+        (spec.geometryDerivatives == GeometryDerivatives::Differenced || differencedResponse))
+    {
+        logmsg<LOG_LEVEL::INFO>("FieldCoupling = \"auto\": consistent, for a steady solve with {}.",
+                                differencedResponse ? "a differenced equilibrium response"
+                                                    : "differenced geometry derivatives");
+        return FieldCouplingMode::Consistent;
+    }
+    return FieldCouplingMode::Reduced;
 }

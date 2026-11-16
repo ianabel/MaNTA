@@ -26,6 +26,8 @@ class LD2 : public TransportSystem {
 		// You must provide implementations of both, these are your boundary condition functions
 		Value LowerBoundary( Index, Time ) const override;
 		Value UpperBoundary( Index, Time ) const override;
+		Value dLowerBoundary_dt( Index, Time ) const override;
+		Value dUpperBoundary_dt( Index, Time ) const override;
 
 		// The guts of the physics problem (these are non-const as they
 		// are allowed to alter internal state such as to store computations

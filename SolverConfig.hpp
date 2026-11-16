@@ -21,6 +21,7 @@
 #include <toml.hpp>
 
 #include "ConfigSchema.hpp"
+#include "SystemSpec.hpp"
 
 class Grid;
 class SystemSolver;
@@ -55,8 +56,9 @@ struct SolverConfig
     std::string              TauKappa;
     double                   delta_t;
     double                   t_initial;
-    double                   Relative_tolerance;
-    std::vector<double>      Absolute_tolerance;
+    double                   RelativeTolerance;
+    std::string              ErrorWeights;
+    std::vector<double>      AbsoluteTolerance;
     double                   MinStepSize;
     double                   initialTimestep;
     int                      OutputPoints;
@@ -68,7 +70,6 @@ struct SolverConfig
     bool                     WriteDebugDatFiles;
     bool                     zeroFlux;
     bool                     AggressiveTimesteps;
-    bool                     SuppressAlgebraicError;
     bool                     ForceConsistentIC;
     std::string              SteadyStateSolver;
     double                   PseudoTransientInitialStep;
@@ -134,10 +135,18 @@ struct SolverConfig
     // other three are plain solver options and go through applySolverConfig
     // like everything else.
     std::string              FieldModel;
+    // A registered native EquilibriumModel, applied by runManta like
+    // FieldModel. The two are exclusive: one source of geometry.
+    std::string              EquilibriumModel;
+    // "auto", "coupled", "reduced" or "consistent": also applied by runManta,
+    // which resolves it with chooseFieldCoupling and wraps the model in a
+    // FieldModelEquilibrium for the reduced and consistent modes.
+    std::string              FieldCoupling;
     std::string              FieldSolve;
     double                   FieldSolveTolerance;
     int                      FieldSolveMaxSweeps;
     int                      FieldSolveMaxAdjointSweeps;
+    double                   FieldSolveAdjointTolerance;
 
     // Presence, not value, carries the meaning for these two.
     //
@@ -156,6 +165,11 @@ struct SolverConfig
     // distinction is impossible to draw from a plain bool carrying the schema's
     // default.
     std::optional<bool> Superconvergent;
+
+    // Presence again: absent, the solver turns it on for a run with a field and
+    // leaves it off otherwise (SystemSolver::suppressesAlgebraicError), and only
+    // the solver knows by then whether a field was attached.
+    std::optional<bool> SuppressAlgebraicError;
 
     // Whether LowerBoundaryFraction / UpperBoundaryFraction were given. The manual
     // GradedGridBoundary path reads the values with their schema default either
@@ -280,5 +294,59 @@ unsigned int restartRunOrder(SolverConfig const &config, unsigned int fileOrder)
 
 // Every config-derived set* call on the solver, in one place.
 void applySolverConfig(SolverConfig const &config, SystemSolver &system);
+
+// How runManta attaches a FieldModel. Coupled: its unknowns join the DAE and its
+// derivatives the Jacobian (setFieldModel). Consistent: solved to convergence at
+// each transport state as a black box, with no Jacobian coupling and no adjoint
+// (a FieldModelEquilibrium, setEquilibriumModel).
+// Reduced: the model run as an equilibrium (a FieldModelEquilibrium) whose
+// response G' enters the Jacobian, with no unknowns in the DAE
+// (setEquilibriumModel with EquilibriumCoupling::Reduced): tier 1.
+enum class FieldCouplingMode
+{
+    Coupled,
+    Consistent,
+    Reduced,
+};
+
+// FieldCoupling resolved against what the case and the model can supply.
+// "consistent", "coupled" and "reduced" are taken as asked, except that "coupled"
+// and "reduced" are refused for a case declaring no geometry derivatives, and
+// "reduced" for a field with dynamics. "auto" never picks "reduced": with the
+// field model's own unknowns available, "coupled" is the same Jacobian without
+// the equilibrium solves, and its adjoint transposes the model's own blocks
+// rather than a response. So an adjoint still makes "auto" couple. It picks:
+//
+//   * consistent when the case declares no geometry derivatives -- and refuses,
+//     naming why, when the run needs the coupled field anyway: a field with
+//     dynamics, or an adjoint (solveAdjoint, SteadyStateTest = "Objective");
+//   * coupled when the run needs it;
+//   * consistent for a steady solve (PseudoTransient or Newton) of a case whose
+//     derivatives are Differenced, where differencing the flux in every
+//     geometry slot costs more than the coupling saves;
+//   * coupled otherwise.
+//
+// The measurements behind the last two are in docs/field_coupling.rst. Throws
+// std::invalid_argument, like every configuration error.
+FieldCouplingMode chooseFieldCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                      bool fieldHasDynamics);
+
+// FieldCoupling for a native EquilibriumModel (EquilibriumModel = "<name>"),
+// which has no unknowns, so only Consistent or Reduced. "consistent" and
+// "reduced" are taken as asked -- "reduced" refused for a case declaring no
+// geometry derivatives, "consistent" for a run solving an adjoint -- and
+// "coupled" is refused at load. "auto" picks:
+//
+//   * reduced for a run solving an adjoint, and refuses one whose case
+//     declares no geometry derivatives;
+//   * consistent when the case declares none;
+//   * reduced for a transient, TimeMarch included;
+//   * for a steady solve (PseudoTransient or Newton), consistent when the case's
+//     derivatives are Differenced, or the model's response is (`differenced-
+//     Response`: EquilibriumResponse::Differenced), and reduced otherwise.
+//
+// The measurements are in docs/field_coupling.rst. Throws std::invalid_argument.
+FieldCouplingMode chooseEquilibriumCoupling(SolverConfig const &config, SystemSpec const &spec,
+                                            bool differencedResponse);
 
 #endif // SOLVERCONFIG_HPP

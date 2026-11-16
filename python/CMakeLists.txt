@@ -56,7 +56,8 @@ target_include_directories(_manta PRIVATE "${PROJECT_SOURCE_DIR}")
 
 set_target_properties(_manta PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${MANTA_PACKAGE_DIR}"
-  INSTALL_RPATH_USE_LINK_PATH ON)
+  INSTALL_RPATH_USE_LINK_PATH ON
+  INSTALL_RPATH "${MANTA_DEPENDENCY_RPATH}")
 # Multi-config generators append the configuration name to the output directory
 # unless told otherwise, which would put the module outside the package.
 foreach(_cfg ${CMAKE_CONFIGURATION_TYPES})

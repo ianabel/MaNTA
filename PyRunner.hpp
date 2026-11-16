@@ -10,11 +10,13 @@
 #include <string_view>
 #include <variant>
 
+#include "GeometrySource.hpp"
 #include "SolverConfig.hpp"
 #include "SystemSolver.hpp"
 
 #include "PhysicsCases.hpp"
 #include "PhysicsInstance.hpp"
+#include "DegreeAdaptation.hpp"
 
 namespace py = pybind11;
 
@@ -162,6 +164,13 @@ public:
   Vector getPostprocessedSolution(Index var,
                                   std::optional<std::vector<Position>> const &points);
 
+  // Take the geometry from this equilibrium model at the next configure(), in
+  // place of one the dict names (EquilibriumModel / FieldModel, which are then
+  // refused beside it). FieldCoupling resolves for it exactly as for a named
+  // model. None clears it.
+  void setEquilibriumModel(std::shared_ptr<EquilibriumModel> model) { equilibriumObject = std::move(model); }
+  std::shared_ptr<EquilibriumModel> getEquilibriumModel() const { return equilibriumObject; }
+
   // The registered name of the C++ case this Runner drives, or empty when it
   // was handed a transport system object. Exposed because a driver that was
   // given a Runner has otherwise no way to ask which of the two it is.
@@ -232,6 +241,28 @@ private:
   // outcome policy or on refreshing yJac.
   SystemSolver::SteadyOutcome runSlice(bool resume, bool estimate);
 
+  // A sliced solve under DegreeAdaptation: runAdaptiveDegree's loop, a level at
+  // a time (DegreeAdaptationLoop). A slice that converges a level finishes the
+  // run on it -- output, restart file, adjoint -- exactly as runSolver would,
+  // closes the level, and either ends the solve or builds and initialises the
+  // next degree and returns Refined. Both live from start_steady() until the
+  // solve is finished or abandoned; the PhysicsInstance holds the case slots
+  // the loop rebuilds into, and has to outlive it.
+  std::unique_ptr<PhysicsInstance> slicePhysics;
+  std::unique_ptr<DegreeAdaptationLoop> sliceAdaptation;
+  // The adaptive solve's last level has already been finished, so
+  // finish_steady() has nothing left to write.
+  bool sliceRunFinished = false;
+  // What the last slice returned, which under adaptation can be Refined -- a
+  // value no solver records, since the one that reached it has been replaced.
+  SystemSolver::SteadyOutcome lastSliceOutcome = SystemSolver::SteadyOutcome::NotRun;
+  SystemSolver::SteadyOutcome adaptiveSlice(bool resume, bool estimate);
+  // The stats of the level a Refined slice closed, and its pseudo-time step,
+  // for steadyStats() to report until the next slice.
+  std::optional<std::pair<SystemSolver::SteadyStats, double>> closedLevelStats;
+  // Drop the adaptive loop, clearing the restart state it set. Safe when none.
+  void abandonAdaptation(void);
+
   // Tear down a slice loop that will not be finished: write nothing, free
   // everything. Safe when no loop is live.
   void abandonSlices(void);
@@ -248,6 +279,15 @@ private:
 
   // The physics table a named case was built from, kept for rebuilding it.
   toml::value physicsTable;
+
+  // The run's geometry source -- a field or equilibrium model the dict named,
+  // or the one set_equilibrium_model handed over -- resolved against
+  // FieldCoupling by the function runManta uses, and attached to every solver
+  // configure() builds. Rebuilt on every configure(), like the case.
+  GeometrySource geometry;
+  // A model object handed over from Python rather than named; kept across
+  // configure() calls, as a case object is.
+  std::shared_ptr<EquilibriumModel> equilibriumObject;
 
   // Build the case `caseName` names, from the config dict, against `grid`.
   // Only called when caseName is non-empty, and only from configure(), which

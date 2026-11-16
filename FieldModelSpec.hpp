@@ -83,6 +83,19 @@ public:
     std::string label;
     std::string name = "Field";
 
+    // Whether a field row reads the transport time derivatives. When set, the
+    // solver fills every GlobalState it hands the model -- FieldResidual,
+    // FieldResidualPrime, dFieldResidual_dt and the adjoint's
+    // dFieldResidual_dp -- with du/dt at the nodes (GlobalState::VariableDot,
+    // read pointwise as State::udot), and the model reports d(row)/d(u') in
+    // FieldResidualPrime's dRdot. Off, the states carry no such rows and udot
+    // reads zero, as for a transport source that declares nothing.
+    //
+    // du/dt only, as for the transport sources: u is the only transport
+    // quantity IDA treats as differential. Such a field is not a function of
+    // the transport state, so it runs coupled, never as an equilibrium.
+    bool readsTransportTimeDerivatives = false;
+
     Index nFieldDOF() const { return static_cast<Index>(dofs.size()); }
     Index nGeometry() const { return static_cast<Index>(geometry.size()); }
 

@@ -47,6 +47,25 @@ Value LD2::UpperBoundary( Index, Time t ) const
 	return ExactSolution( 1.0, t );
 }
 
+// The data move with the exact solution, and a consistent y' at t0 is solved
+// from their explicit time derivatives. d/dt of H sqrt(t0/(t+t0)) exp(-eta^2),
+// eta^2 = (x-c)^2 / (4 kappa (t+t0)), is that times (eta^2 - 1/2) / (t+t0).
+static double ld2ExactRate(double value, double x, double centre, double kappa, double t, double t0)
+{
+	const double etaSquared = (x - centre) * (x - centre) / (4.0 * kappa * (t + t0));
+	return value * (etaSquared - 0.5) / (t + t0);
+}
+
+Value LD2::dLowerBoundary_dt( Index, Time t ) const
+{
+	return ld2ExactRate( ExactSolution( 0.0, t ), 0.0, Centre, kappa, t, t0 );
+}
+
+Value LD2::dUpperBoundary_dt( Index, Time t ) const
+{
+	return ld2ExactRate( ExactSolution( 1.0, t ), 1.0, Centre, kappa, t, t0 );
+}
+
 
 Value LD2::SigmaFn( Index, const State &s, Position, Time )
 {

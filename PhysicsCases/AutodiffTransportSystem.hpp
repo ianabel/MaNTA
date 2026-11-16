@@ -43,6 +43,7 @@ public:
 	void dSources_dScalars(Index, VectorRef, const State &, Position, Time) override;
 	void dSigmaFn_dp(Index i, Index pIndex, Value &, const State &s, Position x, Time t);
 	void dSources_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
+	void dAuxG_dp(Index i, Index pIndex, Value &, const State &, Position x, Time t);
 
 	// Geometry derivatives -- see TransportSystem.hpp for the contract. Derived
 	// by autodiff like every other derivative here: SigmaFn/Sources/AuxG all
@@ -133,11 +134,27 @@ protected:
 	std::string filename;
 	void LoadDataToSpline(const std::string &file);
 
-	// MMS Solution
+	// Manufactured solutions.
+	//
+	// MMS_Source(i, x, t) is the forcing that makes MMS_Solution exact: a u_t -
+	// d_x sigma_hat - S, with the flux and the source evaluated as the solver
+	// evaluates them -- the geometry-aware Flux and the full Source overload, the
+	// flux in Source's `sigma`, the solution's own u_t in its `udot`, and the
+	// geometry MMS_Geometry. d_x sigma_hat is taken by the chain rule, so it
+	// carries d(sigma_hat)/dg dg/dx. A case adds it to its Sources; MMS_Source
+	// itself calls Source, so adding it inside Source would recurse.
 	bool useMMS = false;
 	double growth_rate = 0.5;
 	double growth = 1.0;
 	virtual Real2nd MMS_Solution(Index i, Real2nd x, Real2nd t);
+
+	/// The geometry slots at (x, t) on the manufactured solution: what the
+	/// field model's Geometry returns there, written as a function of x so that
+	/// MMS_Source can differentiate it. Empty by default, which is right for a
+	/// case that reads no geometry; MMS_Source refuses a case that declares
+	/// readsGeometry and leaves it empty.
+	virtual Real2ndVector MMS_Geometry(Real2nd, Real2nd) { return Real2ndVector(0); }
+
 	Value MMS_Source(Index, Position, Time);
 
 	void initialiseDiagnostics(NetCDFIO &nc) override;
@@ -152,6 +169,17 @@ protected:
 private:
 	// See Integrator::Cache. writeDiagnostics is the only caller here.
 	mutable Integrator::Cache m_integrator;
+
+	/// The flux Source and GFunc are handed: sigma_hat, what Flux returned. The
+	/// solver stores sigma_h = -Pi(sigma_hat) and State::sigma is that, so it is
+	/// negated here, and every derivative taken with respect to it is negated
+	/// on the way out -- autodiff differentiates in sigma_hat, and the
+	/// Jacobian's sigma column is d/d(stored sigma).
+	static RealVector physicalFlux(State const &s)
+	{
+		RealVector sigma(s.sigma());
+		return -sigma;
+	}
 
 	// API to underlying flux models
 	virtual Real Flux(Index i, RealVector u, RealVector q, Real x, Time t) = 0;
@@ -169,6 +197,9 @@ private:
 		return Flux(i, u, q, x, t);
 	}
 
+	// Every Source and GFunc overload is handed `sigma` = sigma_hat, the
+	// physical flux -- what Flux returned, not the stored -sigma_hat. See
+	// physicalFlux.
 	virtual Real Source(Index i, RealVector u, RealVector q, RealVector sigma, RealVector phi, Real x, Time t)
 	{
 		if (nScalars > 0)

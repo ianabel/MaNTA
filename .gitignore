@@ -40,6 +40,8 @@ venv
 .venv-docs/
 gmon.out
 *.sh
+# ...except the out-of-tree driver, which CI runs.
+!Tests/OutOfTree/run-out-of-tree.sh
 slurm-*.out
 
 *.out

@@ -33,11 +33,10 @@ COLUMNS = (("TimeMarch", None),
 # threshold on the iteration that passes. Set MANTA_STEP_TOL to measure a different regime.
 STEP_TOLERANCE = float(os.environ.get("MANTA_STEP_TOL", "0.33"))
 
-# Time marching reads neither of those. It stops when ||dY/dt|| falls below
-# SteadyStateTolerance, and it is the one column the setting moves little: its
-# absolute floor is fixed in the code, so it cannot be asked for a cheaper, less
-# accurate answer. MANTA_STEADY_TEST=Residual measures the steady methods on
-# KINSOL's ||F|| test instead, at this same tolerance.
+# Time marching makes the same test, but only at output times, and each
+# benchmark's cadence is the whole run: it tests once, at the end, and the
+# setting moves only that test's own cost. MANTA_STEADY_TEST=Residual measures
+# every method on the ||F|| test instead, at this same tolerance.
 TOLERANCE = float(os.environ.get("MANTA_STEADY_TOL", "1.0e-2"))
 STEADY_TEST = os.environ.get("MANTA_STEADY_TEST", "NewtonStep")
 

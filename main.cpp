@@ -100,6 +100,12 @@ void listOptions()
 	printEntries( ConfigSchema::Category::ProblemSelection );
 	std::println( "" );
 
+	std::println( "The geometry source -- both surfaces. Names a registered field or" );
+	std::println( "equilibrium model, which reads its own table; a Runner can be handed a" );
+	std::println( "Python EquilibriumModel object instead:" );
+	printEntries( ConfigSchema::Category::FieldSelection );
+	std::println( "" );
+
 	std::println( "Read by the `manta` command, not by the solver. Listed so that a config" );
 	std::println( "file carrying them is not rejected:" );
 	printEntries( ConfigSchema::Category::Cli );

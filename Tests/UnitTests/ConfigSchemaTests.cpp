@@ -33,6 +33,8 @@ std::ostream &boost_test_print_type(std::ostream &os, Category c)
         return os << "Solver";
     case Category::ProblemSelection:
         return os << "ProblemSelection";
+    case Category::FieldSelection:
+        return os << "FieldSelection";
     case Category::Cli:
         return os << "Cli";
     }

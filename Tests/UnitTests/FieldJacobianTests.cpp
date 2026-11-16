@@ -17,7 +17,11 @@
 #include "FiniteDifferenceJacobian.hpp"
 #include "MMSHarness.hpp"
 #include "ManufacturedFields.hpp"
+#include "../../FieldModelEquilibrium.hpp"
 #include "../../SystemSolver.hpp"
+#include "../../PhysicsCases/ThetaPinchDiffusion.hpp"
+#include "../../PhysicsCases/ThetaPinchEquilibrium.hpp"
+#include "../../PhysicsCases/ThetaPinchPressureBalance.hpp"
 #include "../../Types.hpp"
 
 #include <nvector/nvector_serial.h>
@@ -28,6 +32,7 @@
 #include <memory>
 #include <numbers>
 #include <string>
+#include <format>
 #include <vector>
 
 namespace
@@ -56,10 +61,12 @@ using std::numbers::pi;
 class GeometricAuxDiffusion : public TransportSystem
 {
 public:
-    GeometricAuxDiffusion()
+    explicit GeometricAuxDiffusion(GeometryDerivatives derivatives = GeometryDerivatives::Analytic)
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
                                           BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
-                           .aux = {{"phi", "an auxiliary quantity", ""}}})
+                           .aux = {{"phi", "an auxiliary quantity", ""}},
+                           .readsGeometry = true,
+                           .geometryDerivatives = derivatives})
     {
     }
 
@@ -129,7 +136,9 @@ class GeometricDiffusion : public TransportSystem
 public:
     GeometricDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic})
     {
     }
 
@@ -369,6 +378,29 @@ CoupledSolver multiDofFixture(Index nCells, Index k, double strength = 1.0)
 /// converges to |lambda_max|. Built from the same four calls
 /// solveCoupledJacIterative makes, in the same order, rather than from a second
 /// implementation that could agree with a wrong original.
+/// The registered pair: ThetaPinchDiffusion reading ThetaPinchEquilibrium.
+/// The pressure is high enough (T = 0.3, central density 1) that the field is
+/// far from vacuum, so the coupling blocks are not evaluated at a degenerate
+/// point; the field block's size is nCells * intervalsPerCell + 4.
+CoupledSolver thetaPinchFixture(Index nCells, Index k, Index intervalsPerCell, bool superconvergent = false,
+                                double cj = 1.7, std::string const &derivatives = "Analytic")
+{
+    using namespace toml::literals::toml_literals;
+    static const toml::value base = u8R"(
+        [ThetaPinchDiffusion]
+        Temperature = 0.3
+        D0 = 0.5
+        Gamma = 2.0
+    )"_toml;
+    toml::value config = base;
+    config.as_table().at("ThetaPinchDiffusion").as_table()["GeometryDerivatives"] = derivatives;
+    const Grid grid(0.0, 1.0, nCells);
+    return makeCoupledSolverAtState(
+        nCells, k, std::make_unique<ThetaPinchDiffusion>(config, grid),
+        std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{.intervalsPerCell = intervalsPerCell}, grid),
+        superconvergent, /*tau=*/0.75, cj);
+}
+
 double spectralRadius(CoupledSolver const &solver, int iterations = 60)
 {
     const Index nField = solver->getFieldDOF();
@@ -546,6 +578,38 @@ double relativeDifference(N_Vector a, N_Vector b)
     return (va - vb).norm() / std::max(va.norm(), std::numeric_limits<double>::min());
 }
 
+/// ||v|| in the error-weighted RMS norm the iterative sweep stops in: the
+/// solver's own error weights at the state its Jacobian was built at.
+double weightedNorm(SystemSolver &sys, N_Vector v)
+{
+    N_Vector yAt = N_VMake_Serial(N_VGetLength(v), sys.yJacMem, sys.ctx);
+    N_Vector ewt = N_VClone(v);
+    sys.getErrorWeights(yAt, ewt);
+    const double out = N_VWrmsNorm(v, ewt);
+    N_VDestroy(yAt);
+    N_VDestroy(ewt);
+    return out;
+}
+
+double weightedDifference(SystemSolver &sys, N_Vector a, N_Vector b)
+{
+    N_Vector d = N_VClone(a);
+    N_VLinearSum(1.0, a, -1.0, b, d);
+    const double out = weightedNorm(sys, d);
+    N_VDestroy(d);
+    return out;
+}
+
+/// What the sweep's stopping test bounds: an iterative solve within
+/// FieldSolveTolerance error-weight units of the exact one, or within a
+/// millionth of the increment when that is larger -- see
+/// solveCoupledJacIterative.
+bool withinSweepTolerance(SystemSolver &sys, N_Vector exact, N_Vector iterative)
+{
+    return weightedDifference(sys, exact, iterative) <=
+           std::max(sys.getFieldSolveTolerance(), 1e-6 * weightedNorm(sys, exact));
+}
+
 // A local copy of CoupledResidualTests.cpp's manufactured coupled problem --
 // same exact solution, u = sin(pi x)(1+t) and psi = Int u dx = (2/pi)(1+t) --
 // kept here rather than shared, the way this file's own configureQuietly
@@ -569,7 +633,9 @@ class ManufacturedCoupledDiffusion : public TransportSystem
 public:
     ManufacturedCoupledDiffusion()
         : TransportSystem({.variables = {{"u", "the diffused quantity", "",
-                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}}})
+                                          BoundaryKind::Dirichlet, BoundaryKind::Dirichlet}},
+                           .readsGeometry = true,
+                           .geometryDerivatives = GeometryDerivatives::Analytic})
     {
     }
 
@@ -827,6 +893,58 @@ BOOST_AUTO_TEST_CASE(a_sign_error_in_a2_would_be_caught)
     BOOST_TEST(flipped.solutionError > 1e-3);
 }
 
+// A field row reading du/dt. Its derivative in u' enters A2 weighted by alpha,
+// beside the mass term's place in the transport rows, so -- as for a transport
+// source reading du/dt -- a check at alpha = 0 sees none of it.
+CoupledSolver rateFixture(double cj)
+{
+    return makeCoupledSolverAtState(/*nCells=*/6, /*k=*/2, std::make_unique<GeometricAuxDiffusion>(),
+                                    std::make_shared<ManufacturedRateField>(),
+                                    /*superconvergent=*/false, /*tau=*/0.75, cj);
+}
+
+BOOST_AUTO_TEST_CASE(a_field_row_reading_du_dt_sees_it_in_the_residual)
+{
+    // The field row moves with y' at fixed y: the difference between the
+    // Jacobians at two values of cj, in that row, is cj times d(row)/d(y'),
+    // which here is -w_j in the u columns. A residual that never handed the
+    // model du/dt would make the two rows identical, and the solve check below
+    // would then pass without the block having been assembled.
+    auto solver = rateFixture(3.7);
+    const Matrix J = fdjac::jacobian(*solver, solver.Y, solver.dYdt, solver.t, 3.7);
+    const Matrix J0 = fdjac::jacobian(*solver, solver.Y, solver.dYdt, solver.t, 0.0);
+    const Index fieldRow = J.rows() - 1;
+    const double moved = (J.row(fieldRow) - J0.row(fieldRow)).cwiseAbs().maxCoeff();
+    BOOST_TEST_MESSAGE("field row reading du/dt: largest change between cj = 3.7 and 0 is " << moved);
+    BOOST_TEST(moved > 1e-2);
+}
+
+BOOST_AUTO_TEST_CASE(its_jacobian_carries_the_alpha_weighted_block)
+{
+    auto solver = rateFixture(3.7);
+    for (int trial = 0; trial < 3; ++trial)
+    {
+        const SolveReport r = checkExactSolve(solver, trial);
+        BOOST_TEST_MESSAGE("field row reading du/dt, cj = 3.7, trial "
+                           << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                           << ", ||J dy* - g||/||g|| = " << r.residual);
+        BOOST_TEST(r.solutionError < 1e-7);
+        BOOST_TEST(r.residual < 1e-7);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(at_alpha_zero_that_block_is_invisible)
+{
+    // The companion, recorded so the test above is not later "simplified" into
+    // this one: at cj = 0 the block is multiplied by zero, so this passes
+    // whether or not it is assembled. It also says the adjoint, built at
+    // alpha = 0, carries none of it.
+    auto solver = rateFixture(0.0);
+    const SolveReport r = checkExactSolve(solver, 0);
+    BOOST_TEST(r.solutionError < 1e-7);
+    BOOST_TEST(r.residual < 1e-7);
+}
+
 BOOST_AUTO_TEST_CASE(solve_jac_eq_dispatches_to_the_exact_solve)
 {
     // The dispatcher, not the solve: solveJacEq must route a coupled system to
@@ -922,10 +1040,10 @@ BOOST_AUTO_TEST_CASE(selecting_the_exact_solve_warns)
 
 BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_with_the_exact_one)
 {
-    // Not to roundoff: the iterative path stops at FieldSolveTolerance, so the
-    // agreement is to that tolerance and no better. What this pins is that the
-    // two are solving the same system -- a sign error in either path's use of
-    // A1 or A2 separates them immediately.
+    // Not to roundoff: the iterative path stops at FieldSolveTolerance, in the
+    // error-weighted norm, so the agreement is to that tolerance in that norm and
+    // no better. What this pins is that the two are solving the same system -- a
+    // sign error in either path's use of A1 or A2 separates them by far more.
     auto solver = singleDofFixture(/*nCells=*/6, /*k=*/2);
     N_Vector g = randomRHS(*solver);
 
@@ -933,9 +1051,11 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_with_the_exact_one)
     solver->solveCoupledJacExact(g, exact);
     solver->solveCoupledJacIterative(g, iterative);
 
-    const double diff = relativeDifference(exact, iterative);
-    BOOST_TEST_MESSAGE("single-DOF field, iterative vs exact: relative difference = " << diff);
-    BOOST_CHECK_SMALL(diff, 1e-6);
+    const double diff = weightedDifference(*solver, exact, iterative);
+    BOOST_TEST_MESSAGE("single-DOF field, iterative vs exact: weighted difference = " << diff
+                       << ", relative " << relativeDifference(exact, iterative));
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
 
     N_VDestroy(g);
     N_VDestroy(exact);
@@ -951,44 +1071,82 @@ BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_for_a_multi_dof_block_too)
     solver->solveCoupledJacExact(g, exact);
     solver->solveCoupledJacIterative(g, iterative);
 
-    const double diff = relativeDifference(exact, iterative);
-    BOOST_TEST_MESSAGE("5-DOF field, iterative vs exact: relative difference = " << diff);
-    BOOST_CHECK_SMALL(diff, 1e-6);
+    const double diff = weightedDifference(*solver, exact, iterative);
+    BOOST_TEST_MESSAGE("5-DOF field, iterative vs exact: weighted difference = " << diff
+                       << ", relative " << relativeDifference(exact, iterative));
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
 
     N_VDestroy(g);
     N_VDestroy(exact);
     N_VDestroy(iterative);
 }
 
-BOOST_AUTO_TEST_CASE(the_iterative_solve_agrees_at_the_scale_a_newton_step_lives_at)
+BOOST_AUTO_TEST_CASE(the_sweep_stops_at_an_absolute_bound_or_a_millionth_of_the_increment)
 {
-    // The two tests above use a RHS whose converged |dpsi| happens to land
-    // above 1, so `tol * max(1, |dpsi|)` and `tol * |dpsi|` coincide there and
-    // neither test would have caught the defect this one exists for: the
-    // original stopping criterion used `max(1, |dpsi|)` rather than `|dpsi|` alone, which
-    // is an *absolute* magnitude test of `FieldSolveTolerance` whenever the
-    // converged |dpsi| is below 1 -- exactly the regime a real Newton
-    // correction lives in, where it declared convergence after the raw first
-    // iterate regardless of how wrong that iterate was (measured at 38.6%
-    // relative error on this same fixture before the fix). Scaling the RHS down
-    // so |dpsi| is far below 1 is what exercises that regime; this is the
-    // guard against reintroducing it.
+    // The stopping test is the change one sweep makes to the whole increment,
+    // in the run's error-weighted norm, against FieldSolveTolerance or a
+    // millionth of the increment, whichever is larger. The two arms are for two
+    // regimes, and both are exercised here on one right-hand side scaled into
+    // each: a Newton correction of about one error-weight unit, where the
+    // absolute bound governs, and IDACalcIC's first step, ~4e8 units at
+    // cj ~ 1e9, where 1e-4 absolute would be 1e-13 relative and twenty sweeps
+    // could not reach it.
+    //
+    // What the norm's *shape* buys -- the reason it covers the transport
+    // block -- only shows on Newton's own right-hand sides, where the old test
+    // (a relative 2-norm change in psi alone) left an error in sigma and q near
+    // the axis worth O(1) error-weight units and held IDA at order one for
+    // twenty thousand steps. Random right-hand sides at a fixture state do not
+    // concentrate there, so that is pinned by the runs themselves:
+    // ThetaPinchMMSTests.cpp's the_iterative_solve_does_not_stall_ida, and
+    // ThetaPinchRunTests.cpp's exact_and_iterative_field_solves_give_the_same_run.
+    //
+    // On the five-unknown block, because a single field unknown cannot show
+    // it: Irons-Tuck is exact for a scalar affine map, so that sweep reaches
+    // roundoff in three whatever the bound.
+    auto probe = multiDofFixture(/*nCells=*/6, /*k=*/2);
+    N_Vector g0 = randomRHS(*probe), x0 = N_VClone(g0);
+    probe->solveCoupledJacExact(g0, x0);
+    const double unit = 1.0 / weightedNorm(*probe, x0);
+    N_VDestroy(x0);
+
+    for (double size : {1.0, 4e8})
+    {
+        auto solver = multiDofFixture(/*nCells=*/6, /*k=*/2);
+        N_Vector g = N_VClone(g0);
+        N_VScale(size * unit, g0, g);
+        N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+        solver->solveCoupledJacExact(g, exact);
+        solver->solveCoupledJacIterative(g, iterative);
+
+        const double diff = weightedDifference(*solver, exact, iterative);
+        BOOST_TEST_MESSAGE("increment of " << weightedNorm(*solver, exact) << " error-weight units: "
+                           << solver->fieldSweepIterations << " sweeps, weighted difference " << diff);
+        BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+        if (size == 1.0)
+            BOOST_TEST(diff <= solver->getFieldSolveTolerance());
+        else
+        {
+            BOOST_TEST(diff > solver->getFieldSolveTolerance()); // the relative arm is the one in force
+            BOOST_TEST(diff <= 1e-6 * weightedNorm(*solver, exact));
+        }
+
+        N_VDestroy(g);
+        N_VDestroy(exact);
+        N_VDestroy(iterative);
+    }
+    N_VDestroy(g0);
+
+    // ...and an increment already below the tolerance is accepted after one
+    // sweep, which is right: it moves the state by less than Newton could see.
     auto solver = singleDofFixture(/*nCells=*/6, /*k=*/2);
     N_Vector g = randomRHS(*solver);
     N_VScale(1e-9, g, g);
-
     N_Vector exact = N_VClone(g), iterative = N_VClone(g);
     solver->solveCoupledJacExact(g, exact);
     solver->solveCoupledJacIterative(g, iterative);
-
-    // relativeDifference's floor is the smallest positive double, not 1 -- see
-    // its own comment -- so this is a genuine relative check even down here.
-    BOOST_REQUIRE_GT(fdjac::toVector(exact).norm(), 0.0);
-    const double diff = relativeDifference(exact, iterative);
-    BOOST_TEST_MESSAGE("single-DOF field, RHS scaled by 1e-9, iterative vs exact: "
-                       "relative difference = "
-                       << diff);
-    BOOST_CHECK_SMALL(diff, 1e-6);
+    BOOST_TEST(solver->fieldSweepIterations == 1);
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
 
     N_VDestroy(g);
     N_VDestroy(exact);
@@ -1084,7 +1242,7 @@ BOOST_AUTO_TEST_CASE(acceleration_converges_a_sweep_that_plainly_diverges)
     // The agreement is necessary but not sufficient -- solveCoupledJacIterative
     // now escalates to solveCoupledJacExact, so this line passes with the
     // acceleration deleted. The fallback count is the assertion that matters.
-    BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
     BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
     BOOST_TEST_MESSAGE("sweeps taken: " << solver->fieldSweepIterations);
     BOOST_CHECK_LE(solver->fieldSweepIterations, 12);
@@ -1151,9 +1309,8 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     //
     // **Measured, it does not.** At strength 10 the iteration matrix has
     // rho = 1.57 -- within 3% of the 1.611 measured on RichGeometricDiffusion --
-    // and the accelerated sweep still reaches FieldSolveTolerance, in 13 to 38
-    // sweeps depending on the right-hand side against a plain sweep that
-    // diverges. The secant is rank one per *step*, but the steps are not the
+    // and the accelerated sweep still reaches FieldSolveTolerance against a
+    // plain sweep that diverges. The secant is rank one per *step*, but the steps are not the
     // same rank-one direction, so the iteration is not confined to a
     // two-dimensional subspace the way the pessimistic argument assumes. Scanned
     // over strengths from 1 to 1e5 -- rho saturating just under 2 -- and over six
@@ -1162,9 +1319,7 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     // So both halves are asserted. The guarantee, first, because it is true by
     // construction and survives any change to the accelerator: whichever way
     // solveCoupledJacIterative got there, the answer is the exact one, which is
-    // what makes iterative safe as a default. Then the measurement, with a cap
-    // that has room for the observed spread -- the default 20 does *not*, which
-    // is why this raises it rather than pretending otherwise.
+    // what makes iterative safe as a default. Then the measurement.
     auto probe = multiDofFixture(6, 2, 10.0);
     const double rho = spectralRadius(probe);
     BOOST_TEST_MESSAGE("five-DOF, strength 10: rho(M) = " << rho
@@ -1172,9 +1327,9 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     BOOST_REQUIRE_GT(maxAbsA1(probe), 0.0);
     BOOST_CHECK_GT(rho, 1.2);
 
-    // Six right-hand *directions* -- see randomRHS on why scaling would not do.
-    // The sweep count varies by a factor of three across them, which is the
-    // whole reason one right-hand side is not a measurement.
+    // Six right-hand *directions*: the sweep count varies by a factor of two
+    // across them, which is the whole reason one right-hand side is not a
+    // measurement.
     int convergedAtDefault = 0, escalatedAtDefault = 0;
     std::string atDefault, atSixty;
 
@@ -1191,7 +1346,7 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
         // whichever route the solve took, and the only claim here that survives
         // any change to the accelerator.
         solver->solveCoupledJacIterative(g, iterative);
-        BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+        BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
 
         const long sweeps = solver->fieldSweepIterations;
         const long fellBack = solver->fieldSweepFallbacks;
@@ -1203,7 +1358,7 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
         solver->setFieldSolveMaxSweeps(60);
         solver->solveCoupledJacIterative(g, iterative);
         BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks - fellBack, 0);
-        BOOST_CHECK_SMALL(relativeDifference(exact, iterative), 1e-6);
+        BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
         atSixty += " " + std::to_string(solver->fieldSweepIterations - sweeps);
 
         N_VDestroy(g);
@@ -1214,25 +1369,19 @@ BOOST_AUTO_TEST_CASE(a_divergent_five_dof_coupling_is_still_solved_exactly)
     BOOST_TEST_MESSAGE("five-DOF sweeps by right-hand side, cap 20 (* = escalated):"
                        << atDefault << "\n  the same at cap 60:" << atSixty);
 
-    // Read these 13-38 sweeps beside MMSFieldTests.cpp, which measures 2.5 to 3.6
-    // sweeps per Jacobian solve over four full integrations and never escalates
-    // once. The two are not in tension and the contrast is the point: a *random*
-    // right-hand side is the hard case, while Newton's are small, smooth
-    // corrections about a nearby state, and that is why the shipped cap of 20 is
-    // adequate in a real run despite being provably inadequate here. Neither
-    // number means anything about the cap on its own.
-
-    // The accelerator does cope with five divergent field unknowns -- every
-    // right-hand side converges once there is room for it.
+    // The accelerator copes with five divergent field unknowns -- every
+    // right-hand side converges once there is room for it...
     BOOST_CHECK_EQUAL(escalatedAtDefault + convergedAtDefault, 6);
 
-    // ...but FieldSolveMaxSweeps = 20 is **not enough** for half of them, and
+    // ...but FieldSolveMaxSweeps = 20 is **not enough** for all of them, and
     // that is a statement about the shipped default rather than about this
-    // fixture. Asserted as a tripwire, deliberately: if the accelerator is ever
-    // improved to the point where all six fit in twenty sweeps, this fails, and
-    // the right response is to update it together with the TODO entry that
-    // records the same measurement -- not to have the default quietly become
-    // adequate with nothing saying so.
+    // fixture: 10-23 sweeps, one of six over the cap. Asserted as a tripwire,
+    // both ways, and recorded with the TODO entry that holds the same
+    // measurement, so that a change to the accelerator, the stopping test or
+    // the default has to update both. Read it beside MMSFieldTests.cpp's few
+    // sweeps per Jacobian solve over whole integrations: a *random* right-hand
+    // side is the hard case, while Newton's are small, smooth corrections about
+    // a nearby state, so neither says the cap is wrong in a real run.
     BOOST_TEST_MESSAGE("of six right-hand sides, " << escalatedAtDefault
                        << " needed more than the default cap of 20");
     BOOST_CHECK_GT(convergedAtDefault, 0);
@@ -1292,36 +1441,6 @@ BOOST_AUTO_TEST_CASE(the_accepted_iterate_leaves_the_field_row_exact)
     N_VDestroy(out);
 }
 
-BOOST_AUTO_TEST_CASE(the_accelerated_sweep_is_still_scale_equivariant)
-{
-    // A property of the plain sweep, re-run rather than assumed to survive the
-    // acceleration: mu is a ratio of inner
-    // products of quantities that all scale with the right-hand side, so
-    // Irons-Tuck is homogeneous and solve(c g) == c solve(g) should survive it.
-    // The scale that broke the old criterion was 1e-9; use it again.
-    auto solver = everySlotFixture(6, 2, 2.0);
-    N_Vector g = randomRHS(*solver), gSmall = N_VClone(g);
-    N_VScale(1e-9, g, gSmall);
-
-    N_Vector big = N_VClone(g), small = N_VClone(g);
-    solver->solveCoupledJacIterative(g, big);
-    solver->solveCoupledJacIterative(gSmall, small);
-    N_VScale(1e9, small, small);
-
-    // Neither solve may have escalated: the fallback is the exact solve, which
-    // is scale-equivariant by construction, so a fallback would make this a
-    // statement about the LU factorisation rather than about the sweep.
-    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
-    const double diff = relativeDifference(big, small);
-    BOOST_TEST_MESSAGE("scale equivariance at 1e-9: relative difference " << diff);
-    BOOST_CHECK_SMALL(diff, 1e-8);
-
-    N_VDestroy(g);
-    N_VDestroy(gSmall);
-    N_VDestroy(big);
-    N_VDestroy(small);
-}
-
 BOOST_AUTO_TEST_CASE(the_end_of_run_report_counts_the_sweeps_and_names_the_fallbacks)
 {
     // The only signal a user has that the coupling is not converging, and the
@@ -1339,8 +1458,9 @@ BOOST_AUTO_TEST_CASE(the_end_of_run_report_counts_the_sweeps_and_names_the_fallb
     h.sys->setFieldModel(h.field);
     h.sys->resetCoeffs();
 
-    // One sweep can never satisfy a relative increment test from a zero start, so
-    // every Jacobian solve escalates -- IDACalcIC's included, which is why the
+    // One sweep is accepted only when the whole increment is already below the
+    // tolerance, so the Jacobian solves of the transient escalate -- IDACalcIC's
+    // included, which is why the
     // cap is set before initialize() rather than after: the two runs below have
     // to be configured identically for their counts to be comparable.
     h.sys->setFieldSolveMaxSweeps(1);
@@ -1402,6 +1522,943 @@ BOOST_AUTO_TEST_CASE(a_coupled_run_on_the_iterative_path_reaches_the_manufacture
 
     BOOST_CHECK_SMALL(eu, 1e-4);
     BOOST_CHECK_SMALL(epsi, 1e-5);
+}
+
+// The first registered field model, on the same checks the manufactured ones
+// get. Its A2 reaches the transport through the pressure's aux column only, and
+// its A1 through all four geometry slots, so this is the fixture that runs the
+// aux half of A2 and a multi-slot A1 together.
+BOOST_AUTO_TEST_CASE(the_theta_pinch_exact_solve_inverts_its_finite_differenced_jacobian)
+{
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervalsPerCell=*/1, superconvergent);
+
+            // Not vacuous: both coupling blocks carry something.
+            BOOST_REQUIRE_GT(maxAbsA1(solver), 1e-3);
+            DGSoln a2Map(solver->nVars, *solver.grid, 3, N_VGetArrayPointer(solver->a2[0]),
+                         solver->nScalars, solver->nAux, solver->getFieldDOF());
+            BOOST_REQUIRE_GT(maxAbs(a2Map.Aux(0), 5), 1e-3);
+
+            for (int trial = 0; trial < 2; ++trial)
+            {
+                const SolveReport r = checkExactSolve(solver, trial);
+                BOOST_TEST_MESSAGE("theta pinch, k = 3, nCells = 5, one interval per cell, trial "
+                                   << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                                   << ", ||J dy* - g||/||g|| = " << r.residual << " ("
+                                   << r.nDirichlet << " Dirichlet components excluded)");
+                BOOST_TEST(r.nDirichlet == 1);
+                BOOST_TEST(r.solutionError < 1e-6);
+                BOOST_TEST(r.residual < 1e-7);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_theta_pinch_iterative_solve_agrees_with_the_exact_one)
+{
+    auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervalsPerCell=*/2);
+    N_Vector g = randomRHS(*solver);
+    N_Vector exact = N_VClone(g), iterative = N_VClone(g);
+    solver->solveCoupledJacExact(g, exact);
+    solver->solveCoupledJacIterative(g, iterative);
+
+    const double diff = weightedDifference(*solver, exact, iterative);
+    BOOST_TEST_MESSAGE("theta pinch, two intervals per cell, iterative vs exact: weighted difference = "
+                       << diff << ", relative " << relativeDifference(exact, iterative));
+    BOOST_TEST(withinSweepTolerance(*solver, exact, iterative));
+    BOOST_CHECK_EQUAL(solver->fieldSweepFallbacks, 0);
+
+    N_VDestroy(g);
+    N_VDestroy(exact);
+    N_VDestroy(iterative);
+}
+
+
+
+// The theta pinch's block Gauss-Seidel iteration contracts at every cj,
+// steady (cj = 0, where the adjoint always runs) to stiff, and at every field
+// resolution: measured 0.10 to 0.19. So a sweep on it that fails to converge is
+// a defect in the sweep, not a property of the coupling -- which is how the
+// alignment guard in ironsTuck was found.
+BOOST_AUTO_TEST_CASE(the_theta_pinch_sweep_contracts_at_every_cj)
+{
+    for (double cj : {0.0, 1.7, 100.0, 1e4})
+        for (Index m : {1, 4})
+        {
+            auto solver = thetaPinchFixture(6, 3, m, false, cj);
+            const double rho = spectralRadius(solver, 200);
+            BOOST_TEST_MESSAGE("cj = " << cj << ", " << m << " intervals per cell: rho = " << rho);
+            BOOST_TEST(rho < 0.3);
+        }
+}
+
+// ---------------------------------------- geometryDerivatives = Differenced --
+
+/// GeometricAuxDiffusion counting what a Jacobian build asks of it: batched
+/// value evaluations, and calls of the three geometry hooks.
+class CountingGeometricAux : public GeometricAuxDiffusion
+{
+public:
+    explicit CountingGeometricAux(GeometryDerivatives d) : GeometricAuxDiffusion(d) {}
+
+    PhysicsOutput ComputePhysics(GlobalState const &s, std::vector<Position> const &x, Time t) override
+    {
+        ++batched;
+        return GeometricAuxDiffusion::ComputePhysics(s, x, t);
+    }
+    void dSigmaFn_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++hooks;
+        GeometricAuxDiffusion::dSigmaFn_dGeometry(i, v, s, x, t);
+    }
+    void dSources_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++hooks;
+        GeometricAuxDiffusion::dSources_dGeometry(i, v, s, x, t);
+    }
+    void dAuxG_dGeometry(Index i, VectorRef v, const State &s, Position x, Time t) override
+    {
+        ++hooks;
+        GeometricAuxDiffusion::dAuxG_dGeometry(i, v, s, x, t);
+    }
+
+    int batched = 0, hooks = 0;
+};
+
+double relativeA1Difference(CoupledSolver const &a, CoupledSolver const &b)
+{
+    double d = 0.0;
+    for (size_t i = 0; i < a->A1_cellwise.size(); ++i)
+        d = std::max(d, (a->A1_cellwise[i] - b->A1_cellwise[i]).cwiseAbs().maxCoeff());
+    return d / maxAbsA1(a);
+}
+
+// The solver's forward difference of the case's values reproduces the case's
+// own derivatives, for every row block of A1 (GeometricAuxDiffusion reaches the
+// sigma, u and aux rows) and on both node sets.
+BOOST_AUTO_TEST_CASE(a_differenced_a1_matches_the_analytic_one)
+{
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto field = std::make_shared<ManufacturedFieldEverySlot>(1.0);
+            auto analytic = makeCoupledSolverAtState(
+                6, 2, std::make_unique<GeometricAuxDiffusion>(GeometryDerivatives::Analytic), field,
+                superconvergent);
+            auto differenced = makeCoupledSolverAtState(
+                6, 2, std::make_unique<GeometricAuxDiffusion>(GeometryDerivatives::Differenced),
+                std::make_shared<ManufacturedFieldEverySlot>(1.0), superconvergent);
+            BOOST_REQUIRE_GT(maxAbsA1(analytic), 1e-3);
+            const double manufactured = relativeA1Difference(analytic, differenced);
+
+            auto pinchA = thetaPinchFixture(5, 3, 1, superconvergent, 1.7, "Analytic");
+            auto pinchD = thetaPinchFixture(5, 3, 1, superconvergent, 1.7, "Differenced");
+            BOOST_REQUIRE_GT(maxAbsA1(pinchA), 1e-3);
+            const double pinch = relativeA1Difference(pinchA, pinchD);
+
+            BOOST_TEST_MESSAGE("differenced A1 against analytic, relative: manufactured "
+                               << manufactured << ", theta pinch " << pinch);
+            BOOST_TEST(manufactured < 1e-6);
+            BOOST_TEST(pinch < 1e-6);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_exact_solve_inverts_the_jacobian_with_a_differenced_a1)
+{
+    auto solver = thetaPinchFixture(/*nCells=*/5, /*k=*/3, /*intervalsPerCell=*/1, false, 1.7, "Differenced");
+    for (int trial = 0; trial < 2; ++trial)
+    {
+        const SolveReport r = checkExactSolve(solver, trial);
+        BOOST_TEST_MESSAGE("theta pinch, differenced A1, trial "
+                           << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                           << ", ||J dy* - g||/||g|| = " << r.residual);
+        BOOST_TEST(r.solutionError < 1e-5);
+        BOOST_TEST(r.residual < 1e-6);
+    }
+}
+
+// What a build costs, exactly, under each declaration -- the evaluation plan's
+// FieldCoupling site, and the calls actually made. Differenced makes nGeometry + 1
+// batched value calls and never reaches a geometry hook; Analytic the reverse.
+// And the unperturbed call comes last, so the case's source cache, which the
+// output reads, holds the sources at the state rather than at a shifted geometry.
+BOOST_AUTO_TEST_CASE(a_build_spends_what_its_geometry_derivatives_declare)
+{
+    for (GeometryDerivatives d : {GeometryDerivatives::Analytic, GeometryDerivatives::Differenced})
+    {
+        const bool differenced = d == GeometryDerivatives::Differenced;
+        BOOST_TEST_CONTEXT((differenced ? "Differenced" : "Analytic"))
+        {
+            auto problem = std::make_unique<CountingGeometricAux>(d);
+            CountingGeometricAux &p = *problem;
+            auto h = makeCoupledSolverAtState(6, 2, std::move(problem),
+                                              std::make_shared<ManufacturedFieldEverySlot>(1.0));
+            const Index nGeom = h->getGeometrySlots();
+            const Index nNodes = 6 * 3;
+            BOOST_REQUIRE_GE(nGeom, 1);
+
+            p.batched = p.hooks = 0;
+            h->updateMatricesForJacSolve();
+            if (differenced)
+            {
+                BOOST_TEST(p.batched == nGeom + 1);
+                BOOST_TEST(p.hooks == 0);
+            }
+            else
+            {
+                BOOST_TEST(p.batched == 0);
+                BOOST_TEST(p.hooks == 3 * nNodes); // sigma and S for one variable, G for one aux
+            }
+
+            const EvaluationPlan plan = h->evaluationPlan();
+            const auto site = std::find_if(plan.sites.begin(), plan.sites.end(), [](EvaluationSite const &s)
+                                           { return s.kind == EvaluationKind::FieldCoupling; });
+            BOOST_REQUIRE(site != plan.sites.end());
+            BOOST_TEST((site->cadence == EvaluationCadence::PerJacobianBuild));
+            BOOST_TEST((site->entry ==
+                        (differenced ? EvaluationEntry::ComputePhysics : EvaluationEntry::Pointwise)));
+            BOOST_TEST(site->calls == (differenced ? nGeom + 1 : 1));
+
+            if (differenced)
+            {
+                const Values cached = p.getSourceCache(0)->get();
+                auto nodes = h->physicsNodesAt(h->yJac, h->t);
+                const PhysicsOutput atState = p.GeometricAuxDiffusion::ComputePhysics(nodes.states, nodes.points, h->t);
+                BOOST_TEST((cached - atState[1][0]).cwiseAbs().maxCoeff() == 0.0,
+                           boost::test_tools::tolerance(0.0));
+                // Not vacuous: the sources do move with the geometry.
+                nodes.states.GeometryMatrix().row(0).array() += 1e-3;
+                const PhysicsOutput shifted = p.GeometricAuxDiffusion::ComputePhysics(nodes.states, nodes.points, h->t);
+                BOOST_TEST((shifted[1][0] - atState[1][0]).cwiseAbs().maxCoeff() > 1e-6);
+            }
+        }
+    }
+}
+
+// ------------------------------------------- tier 1: the reduced coupling --
+//
+// The field model run as an equilibrium (FieldModelEquilibrium) and coupled
+// through its response, FieldCoupling = "reduced". The residual is tier 0's --
+// geometry from an equilibrium solved at each transport state -- so the
+// Jacobian the reduced solve inverts is checked against a finite difference of
+// *that* residual, which re-solves the equilibrium at every perturbation, and
+// against tier 2's exact solve with psi eliminated.
+
+/// A tier-1 solver at a state, its Jacobian blocks built. No psi to push off
+/// anything: the equilibrium is solved for the state.
+/// FieldModelEquilibrium with its transposed response switched off: what an
+/// adjoint that never applied G'^T would compute.
+class BlindTransposeEquilibrium : public FieldModelEquilibrium
+{
+public:
+    using FieldModelEquilibrium::FieldModelEquilibrium;
+    void applyResponseTranspose(GlobalState &, Equilibrium const &, GlobalState const &, Matrix const &,
+                                std::vector<Position> const &, Vector const &, Time,
+                                std::vector<Position> const &) override
+    {
+    }
+};
+
+CoupledSolver makeReducedSolverAtState(Index nCells, Index k, std::unique_ptr<TransportSystem> problem,
+                                       std::shared_ptr<FieldModel> model, bool differencedResponse,
+                                       bool superconvergent = false, double cj = 1.7, bool blindTranspose = false)
+{
+    CoupledSolver h;
+    h.problem = std::move(problem);
+    h.field = std::move(model);
+    h.grid = std::make_unique<Grid>(0.0, 1.0, nCells);
+    h.sys = std::make_unique<SystemSolver>(*h.grid, k, h.problem.get());
+    h.sys->setTau(0.75);
+    h.sys->setInitialTime(0.0);
+    h.sys->setSuperconvergent(superconvergent);
+    h.sys->setEquilibriumModel(blindTranspose
+                                   ? std::make_shared<BlindTransposeEquilibrium>(h.field, differencedResponse)
+                                   : std::make_shared<FieldModelEquilibrium>(h.field, differencedResponse),
+                               SystemSolver::EquilibriumCoupling::Reduced);
+    h.sys->resetCoeffs();
+    h.sys->initialiseMatrices();
+
+    const size_t dof = h.sys->getSolution().getDoF();
+    h.Y = N_VNew_Serial(dof, h.sys->ctx);
+    h.dYdt = N_VClone(h.Y);
+    N_VConst(0.0, h.Y);
+    N_VConst(0.0, h.dYdt);
+    h.sys->setInitialConditions(h.Y, h.dYdt);
+
+    h.cj = cj;
+    h.t = 0.0;
+    h.sys->setJacTime(h.t);
+    h.sys->setAlpha(cj);
+    h.sys->setJacEvalY(h.Y, h.dYdt);
+    h.sys->updateBoundaryConditions(h.t);
+    h.sys->updateMatricesForJacSolve();
+    return h;
+}
+
+CoupledSolver reducedThetaPinch(Index nCells, Index k, bool differencedResponse, bool superconvergent = false,
+                                Index intervalsPerCell = 1, bool blindTranspose = false)
+{
+    using namespace toml::literals::toml_literals;
+    static const toml::value config = u8R"(
+        [ThetaPinchDiffusion]
+        Temperature = 0.3
+        D0 = 0.5
+        Gamma = 2.0
+    )"_toml;
+    const Grid grid(0.0, 1.0, nCells);
+    return makeReducedSolverAtState(
+        nCells, k, std::make_unique<ThetaPinchDiffusion>(config, grid),
+        std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{.intervalsPerCell = intervalsPerCell},
+                                                grid),
+        differencedResponse, superconvergent, /*cj=*/1.7, blindTranspose);
+}
+
+/// checkExactSolve for tier 1: the reduced exact solve against a finite
+/// difference of the tier-0 residual.
+SolveReport checkReducedSolve(CoupledSolver &h, int trial)
+{
+    SystemSolver &sys = *h.sys;
+    const Matrix J = fdjac::jacobian(sys, h.Y, h.dYdt, h.t, h.cj);
+    const Index n = J.rows();
+    const std::vector<Index> dead = decoupledComponents(J);
+
+    Vector dy(n);
+    for (Index i = 0; i < n; ++i)
+        dy(i) = std::sin(1.0 + static_cast<double>(i) * (trial + 1) * 0.7);
+    zeroAt(dy, dead);
+    const Vector g = J * dy;
+
+    N_Vector gVec = N_VNew_Serial(n, sys.ctx);
+    N_Vector out = N_VClone(gVec);
+    std::copy(g.data(), g.data() + n, N_VGetArrayPointer(gVec));
+    N_VConst(0.0, out);
+    sys.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+    sys.solveJacEq(gVec, out);
+
+    Vector recovered = fdjac::toVector(out);
+    zeroAt(recovered, dead);
+    N_VDestroy(gVec);
+    N_VDestroy(out);
+    return {(recovered - dy).norm() / dy.norm(), fdjac::relativeResidual(J, recovered, g, dead),
+            static_cast<Index>(dead.size())};
+}
+
+// The model's own response is good to the finite difference's own error, as
+// tier 2's exact solve is: 1e-8 in the solution, 6e-10 in the residual. The
+// differenced response is a forward difference of the equilibrium at a step of
+// sqrt(eps), good to 3e-7 relative (the_adapters_response_is_the_derivative_of_
+// its_solve), and the check sees exactly that: 2e-6 and 1e-7 at worst.
+BOOST_AUTO_TEST_CASE(the_reduced_exact_solve_inverts_the_finite_differenced_tier_zero_jacobian)
+{
+    for (bool differenced : {false, true})
+    {
+        const double solutionBound = differenced ? 1e-5 : 1e-6, residualBound = differenced ? 1e-6 : 1e-7;
+        BOOST_TEST_CONTEXT("differenced response = " << differenced)
+        {
+            auto manufactured = makeReducedSolverAtState(4, 2, std::make_unique<GeometricAuxDiffusion>(),
+                                                         std::make_shared<ManufacturedFieldEverySlot>(),
+                                                         differenced);
+            const SolveReport m = checkReducedSolve(manufactured, 0);
+            BOOST_TEST_MESSAGE("manufactured, every slot: ||dy* - dy||/||dy|| = "
+                               << m.solutionError << ", ||J dy* - g||/||g|| = " << m.residual);
+            BOOST_TEST(m.solutionError < solutionBound);
+            BOOST_TEST(m.residual < residualBound);
+
+            for (bool superconvergent : {false, true})
+            {
+                auto pinch = reducedThetaPinch(5, 3, differenced, superconvergent);
+                for (int trial = 0; trial < 2; ++trial)
+                {
+                    const SolveReport r = checkReducedSolve(pinch, trial);
+                    BOOST_TEST_MESSAGE("theta pinch, superconvergent = "
+                                       << superconvergent << ", trial " << trial << ": ||dy* - dy||/||dy|| = "
+                                       << r.solutionError << ", ||J dy* - g||/||g|| = " << r.residual);
+                    BOOST_TEST(r.nDirichlet == 1);
+                    BOOST_TEST(r.solutionError < solutionBound);
+                    BOOST_TEST(r.residual < residualBound);
+                }
+            }
+        }
+    }
+}
+
+// The coupling is not vacuous: dropping A_g (tier 0's Jacobian) misses the
+// finite-differenced one by orders more than the reduced solve does.
+BOOST_AUTO_TEST_CASE(the_reduced_check_sees_a_missing_coupling)
+{
+    auto pinch = reducedThetaPinch(5, 3, false);
+    SystemSolver &sys = *pinch.sys;
+    const SolveReport coupled = checkReducedSolve(pinch, 0);
+    for (Matrix &Ag : sys.reducedBlocks.Ag)
+        Ag.setZero();
+    const SolveReport blind = checkReducedSolve(pinch, 0);
+    BOOST_TEST_MESSAGE("theta pinch: residual " << coupled.residual << " coupled, " << blind.residual
+                                                << " with A_g zeroed");
+    BOOST_TEST(blind.residual > 1e3 * coupled.residual);
+}
+
+// With the adapter's own response, tier 1 *is* tier 2 with psi eliminated: the
+// same transport increment as tier 2's exact solve of the same right-hand side
+// with zero field rows, at psi on its equilibrium.
+BOOST_AUTO_TEST_CASE(the_reduced_exact_solve_is_tier_two_with_psi_eliminated)
+{
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto reduced = reducedThetaPinch(5, 3, false, superconvergent);
+            auto coupled = thetaPinchFixture(5, 3, 1, superconvergent);
+
+            // Put tier 2 at tier 1's state, psi included.
+            SystemSolver &r = *reduced.sys, &c = *coupled.sys;
+            const Index nTransport = static_cast<Index>(r.getSolution().getDoF());
+            std::copy(N_VGetArrayPointer(reduced.Y), N_VGetArrayPointer(reduced.Y) + nTransport,
+                      N_VGetArrayPointer(coupled.Y));
+            DGSoln yMap(c.nVars, *coupled.grid, 3, N_VGetArrayPointer(coupled.Y), c.nScalars, c.nAux,
+                        c.getFieldDOF());
+            yMap.getField() = FieldModelEquilibrium::psi(*r.reducedBlocks.eq);
+            c.setJacEvalY(coupled.Y, coupled.dYdt);
+            c.updateMatricesForJacSolve();
+
+            N_Vector g1 = randomRHS(r), x1 = N_VClone(g1);
+            N_Vector g2 = N_VNew_Serial(c.getSolution().getDoF(), c.ctx), x2 = N_VClone(g2);
+            N_VConst(0.0, g2);
+            std::copy(N_VGetArrayPointer(g1), N_VGetArrayPointer(g1) + nTransport, N_VGetArrayPointer(g2));
+
+            r.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+            r.solveJacEq(g1, x1);
+            c.solveCoupledJacExact(g2, x2);
+
+            const Vector a = fdjac::toVector(x1), b = fdjac::toVector(x2).head(nTransport);
+            const double diff = (a - b).norm() / a.norm();
+            BOOST_TEST_MESSAGE("tier 1 exact against tier 2 exact, transport block: " << diff);
+            BOOST_TEST(diff < 1e-10);
+
+            for (N_Vector v : {g1, x1, g2, x2})
+                N_VDestroy(v);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_reduced_iterative_and_krylov_solves_agree_with_the_exact_one)
+{
+    for (bool differenced : {false, true})
+        for (Index intervals : {1, 2})
+        {
+            auto pinch = reducedThetaPinch(5, 3, differenced, false, intervals);
+            SystemSolver &sys = *pinch.sys;
+            N_Vector g = randomRHS(sys);
+            N_Vector exact = N_VClone(g), iterative = N_VClone(g), krylov = N_VClone(g);
+            sys.setFieldSolveMode(SystemSolver::FieldSolveMode::Exact);
+            sys.solveJacEq(g, exact);
+            sys.setFieldSolveMode(SystemSolver::FieldSolveMode::Iterative);
+            sys.solveJacEq(g, iterative);
+            sys.setFieldSolveMode(SystemSolver::FieldSolveMode::Krylov);
+            sys.solveJacEq(g, krylov);
+
+            const auto stats = sys.getFieldSweepStats();
+            BOOST_TEST_MESSAGE("differenced = " << differenced << ", " << intervals
+                                                << " intervals per cell: iterative "
+                                                << weightedDifference(sys, exact, iterative) << ", krylov "
+                                                << weightedDifference(sys, exact, krylov) << " from exact; "
+                                                << stats.iterations << " sweeps, " << stats.krylovIterations
+                                                << " GMRES iterations");
+            BOOST_TEST(withinSweepTolerance(sys, exact, iterative));
+            BOOST_TEST(withinSweepTolerance(sys, exact, krylov));
+            BOOST_TEST(stats.fallbacks == 0);
+            BOOST_TEST(stats.krylovSolves == 1);
+            for (N_Vector v : {g, exact, iterative, krylov})
+                N_VDestroy(v);
+        }
+}
+
+// Krylov at tier 2 is the same code on dpsi, and converges where the plain
+// sweep diverges: the five-unknown coupling at a strength where rho > 1.
+BOOST_AUTO_TEST_CASE(the_tier_two_krylov_solve_agrees_with_the_exact_one)
+{
+    for (double strength : {1.0, 40.0})
+    {
+        auto solver = multiDofFixture(4, 2, strength);
+        SystemSolver &sys = *solver.sys;
+        N_Vector g = randomRHS(sys);
+        N_Vector exact = N_VClone(g), krylov = N_VClone(g);
+        sys.solveCoupledJacExact(g, exact);
+        sys.setFieldSolveMode(SystemSolver::FieldSolveMode::Krylov);
+        sys.solveJacEq(g, krylov);
+        const auto stats = sys.getFieldSweepStats();
+        BOOST_TEST_MESSAGE("strength " << strength << ": rho " << spectralRadius(solver) << ", krylov "
+                                       << weightedDifference(sys, exact, krylov) << " from exact in "
+                                       << stats.krylovIterations << " iterations");
+        BOOST_TEST(withinSweepTolerance(sys, exact, krylov));
+        BOOST_TEST(stats.fallbacks == 0);
+        // The field row: dpsi is consistent with dx, as the sweep leaves it.
+        BOOST_TEST(fieldRowResidual(solver, g, krylov) < 1e-12);
+        for (N_Vector v : {g, exact, krylov})
+            N_VDestroy(v);
+    }
+}
+
+// The adapter's exact response against the base class's difference of Solve,
+// on one direction at the theta pinch's state.
+//
+// The comparison is made at two steps on the truncation side of the forward
+// difference, and what is required is that the gap closes in proportion to the
+// step: an exact response that is wrong leaves a gap no step removes. At the
+// default step, sqrt(eps), the difference sits on the other side, where Solve's
+// convergence error over h is the larger term -- ~1e-6 relative here, and how
+// much of it depends on round-off, so a bound there flips with the compiler.
+// Measured on this state: 1.38e-4, 1.38e-5, 1.38e-6, 1.42e-7 at steps 1e-3 to
+// 1e-6, then 1.0e-7, 6.6e-7, 1.2e-5, 1.5e-4 from 1e-7 to 1e-10.
+BOOST_AUTO_TEST_CASE(the_adapters_response_is_the_derivative_of_its_solve)
+{
+    auto pinch = reducedThetaPinch(5, 3, false);
+    SystemSolver &sys = *pinch.sys;
+    auto &b = sys.reducedBlocks;
+
+    struct Stepped : FieldModelEquilibrium
+    {
+        double step;
+        Stepped(std::shared_ptr<FieldModel> f, double s) : FieldModelEquilibrium(std::move(f), true), step(s) {}
+        double responseStep() const override { return step; }
+    };
+
+    GlobalState dp = *b.states;
+    dp.Variable().setConstant(0.0);
+    for (Eigen::Index j = 0; j < dp.Variable().cols(); ++j)
+        dp.Variable()(0, j) = std::sin(0.3 + 1.1 * static_cast<double>(j));
+    dp.Aux() = 0.3 * dp.Variable();
+
+    const Eigen::Index nPoints = static_cast<Eigen::Index>(b.physicsPoints.size());
+    FieldModelEquilibrium exact(pinch.field, false);
+    Matrix dgExact(sys.getGeometrySlots(), nPoints);
+    exact.applyResponse(dgExact, *b.eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    BOOST_TEST(dgExact.norm() > 1e-3);
+
+    auto gapAt = [&](double step) {
+        Stepped differenced(pinch.field, step);
+        Matrix dg(sys.getGeometrySlots(), nPoints);
+        differenced.applyResponse(dg, *b.eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
+        return (dgExact - dg).norm() / dgExact.norm();
+    };
+    const double coarse = gapAt(1e-4), fine = gapAt(1e-5);
+    BOOST_TEST_MESSAGE("theta pinch response, exact against differenced: " << coarse << " at step 1e-4, " << fine
+                                                                          << " at 1e-5; |dg| " << dgExact.norm());
+    BOOST_TEST(fine < 1e-5);
+    BOOST_TEST(coarse / fine > 8.0);
+    BOOST_TEST(coarse / fine < 12.0);
+}
+
+BOOST_AUTO_TEST_CASE(a_reduced_equilibrium_needs_the_cases_geometry_derivatives)
+{
+    using namespace toml::literals::toml_literals;
+    const toml::value config = u8R"(
+        [ThetaPinchDiffusion]
+        Temperature = 0.3
+        GeometryDerivatives = "None"
+    )"_toml;
+    const Grid grid(0.0, 1.0, 4);
+    ThetaPinchDiffusion problem(config, grid);
+    auto model = std::make_shared<FieldModelEquilibrium>(
+        std::make_shared<ThetaPinchEquilibrium>(ThetaPinchEquilibrium::Parameters{}, grid));
+    SystemSolver sys(grid, 2, &problem);
+    try
+    {
+        sys.setEquilibriumModel(model, SystemSolver::EquilibriumCoupling::Reduced);
+        BOOST_FAIL("a reduced equilibrium was attached to a case with no geometry derivatives");
+    }
+    catch (std::logic_error const &e)
+    {
+        BOOST_TEST(std::string(e.what()).find("geometryDerivatives is None") != std::string::npos);
+    }
+    BOOST_CHECK_NO_THROW(sys.setEquilibriumModel(model, SystemSolver::EquilibriumCoupling::Consistent));
+}
+
+// ---------------------------------------------- tier 1: the reduced adjoint --
+//
+// The adjoint twin of the checks above: assembled from the build's record at
+// alpha = 0 and required to invert J_red^T, the transpose of a finite
+// difference of the tier-0 residual at cj = 0.
+
+/// The adjoint state as one vector in the solution vector's ordering, cells
+/// then lambda (then psi at tier 2).
+Vector adjointVector(SystemSolver const &sys)
+{
+    const Index nCells = static_cast<Index>(sys.nCells), cellDOF = static_cast<Index>(sys.localDOF);
+    const Index nLambda = sys.adjoint_lambdas.size(), nField = sys.getFieldDOF();
+    Vector z(nCells * cellDOF + nLambda + nField);
+    for (Index i = 0; i < nCells; ++i)
+        z.segment(i * cellDOF, cellDOF) = sys.adjoint_squ[i];
+    z.segment(nCells * cellDOF, nLambda) = sys.adjoint_lambdas;
+    if (nField > 0)
+        z.tail(nField) = sys.adjoint_field;
+    return z;
+}
+
+/// A cellwise right-hand side, deliberately not shaped like an objective's.
+std::vector<Vector> randomCellRHS(SystemSolver const &sys, int trial)
+{
+    const Index cellDOF = static_cast<Index>(sys.localDOF);
+    std::vector<Vector> out(sys.nCells, Vector(cellDOF));
+    for (Index i = 0; i < static_cast<Index>(sys.nCells); ++i)
+        for (Index j = 0; j < cellDOF; ++j)
+            out[i](j) = std::sin(0.4 + (trial + 1) * 0.9 * static_cast<double>(i * cellDOF + j));
+    return out;
+}
+
+/// ||J_red^T z - g|| / ||g|| over the rows the residual defines, solved by
+/// `mode`, with no geometry share in the right-hand side.
+double reducedAdjointResidual(CoupledSolver &h, SystemSolver::FieldSolveMode mode, int trial)
+{
+    SystemSolver &sys = *h.sys;
+    const Matrix J = fdjac::jacobian(sys, h.Y, h.dYdt, h.t, 0.0);
+    const std::vector<Index> dead = fdjac::undefinedRows(J);
+    sys.assembleAdjointOperator(sys.jacobianDerivatives);
+
+    sys.G_y = randomCellRHS(sys, trial);
+    sys.G_field.resize(0);
+    sys.G_geometry.resize(0);
+    Vector g = Vector::Zero(J.rows());
+    for (Index i = 0; i < static_cast<Index>(sys.nCells); ++i)
+        g.segment(i * sys.localDOF, sys.localDOF) = sys.G_y[i];
+
+    sys.setFieldSolveMode(mode);
+    sys.solveAdjointState();
+    return fdjac::relativeResidual(Matrix(J.transpose()), adjointVector(sys), g, dead);
+}
+
+BOOST_AUTO_TEST_CASE(the_reduced_adjoint_inverts_the_transpose_of_the_tier_zero_jacobian)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    for (bool differenced : {false, true})
+        for (bool superconvergent : {false, true})
+        {
+            // 1e-7, field_adjoint_tests' bound for tier 2's transpose check:
+            // measured 2e-8 to 3e-8 with the model's transpose, in every mode
+            // alike, which is the finite difference's own error. The assembled
+            // transpose is good to 1e-7 (the_assembled_transpose_is_the_
+            // transpose_of_the_response), and the check sees 5e-7.
+            const double bound = differenced ? 1e-6 : 1e-7;
+            BOOST_TEST_CONTEXT("differenced response = " << differenced << ", superconvergent = " << superconvergent)
+            {
+                auto pinch = reducedThetaPinch(5, 3, differenced, superconvergent);
+                for (Mode mode : {Mode::Exact, Mode::Iterative, Mode::Krylov})
+                {
+                    const double r = reducedAdjointResidual(pinch, mode, 0);
+                    const auto stats = pinch->getFieldSweepStats();
+                    BOOST_TEST_MESSAGE("mode " << static_cast<int>(mode) << ": ||J^T z - g||/||g|| = " << r
+                                               << "; adjoint sweeps " << stats.adjointSweeps << ", GMRES "
+                                               << stats.adjointKrylovIterations << ", fell back "
+                                               << stats.adjointFellBack);
+                    BOOST_TEST(r < bound);
+                    BOOST_TEST(!stats.adjointFellBack);
+                }
+            }
+        }
+}
+
+// The vacuity guards, at the operator. A_g^T zeroed, or a model whose
+// transposed response does nothing, is tier 0's adjoint, which misses the
+// transpose by orders more than the reduced solve does.
+BOOST_AUTO_TEST_CASE(the_reduced_adjoint_check_sees_a_missing_transpose)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    auto pinch = reducedThetaPinch(5, 3, false);
+    const double good = reducedAdjointResidual(pinch, Mode::Exact, 0);
+
+    SystemSolver &sys = *pinch.sys;
+    for (Matrix &block : sys.Ag_transpose_cellwise)
+    {
+        BOOST_REQUIRE_GT(block.cwiseAbs().maxCoeff(), 0.0);
+        block.setZero();
+    }
+    sys.solveAdjointState();
+    const Matrix J = fdjac::jacobian(sys, pinch.Y, pinch.dYdt, pinch.t, 0.0);
+    Vector g = Vector::Zero(J.rows());
+    for (Index i = 0; i < static_cast<Index>(sys.nCells); ++i)
+        g.segment(i * sys.localDOF, sys.localDOF) = sys.G_y[i];
+    const double noAg = fdjac::relativeResidual(Matrix(J.transpose()), adjointVector(sys), g, fdjac::undefinedRows(J));
+
+    auto blind = reducedThetaPinch(5, 3, false, false, 1, /*blindTranspose=*/true);
+    const double noResponse = reducedAdjointResidual(blind, Mode::Exact, 0);
+
+    BOOST_TEST_MESSAGE("||J^T z - g||/||g||: " << good << " coupled, " << noAg << " with A_g^T zeroed, "
+                                               << noResponse << " with no transposed response");
+    BOOST_TEST(noAg > 1e3 * good);
+    BOOST_TEST(noResponse > 1e3 * good);
+}
+
+// With the adapter's own response, tier 1's adjoint is tier 2's with psi
+// eliminated: the same transport block of z, for the same G_y and a geometry
+// share that tier 2 sees as G_psi = sum_j (dGeometry/dpsi_j)^T G_geometry_j.
+// And tier 2's own three adjoint solves agree, GMRES among them.
+BOOST_AUTO_TEST_CASE(the_reduced_adjoint_is_tier_twos_with_psi_eliminated)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto reduced = reducedThetaPinch(5, 3, false, superconvergent);
+            auto coupled = thetaPinchFixture(5, 3, 1, superconvergent);
+            SystemSolver &r = *reduced.sys, &c = *coupled.sys;
+
+            const Index nTransport = static_cast<Index>(r.getSolution().getDoF());
+            std::copy(N_VGetArrayPointer(reduced.Y), N_VGetArrayPointer(reduced.Y) + nTransport,
+                      N_VGetArrayPointer(coupled.Y));
+            DGSoln yMap(c.nVars, *coupled.grid, 3, N_VGetArrayPointer(coupled.Y), c.nScalars, c.nAux,
+                        c.getFieldDOF());
+            const Vector psi = FieldModelEquilibrium::psi(*r.reducedBlocks.eq);
+            yMap.getField() = psi;
+            c.setJacEvalY(coupled.Y, coupled.dYdt);
+            c.updateMatricesForJacSolve();
+
+            r.assembleAdjointOperator(r.jacobianDerivatives);
+            c.assembleAdjointOperator(c.jacobianDerivatives);
+
+            // The same right-hand side, both ways.
+            const std::vector<Vector> Gy = randomCellRHS(r, 1);
+            auto const &points = r.reducedBlocks.physicsPoints;
+            const Index nGeom = r.getGeometrySlots();
+            Vector Ggeom(nGeom * static_cast<Index>(points.size()));
+            for (Index j = 0; j < Ggeom.size(); ++j)
+                Ggeom(j) = std::cos(0.3 + 0.77 * static_cast<double>(j));
+            Vector Gpsi = Vector::Zero(c.getFieldDOF());
+            Matrix dgdpsi(nGeom, c.getFieldDOF());
+            for (size_t j = 0; j < points.size(); ++j)
+            {
+                dgdpsi.setZero();
+                c.getFieldModel()->dGeometry_dpsi(dgdpsi, psi, points[j], r.reducedBlocks.t);
+                Gpsi += dgdpsi.transpose() * Ggeom.segment(static_cast<Index>(j) * nGeom, nGeom);
+            }
+
+            c.G_y = Gy;
+            c.G_field = Gpsi;
+            c.setFieldSolveMode(Mode::Exact);
+            c.solveAdjointState();
+            const Vector want = adjointVector(c).head(nTransport);
+
+            for (Mode mode : {Mode::Krylov, Mode::Iterative})
+            {
+                c.G_y = Gy;
+                c.G_field = Gpsi;
+                c.setFieldSolveMode(mode);
+                c.solveAdjointState();
+                const double diff = (adjointVector(c).head(nTransport) - want).norm() / want.norm();
+                BOOST_TEST_MESSAGE("tier 2, mode " << static_cast<int>(mode) << " against exact: " << diff);
+                BOOST_TEST(diff < 1e-7);
+            }
+
+            for (Mode mode : {Mode::Exact, Mode::Krylov, Mode::Iterative})
+            {
+                r.G_y = Gy;
+                r.G_geometry = Ggeom;
+                r.setFieldSolveMode(mode);
+                r.solveAdjointState();
+                const double diff = (adjointVector(r) - want).norm() / want.norm();
+                BOOST_TEST_MESSAGE("tier 1, mode " << static_cast<int>(mode) << " against tier 2 exact: " << diff);
+                BOOST_TEST(diff < (mode == Mode::Exact ? 1e-12 : 1e-7));
+            }
+        }
+    }
+}
+
+// The default transposed response is the assembled G': its transpose against
+// the adapter's exact one, on one sensitivity, and built once per equilibrium.
+BOOST_AUTO_TEST_CASE(the_assembled_transpose_is_the_transpose_of_the_response)
+{
+    auto pinch = reducedThetaPinch(5, 3, false);
+    SystemSolver &sys = *pinch.sys;
+    auto &b = sys.reducedBlocks;
+    FieldModelEquilibrium exact(pinch.field, false), differenced(pinch.field, true);
+
+    const Eigen::Index nPoints = static_cast<Eigen::Index>(b.physicsPoints.size());
+    Matrix dg(sys.getGeometrySlots(), nPoints);
+    for (Eigen::Index j = 0; j < dg.size(); ++j)
+        dg.data()[j] = std::sin(0.2 + 1.3 * static_cast<double>(j));
+
+    GlobalState dpExact = b.states->zeroedLike(), dpDiff = b.states->zeroedLike();
+    exact.applyResponseTranspose(dpExact, *b.eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const long before = exact.newtonIterations() + differenced.newtonIterations();
+    differenced.applyResponseTranspose(dpDiff, *b.eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const long assembling = differenced.newtonIterations();
+    differenced.applyResponseTranspose(dpDiff, *b.eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    BOOST_TEST(differenced.newtonIterations() == assembling);
+    BOOST_TEST(before == 0);
+
+    auto all = [](GlobalState const &s)
+    {
+        Vector out(s.Variable().size() + s.Derivative().size() + s.Flux().size() + s.Aux().size());
+        out << Eigen::Map<const Vector>(s.Variable().data(), s.Variable().size()),
+            Eigen::Map<const Vector>(s.Derivative().data(), s.Derivative().size()),
+            Eigen::Map<const Vector>(s.Flux().data(), s.Flux().size()),
+            Eigen::Map<const Vector>(s.Aux().data(), s.Aux().size());
+        return out;
+    };
+    const Vector a = all(dpExact), d = all(dpDiff);
+    const double diff = (a - d).norm() / a.norm();
+    BOOST_TEST_MESSAGE("G'^T dg, exact against assembled: " << diff << " relative; |G'^T dg| " << a.norm()
+                                                           << "; assembling took " << assembling
+                                                           << " Newton iterations");
+    BOOST_TEST(a.norm() > 1e-3);
+    BOOST_TEST(diff < 1e-6);
+}
+
+// ------------------------------- a native equilibrium: the pressure balance --
+//
+// ThetaPinchPressureBalance, an EquilibriumModel of its own rather than a
+// FieldModel run as one, through the same checks: its G' in J_red against a
+// finite difference of the tier-0 residual, which re-solves its balance at every
+// perturbation, and its exact transpose in the adjoint against J_red^T.
+
+/// A tier-1 solver at a state on the native model, its Jacobian blocks built.
+CoupledSolver nativeThetaPinch(Index nCells, Index k, bool differencedResponse, bool superconvergent = false)
+{
+    using namespace toml::literals::toml_literals;
+    static const toml::value config = u8R"(
+        [ThetaPinchDiffusion]
+        Temperature = 0.3
+        D0 = 0.5
+        Gamma = 2.0
+    )"_toml;
+    CoupledSolver h;
+    h.grid = std::make_unique<Grid>(0.0, 1.0, nCells);
+    h.problem = std::make_unique<ThetaPinchDiffusion>(config, *h.grid);
+    h.sys = std::make_unique<SystemSolver>(*h.grid, k, h.problem.get());
+    h.sys->setTau(0.75);
+    h.sys->setInitialTime(0.0);
+    h.sys->setSuperconvergent(superconvergent);
+    h.sys->setEquilibriumModel(std::make_shared<ThetaPinchPressureBalance>(
+                                   ThetaPinchPressureBalance::Parameters{.differencedResponse = differencedResponse},
+                                   *h.grid),
+                               SystemSolver::EquilibriumCoupling::Reduced);
+    h.sys->resetCoeffs();
+    h.sys->initialiseMatrices();
+
+    const size_t dof = h.sys->getSolution().getDoF();
+    h.Y = N_VNew_Serial(dof, h.sys->ctx);
+    h.dYdt = N_VClone(h.Y);
+    N_VConst(0.0, h.Y);
+    N_VConst(0.0, h.dYdt);
+    h.sys->setInitialConditions(h.Y, h.dYdt);
+
+    h.cj = 1.7;
+    h.t = 0.0;
+    h.sys->setJacTime(h.t);
+    h.sys->setAlpha(h.cj);
+    h.sys->setJacEvalY(h.Y, h.dYdt);
+    h.sys->updateBoundaryConditions(h.t);
+    h.sys->updateMatricesForJacSolve();
+    return h;
+}
+
+// Measured 9e-10 to 1.4e-9 in the solution and 1.2e-10 to 1.9e-10 in the
+// residual with the model's own G' -- the finite difference's own error -- and
+// 9e-8 to 2e-7 / 5e-9 to 8e-9 with the differenced one. Zeroing A_g takes the
+// residual to 0.18, nine orders up.
+BOOST_AUTO_TEST_CASE(the_native_reduced_solve_inverts_the_finite_differenced_tier_zero_jacobian)
+{
+    for (bool differenced : {false, true})
+        for (bool superconvergent : {false, true})
+        {
+            const double solutionBound = differenced ? 1e-5 : 1e-6, residualBound = differenced ? 1e-6 : 1e-7;
+            BOOST_TEST_CONTEXT("differenced response = " << differenced << ", superconvergent = " << superconvergent)
+            {
+                auto pinch = nativeThetaPinch(5, 3, differenced, superconvergent);
+                for (int trial = 0; trial < 2; ++trial)
+                {
+                    const SolveReport r = checkReducedSolve(pinch, trial);
+                    BOOST_TEST_MESSAGE("trial " << trial << ": ||dy* - dy||/||dy|| = " << r.solutionError
+                                                << ", ||J dy* - g||/||g|| = " << r.residual);
+                    BOOST_TEST(r.nDirichlet == 1);
+                    BOOST_TEST(r.solutionError < solutionBound);
+                    BOOST_TEST(r.residual < residualBound);
+                }
+            }
+        }
+
+    // Not vacuous: tier 0's Jacobian, A_g zeroed, misses by orders more.
+    auto pinch = nativeThetaPinch(5, 3, false);
+    const SolveReport coupled = checkReducedSolve(pinch, 0);
+    for (Matrix &Ag : pinch->reducedBlocks.Ag)
+        Ag.setZero();
+    const SolveReport blind = checkReducedSolve(pinch, 0);
+    BOOST_TEST_MESSAGE("residual " << coupled.residual << " coupled, " << blind.residual << " with A_g zeroed");
+    BOOST_TEST(blind.residual > 1e3 * coupled.residual);
+}
+
+// The model's G' and G'^T against what the base class makes of its Solve: a
+// forward difference, and the matrix assembled from it. Agreement to the
+// difference's own error, a transpose that is a transpose, and no Solve made by
+// either exact direction.
+BOOST_AUTO_TEST_CASE(the_native_response_and_its_transpose_are_the_derivative_of_its_solve)
+{
+    auto pinch = nativeThetaPinch(5, 3, false);
+    auto &b = pinch->reducedBlocks;
+    using Parameters = ThetaPinchPressureBalance::Parameters;
+    ThetaPinchPressureBalance exact(Parameters{}, *pinch.grid),
+        differenced(Parameters{.differencedResponse = true}, *pinch.grid);
+    const auto eq = exact.Solve(*b.states, b.inputPoints, b.weights, b.t, nullptr);
+    const long afterSolve = exact.solves();
+
+    const Eigen::Index nPoints = static_cast<Eigen::Index>(b.physicsPoints.size());
+    GlobalState dp = b.states->zeroedLike();
+    for (Eigen::Index j = 0; j < dp.Aux().cols(); ++j)
+        dp.Aux()(0, j) = std::cos(0.3 + 0.8 * static_cast<double>(j));
+    // A direction in rows the balance does not read changes nothing.
+    dp.Variable().setConstant(1.0);
+
+    Matrix dgExact(4, nPoints), dgDiff(4, nPoints);
+    exact.applyResponse(dgExact, *eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    differenced.applyResponse(dgDiff, *eq, *b.states, dp, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const double forward = (dgExact - dgDiff).norm() / dgExact.norm();
+
+    Matrix dg(4, nPoints);
+    for (Eigen::Index j = 0; j < dg.size(); ++j)
+        dg.data()[j] = std::sin(0.2 + 1.3 * static_cast<double>(j));
+    GlobalState zExact = b.states->zeroedLike(), zDiff = b.states->zeroedLike();
+    exact.applyResponseTranspose(zExact, *eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    differenced.applyResponseTranspose(zDiff, *eq, *b.states, dg, b.inputPoints, b.weights, b.t, b.physicsPoints);
+    const double transpose = (zExact.Aux() - zDiff.Aux()).norm() / zExact.Aux().norm();
+
+    // <dg, G' dp> = <G'^T dg, dp>, both from the model's exact directions.
+    const double lhs = (dg.array() * dgExact.array()).sum();
+    const double rhs = (zExact.Aux().array() * dp.Aux().array()).sum();
+
+    BOOST_TEST_MESSAGE("G' dp, exact against differenced: " << forward << "; G'^T dg: " << transpose
+                                                            << "; <dg, G'dp> - <G'^T dg, dp> = " << lhs - rhs
+                                                            << " against " << lhs);
+    BOOST_TEST(dgExact.norm() > 1e-3);
+    BOOST_TEST(forward < 1e-6);
+    BOOST_TEST(transpose < 1e-6);
+    BOOST_TEST(std::abs(lhs - rhs) < 1e-12 * std::abs(lhs));
+    BOOST_TEST(zExact.Variable().norm() == 0.0);
+    BOOST_TEST(zExact.Derivative().norm() == 0.0);
+    BOOST_TEST(zExact.Flux().norm() == 0.0);
+    BOOST_TEST(exact.solves() == afterSolve);
+}
+
+// The native adjoint inverts J_red^T, the transpose of a finite difference of
+// the tier-0 residual at cj = 0, in every FieldSolve mode.
+BOOST_AUTO_TEST_CASE(the_native_reduced_adjoint_inverts_the_transpose_of_the_tier_zero_jacobian)
+{
+    using Mode = SystemSolver::FieldSolveMode;
+    for (bool superconvergent : {false, true})
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto pinch = nativeThetaPinch(5, 3, false, superconvergent);
+            for (Mode mode : {Mode::Exact, Mode::Iterative, Mode::Krylov})
+            {
+                const double r = reducedAdjointResidual(pinch, mode, 0);
+                BOOST_TEST_MESSAGE("mode " << static_cast<int>(mode) << ": ||J^T z - g||/||g|| = " << r);
+                BOOST_TEST(r < 1e-7);
+                BOOST_TEST(!pinch->getFieldSweepStats().adjointFellBack);
+            }
+        }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

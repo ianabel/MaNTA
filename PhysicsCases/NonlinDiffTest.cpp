@@ -39,6 +39,17 @@ Value NonlinDiffTest::LowerBoundary( Index, Time ) const
 }
 
 // Exact solution at x = 1
+// The upper datum moves with the self-similar solution, and a consistent y' at
+// t0 is solved from its explicit time derivative: d/dt (1 - x/sqrt(T))^(1/n) at
+// T = t0 + t is (1/n) (1 - eta)^(1/n - 1) x / (2 T^(3/2)), zero past the front.
+Value NonlinDiffTest::dUpperBoundary_dt( Index, Time t ) const
+{
+	const double T = t0 + t, eta = 1.0 / ::sqrt( T );
+	if ( eta >= 1.0 )
+		return 0.0;
+	return ( 1.0 / n ) * ::pow( 1.0 - eta, 1.0 / n - 1.0 ) / ( 2.0 * T * ::sqrt( T ) );
+}
+
 Value NonlinDiffTest::UpperBoundary( Index, Time t ) const
 {
 	return ExactSolution( 1, t0 + t );

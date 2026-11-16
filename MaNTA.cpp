@@ -8,6 +8,7 @@
 #include "PhysicsCases.hpp"
 #include "SolverConfig.hpp"
 #include "FieldModel.hpp"
+#include "GeometrySource.hpp"
 #include "DegreeAdaptation.hpp"
 #include "MeshAdaptation.hpp"
 #include "PhysicsInstance.hpp"
@@ -157,29 +158,25 @@ int runManta(std::string const &fname)
 	if (config.solveAdjoint)
 		adjoint = pProblem->createAdjointProblem();
 
-	// A field model is selected by name from the same process-global registry
-	// pattern the physics cases use, and is handed the parsed config file so it
-	// can read its own table. After the plugin dlopens above, since a model may
-	// come from one; and *before* the restart block below, because the field
-	// block is part of the solution vector and its length is what the restart
-	// file has to be checked against and the restart DGSoln shaped by. It is
-	// attached to the solver further down -- setFieldModel needs a solver, and a
-	// solver cannot exist until the restart values are in the problem.
-	std::shared_ptr<FieldModel> fieldModel;
-	if (!config.FieldModel.empty())
+	// The geometry source -- a FieldModel or an EquilibriumModel, each from its
+	// own registry and handed the parsed config file so it reads its own table,
+	// with FieldCoupling resolved -- is built by the function PyRunner uses too.
+	// After the plugin dlopens above, since a model may come from one; and
+	// *before* the restart block below, because a coupled field's unknowns are
+	// part of the solution vector and their count is what the restart file has
+	// to be checked against. It is attached to the solver further down: a solver
+	// cannot exist until the restart values are in the problem.
+	GeometrySource geometry;
+	try
 	{
-		try
-		{
-			fieldModel = FieldModels::InstantiateFieldModel(config.FieldModel, configFile, *grid);
-		}
-		catch (std::invalid_argument const &e)
-		{
-			logmsg<LOG_LEVEL::ERROR>("Could not instantiate a field model for FieldModel = {}\n  {}",
-									 config.FieldModel, e.what());
-			return 1;
-		}
+		geometry = geometrySourceFromConfig(config, configFile, *grid, pProblem->spec());
 	}
-	const Index nField = fieldModel ? fieldModel->nFieldDOF() : 0;
+	catch (std::invalid_argument const &e)
+	{
+		logmsg<LOG_LEVEL::ERROR>("{}", e.what());
+		return 1;
+	}
+	const Index nField = geometry.nField();
 
 	if (config.restart)
 	{
@@ -218,18 +215,9 @@ int runManta(std::string const &fname)
 		pProblem->setRestartValues(Y, dYdt, *fileGrid, fileOrder, nField);
 	}
 
-	// Degree adaptation builds and runs a solver per level itself, and
-	// runAdaptiveDegree has no way to take a field model -- so a field model
-	// would silently never be attached, leaving the run solving the fixed-field
-	// problem while the restart check above has already sized the state for
-	// nField unknowns. Refused rather than ignored, the way a sliced steady
-	// solve refuses it.
-	if ((config.DegreeAdaptation || config.MeshAdaptation || !config.DegreeLadder.empty() ||
-		 !config.GridLadder.empty()) &&
-		fieldModel)
-		throw std::invalid_argument(
-			"DegreeAdaptation and MeshAdaptation cannot be combined with a FieldModel: "
-			"the adaptive drivers build a solver per level and cannot carry the field model.");
+	// The adaptive drivers build and run a solver per level themselves and
+	// have no way to take the model, so it would silently never be attached.
+	refuseAdaptationWithGeometry(config, geometry);
 
 	// The adaptation drivers solve on several discretisations. Under
 	// RebuildPhysicsOnRegrid a case that cannot follow a new one in place is
@@ -282,8 +270,7 @@ int runManta(std::string const &fname)
 
 		// Before applySolverConfig, and necessarily before runSolver: setFieldModel
 		// reshapes the solution vector and refuses once the solver is initialised.
-		if (fieldModel)
-			system->setFieldModel(fieldModel);
+		geometry.attachTo(*system);
 
 		applySolverConfig(config, *system);
 		if (config.solveAdjoint)

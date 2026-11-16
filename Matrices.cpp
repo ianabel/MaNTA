@@ -1,5 +1,8 @@
 
+#include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <limits>
 
 #include <Eigen/Dense>
 #include <Eigen/Core>
@@ -222,39 +225,123 @@ void SystemSolver::dSources_dScalars_StarMat(Matrix &mat, GlobalState const &sta
 
 // ------------------------------------------------- the field coupling, A1 --
 
-void SystemSolver::fieldChainOnNodes(Matrix &nodal, Index XVar,
-									 void (TransportSystem::*dX_dGeom)(Index, VectorRef,
-																	   const State &, Position,
-																	   Time),
-									 Vector const &psi, GlobalState const &states,
-									 std::vector<Position> const &points, Index intervalIndex,
-									 Index nNodes, Time tEval)
+SystemSolver::GeometryResponse SystemSolver::geometryResponse(PhysicsNodes const &nodes, Time tEval)
 {
-	assert(nodal.rows() == nField);
-	assert(nodal.cols() == nNodes);
+	if (problem->spec().geometryDerivatives == GeometryDerivatives::Differenced)
+		return differencedGeometryResponse(nodes, tEval);
+
+	const Index nNodes = static_cast<Index>(nodes.points.size());
+	GeometryResponse r;
+	r.sigma.assign(nVars, Matrix(nGeom, nNodes));
+	r.sources.assign(nVars, Matrix(nGeom, nNodes));
+	r.aux.assign(nAux, Matrix(nGeom, nNodes));
 
 	Values dXdG(nGeom);
-	Matrix dGdPsi(nGeom, nField);
-
 	for (Index j = 0; j < nNodes; ++j)
 	{
-		const Index g = intervalIndex * nNodes + j;
+		const State s = nodes.states[j];
 
-		// Both arrive zeroed, so a case that does not read geometry -- and so
+		// Each arrives zeroed, so a case that does not read geometry -- and so
 		// does not override the hook at all -- contributes an identically zero
 		// column, which is exactly right: it does not couple.
-		dXdG.setZero();
-		dGdPsi.setZero();
+		auto take = [&](Matrix &into, auto hook, Index i)
+		{
+			dXdG.setZero();
+			(problem->*hook)(i, dXdG, s, nodes.points[j], tEval);
+			into.col(j) = dXdG;
+		};
+		for (Index v = 0; v < nVars; ++v)
+		{
+			take(r.sigma[v], &TransportSystem::dSigmaFn_dGeometry, v);
+			take(r.sources[v], &TransportSystem::dSources_dGeometry, v);
+		}
+		for (Index a = 0; a < nAux; ++a)
+			take(r.aux[a], &TransportSystem::dAuxG_dGeometry, a);
+	}
+	return r;
+}
 
-		(problem->*dX_dGeom)(XVar, dXdG, states[g], points[g], tEval);
-		fieldModel->dGeometry_dpsi(dGdPsi, psi, points[g], tEval);
+// A forward difference, one geometry slot at a time across every node at once,
+// so each perturbation is one batched call. The step is relative to the slot's
+// size at the node, floored at its largest size anywhere on the grid: a slot
+// that vanishes somewhere -- <|grad x|^2> on the axis -- is still stepped on the
+// scale it has elsewhere, rather than by sqrt(eps) in absolute terms, which
+// means nothing for a quantity of arbitrary units.
+SystemSolver::GeometryResponse SystemSolver::differencedGeometryResponse(PhysicsNodes const &nodes,
+																		 Time tEval)
+{
+	const Index nNodes = static_cast<Index>(nodes.points.size());
+	GeometryResponse r;
+	r.sigma.assign(nVars, Matrix(nGeom, nNodes));
+	r.sources.assign(nVars, Matrix(nGeom, nNodes));
+	r.aux.assign(nAux, Matrix(nGeom, nNodes));
 
-		nodal.col(j) = dGdPsi.transpose() * dXdG;
+	const double root = std::sqrt(std::numeric_limits<double>::epsilon());
+	Matrix const &g = nodes.states.GeometryMatrix();
+
+	std::vector<PhysicsOutput> perturbed;
+	perturbed.reserve(nGeom);
+	std::vector<Vector> steps;
+	steps.reserve(nGeom);
+	for (Index slot = 0; slot < nGeom; ++slot)
+	{
+		const double floor = g.row(slot).cwiseAbs().maxCoeff();
+		Vector h(nNodes);
+		for (Index j = 0; j < nNodes; ++j)
+		{
+			const double scale = std::max(std::abs(g(slot, j)), floor);
+			h(j) = root * (scale > 0.0 ? scale : 1.0);
+			// The step actually taken, which rounding may have moved.
+			h(j) = (g(slot, j) + h(j)) - g(slot, j);
+		}
+
+		GlobalState shifted = nodes.states;
+		shifted.GeometryMatrix().row(slot) += h.transpose();
+		perturbed.push_back(problem->ComputePhysics(shifted, nodes.points, tEval));
+		steps.push_back(std::move(h));
+	}
+
+	// Last, so the case's source cache is left at the state itself.
+	const PhysicsOutput base = problem->ComputePhysics(nodes.states, nodes.points, tEval);
+
+	for (Index slot = 0; slot < nGeom; ++slot)
+	{
+		PhysicsOutput const &p = perturbed[slot];
+		Vector const &h = steps[slot];
+		for (Index v = 0; v < nVars; ++v)
+		{
+			r.sigma[v].row(slot) = ((p[0][v] - base[0][v]).array() / h.array()).matrix().transpose();
+			r.sources[v].row(slot) = ((p[1][v] - base[1][v]).array() / h.array()).matrix().transpose();
+		}
+		for (Index a = 0; a < nAux; ++a)
+			r.aux[a].row(slot) = ((p[2][a] - base[2][a]).array() / h.array()).matrix().transpose();
+	}
+	return r;
+}
+
+std::vector<Matrix> SystemSolver::geometryJacobianOnNodes(Vector const &psi,
+														  std::vector<Position> const &points,
+														  Index intervalIndex, Index nNodes, Time tEval)
+{
+	std::vector<Matrix> dGdPsi(nNodes, Matrix::Zero(nGeom, nField));
+	for (Index j = 0; j < nNodes; ++j)
+		fieldModel->dGeometry_dpsi(dGdPsi[j], psi, points[intervalIndex * nNodes + j], tEval);
+	return dGdPsi;
+}
+
+void SystemSolver::fieldChainOnNodes(Matrix &nodal, Matrix const &dXdG,
+									 std::vector<Matrix> const &dGdPsi, Index intervalIndex,
+									 Index nNodes)
+{
+	assert(nodal.cols() == nNodes);
+	for (Index j = 0; j < nNodes; ++j)
+	{
+		const Vector col = dXdG.col(intervalIndex * nNodes + j);
+		nodal.col(j) = dGdPsi[j].transpose() * col;
 	}
 }
 
-// See the declaration for the shape and for why this takes `states` rather than
-// building them from Y.
+// See the declaration for the shape.
 //
 // The sign of the u block is the one thing here that cannot be read off the
 // chain rule. residual() forms that row as
@@ -265,7 +352,7 @@ void SystemSolver::fieldChainOnNodes(Matrix &nodal, Index XVar,
 // *subtracts* every source block from MX. Getting it wrong flips the sign of one
 // third of A1, which the Jacobian being unassembled would hide completely: the
 // answer would still be right and only the Newton iteration count would move.
-void SystemSolver::dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+void SystemSolver::dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
 									   std::vector<Position> const &points, Index intervalIndex,
 									   Time tEval)
 {
@@ -276,7 +363,8 @@ void SystemSolver::dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState
 
 	mat.setZero();
 
-	const Vector psi = Y.getField();
+	const std::vector<Matrix> dGdPsi =
+		geometryJacobianOnNodes(Vector(Y.getField()), points, intervalIndex, k + 1, tEval);
 	Matrix nodal(nField, k + 1);
 
 	// The projection the residual applies to a physics value: the interpolatory
@@ -297,26 +385,24 @@ void SystemSolver::dPhysics_dField_Mat(Matrix &mat, DGSoln const &Y, GlobalState
 	for (Index XVar = 0; XVar < nVars; XVar++)
 	{
 		// sigma rows: res.sigma = A sigma + Pi( sigma_hat ).
-		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSigmaFn_dGeometry, psi, states, points,
-						  intervalIndex, k + 1, tEval);
+		fieldChainOnNodes(nodal, response.sigma[XVar], dGdPsi, intervalIndex, k + 1);
 		project(XVar * (k + 1), 1.0);
 
 		// u rows: res.u = ... - Pi( S ). See the note on the sign above.
-		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSources_dGeometry, psi, states, points,
-						  intervalIndex, k + 1, tEval);
+		fieldChainOnNodes(nodal, response.sources[XVar], dGdPsi, intervalIndex, k + 1);
 		project(2 * nVars * (k + 1) + XVar * (k + 1), -1.0);
 	}
 
 	// aux rows: res.Aux = Pi( G ), the constraint imposed by projection.
 	for (Index aux = 0; aux < nAux; aux++)
 	{
-		fieldChainOnNodes(nodal, aux, &TransportSystem::dAuxG_dGeometry, psi, states, points,
-						  intervalIndex, k + 1, tEval);
+		fieldChainOnNodes(nodal, response.aux[aux], dGdPsi, intervalIndex, k + 1);
 		project(3 * nVars * (k + 1) + aux * (k + 1), 1.0);
 	}
 }
 
-void SystemSolver::dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalState const &states,
+void SystemSolver::dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y,
+										   GeometryResponse const &response,
 										   std::vector<Position> const &points,
 										   Index intervalIndex, Time tEval)
 {
@@ -328,7 +414,8 @@ void SystemSolver::dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalS
 	const Index nStar = k + 2;
 	Matrix const &A9 = postprocessor->A9(intervalIndex);
 
-	const Vector psi = Y.getField();
+	const std::vector<Matrix> dGdPsi =
+		geometryJacobianOnNodes(Vector(Y.getField()), points, intervalIndex, nStar, tEval);
 	Matrix nodal(nField, nStar);
 
 	auto project = [&](Index rowOffset, double scale)
@@ -340,21 +427,59 @@ void SystemSolver::dPhysics_dField_StarMat(Matrix &mat, DGSoln const &Y, GlobalS
 
 	for (Index XVar = 0; XVar < nVars; XVar++)
 	{
-		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSigmaFn_dGeometry, psi, states, points,
-						  intervalIndex, nStar, tEval);
+		fieldChainOnNodes(nodal, response.sigma[XVar], dGdPsi, intervalIndex, nStar);
 		project(XVar * (k + 1), 1.0);
 
-		fieldChainOnNodes(nodal, XVar, &TransportSystem::dSources_dGeometry, psi, states, points,
-						  intervalIndex, nStar, tEval);
+		fieldChainOnNodes(nodal, response.sources[XVar], dGdPsi, intervalIndex, nStar);
 		project(2 * nVars * (k + 1) + XVar * (k + 1), -1.0);
 	}
 
 	for (Index aux = 0; aux < nAux; aux++)
 	{
-		fieldChainOnNodes(nodal, aux, &TransportSystem::dAuxG_dGeometry, psi, states, points,
-						  intervalIndex, nStar, tEval);
+		fieldChainOnNodes(nodal, response.aux[aux], dGdPsi, intervalIndex, nStar);
 		project(3 * nVars * (k + 1) + aux * (k + 1), 1.0);
 	}
+}
+
+// Tier 1's A_g: dPhysics_dField_Mat and dPhysics_dField_StarMat without the
+// chain through dGeometry/dpsi, so the columns are the geometry at the physics
+// nodes themselves -- column j * nGeom + s is slot s at node j. The projection
+// is the one the residual applies, InterpolateOntoBasis or A9, taken as a
+// (k+1) x nNodes matrix once per cell, and the signs are A1's: + on the sigma
+// and aux rows, - on the u rows (see dPhysics_dField_Mat).
+void SystemSolver::dPhysics_dGeometry_Mat(Matrix &mat, DGSoln const &Y, GeometryResponse const &response,
+										  Index intervalIndex)
+{
+	const Index nNodes = superconvergent ? k + 2 : k + 1;
+	assert(mat.rows() == (3 * nVars + nAux) * (k + 1));
+	assert(mat.cols() == nGeom * nNodes);
+
+	Matrix projection(k + 1, nNodes);
+	if (superconvergent)
+		projection = postprocessor->A9(intervalIndex);
+	else
+	{
+		Interval const &I(grid[intervalIndex]);
+		for (Index j = 0; j < nNodes; ++j)
+			projection.col(j) = Y.getBasis().InterpolateOntoBasis(I, Vector(Vector::Unit(nNodes, j)));
+	}
+
+	mat.setZero();
+	auto place = [&](Index rowOffset, Matrix const &dXdG, double scale)
+	{
+		for (Index j = 0; j < nNodes; ++j)
+			for (Index slot = 0; slot < nGeom; ++slot)
+				mat.block(rowOffset, j * nGeom + slot, k + 1, 1) =
+					(scale * dXdG(slot, intervalIndex * nNodes + j)) * projection.col(j);
+	};
+
+	for (Index XVar = 0; XVar < nVars; XVar++)
+	{
+		place(XVar * (k + 1), response.sigma[XVar], 1.0);
+		place(2 * nVars * (k + 1) + XVar * (k + 1), response.sources[XVar], -1.0);
+	}
+	for (Index aux = 0; aux < nAux; aux++)
+		place(3 * nVars * (k + 1) + aux * (k + 1), response.aux[aux], 1.0);
 }
 
 void SystemSolver::dPhi_Mat(Matrix &mat, std::vector<Eigen::Ref<Matrix>> const dX_dZ, DGSoln const &Y, Index intervalIndex )

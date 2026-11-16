@@ -194,6 +194,17 @@ public:
     {
         out = pi * pi * std::sin(pi * x);
     }
+
+    // The batched dF/dp entry point, counted: an evaluation is one call here,
+    // however many objectives read it.
+    long parameterCalls = 0;
+    void ComputePhysicsDerivatives(
+        std::array<std::reference_wrapper<GlobalStateMatrix>, NPHYSICS_FUNCTIONS> &&out,
+        GlobalState const &states, std::vector<Position> const &abscissae) override
+    {
+        ++parameterCalls;
+        AdjointProblem::ComputePhysicsDerivatives(std::move(out), states, abscissae);
+    }
 };
 
 struct Options
@@ -359,6 +370,46 @@ BOOST_AUTO_TEST_CASE(the_end_of_run_adjoint_reuses_the_estimate_build)
     BOOST_TEST(e.valid);
     BOOST_TEST(e.value.size() == 2);
     BOOST_TEST(run->problem->batched == 2);
+}
+
+BOOST_AUTO_TEST_CASE(the_parameter_derivatives_are_evaluated_once_per_gradient)
+{
+    // dF/dp depends on the state, not on the objective, so a gradient asks the
+    // adjoint problem for it once whatever ng is. It used to be asked once per
+    // objective -- free at ng = 1, and 91 reverse-mode Jacobians through a
+    // drift-kinetic solve for a case with an objective plus a pressure and a
+    // bootstrap current at each of 45 nodes. Two objectives here, one call.
+    for (bool superconvergent : {false, true})
+    {
+        BOOST_TEST_CONTEXT("superconvergent = " << superconvergent)
+        {
+            auto run = solve({.superconvergent = superconvergent}, "adjoint_on_demand_dfdp");
+            SystemSolver &sys = *run->sys;
+            BOOST_TEST_REQUIRE(run->objective->getNg() == 2);
+
+            run->objective->parameterCalls = 0;
+            sys.setSolveAdjoint(true);
+            {
+                CapturedOutput quiet;
+                sys.runAdjointSolve();
+            }
+            BOOST_TEST(run->objective->parameterCalls == 1);
+
+            // Sharing the evaluation changes no gradient: the last objective's
+            // row, re-accumulated from a fresh evaluation at its own adjoint
+            // state (still in place), is the same bit for bit.
+            const Index last = run->objective->getNg() - 1;
+            const Vector shared = sys.G_p.row(last);
+            BOOST_TEST(shared.cwiseAbs().maxCoeff() > 1e-3, "not vacuous: the gradient is nonzero");
+            {
+                CapturedOutput quiet;
+                sys.accumulateAdjointGradients(last);
+            }
+            BOOST_TEST(run->objective->parameterCalls == 2);
+            const Vector fresh = sys.G_p.row(last);
+            BOOST_TEST(std::memcmp(shared.data(), fresh.data(), shared.size() * sizeof(double)) == 0);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(the_adjoint_on_demand_is_the_end_of_run_adjoint)

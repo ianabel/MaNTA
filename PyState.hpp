@@ -38,8 +38,8 @@ namespace py = pybind11;
         s.phi[i]      s.phi["potential"]
         s.udot[i]     d(variable i)/dt, zero unless a variable declares
                       source_reads_time_derivatives; see StateView::udot() below
-        s.geom[g]     a field model's geometry, derived rather than declared --
-                      see the note on StateView::geom() below
+        s.geom[g]     s.geom["B"]: the attached field or equilibrium model's
+                      geometry, derived rather than declared
         s.scalars[i]  s.scalars["current"]
 
     It is valid only for the duration of the call it was passed to; the
@@ -173,12 +173,18 @@ private:
 class StateView
 {
 public:
-    StateView(State &s, SystemSpec const &spec) : m_state(&s), m_spec(&spec) {}
+    /// `geometry` names the geometry slots -- the attached field or
+    /// equilibrium model's, which the case holds as geometrySlotNames() for
+    /// the run -- or is null for a view with none.
+    StateView(State &s, SystemSpec const &spec, std::vector<std::string> const *geometry = nullptr)
+        : m_state(&s), m_spec(&spec), m_geometry(geometry)
+    {
+    }
 
     /// Without a spec: the fields index by position only, and a name raises.
     /// AdjointProblem does not hold the transport system, so its hooks get
     /// this one.
-    explicit StateView(State &s) : m_state(&s), m_spec(nullptr) {}
+    explicit StateView(State &s) : m_state(&s), m_spec(nullptr), m_geometry(nullptr) {}
 
     StateField u() const { return {m_state->u().data(), m_state->u().size(), &varNames(), false}; }
     StateField q() const { return {m_state->q().data(), m_state->q().size(), &varNames(), false}; }
@@ -203,15 +209,11 @@ public:
     {
         return {m_state->udot().data(), m_state->udot().size(), &varNames(), false};
     }
-    /// The field model's geometry -- a derived metric field, not an unknown.
-    /// Indexable by position only, and still is: the slot names live in the
-    /// field model's own FieldModelSpec, while this view takes its names from
-    /// the TransportSystem's SystemSpec, which knows nothing about whichever
-    /// model happens to be attached. There is no route from one to the other,
-    /// so there is nothing to look a name up in. See TODO for the entry.
+    /// The geometry a field or equilibrium model supplies -- a derived metric
+    /// field, not an unknown -- by position or by the model's slot name.
     StateField geom() const
     {
-        return {m_state->geom().data(), m_state->geom().size(), &noNames(), false};
+        return {m_state->geom().data(), m_state->geom().size(), m_geometry ? m_geometry : &noNames(), false};
     }
     StateField scalars() const
     {
@@ -247,9 +249,8 @@ private:
                 m_scalarNames.push_back(s.name);
         return m_scalarNames;
     }
-    /// geom() has no name source yet -- see its doc comment -- so it always
-    /// gets this empty table, and a string key reports "no named entries"
-    /// rather than resolving anything.
+    /// A view built without geometry names -- an adjoint problem's -- indexes
+    /// geom by position only, and a string key reports "no named entries".
     static std::vector<std::string> const &noNames()
     {
         static const std::vector<std::string> empty;
@@ -258,6 +259,7 @@ private:
 
     State *m_state;
     SystemSpec const *m_spec;
+    std::vector<std::string> const *m_geometry = nullptr;
     mutable std::vector<std::string> m_varNames, m_auxNames, m_scalarNames;
 };
 

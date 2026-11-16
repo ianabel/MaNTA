@@ -404,6 +404,78 @@ public:
     }
 };
 
+// One variable and one algebraic auxiliary variable, coupled both ways and with
+// explicit time dependence everywhere it can have it:
+//
+//     G         = phi - u^2 - AUX_WOBBLE sin(t)
+//     sigma_hat = ( 1 + phi ) q ( 1 + FLUX_DRIFT t )
+//     S         = sin(3x)(1 + t) - phi^2 / 2
+//
+// It is the case the g++-14 miscompilation was found on (CLAUDE.md, TODO): a
+// dense finite difference of residual() inlined into a test translation unit
+// lost the column of the first interior trace DOF, at every k and with the flag
+// on and off, once SystemSolver's member layout changed. Kept as a J dy = g
+// check so that a reproduction has a test of the right shape to run against.
+constexpr double AUX_WOBBLE = 0.05, FLUX_DRIFT = 0.3;
+
+class AuxDiffusion : public TransportSystem
+{
+public:
+    AuxDiffusion() : TransportSystem({.variables = numberedFields(1), .aux = numberedAux(1)}) {}
+
+    Value LowerBoundary(Index, Time t) const override { return 0.1 * std::cos(t); }
+    Value UpperBoundary(Index, Time t) const override { return 0.2 * std::sin(t); }
+
+    Value SigmaFn(Index, const State &s, Position, Time t) override
+    {
+        return (1.0 + s.phi(0)) * s.q(0) * (1.0 + FLUX_DRIFT * t);
+    }
+    Value Sources(Index, const State &s, Position x, Time t) override
+    {
+        return std::sin(3.0 * x) * (1.0 + t) - 0.5 * s.phi(0) * s.phi(0);
+    }
+    Value AuxG(Index, const State &s, Position, Time t) override
+    {
+        return s.phi(0) - s.u(0) * s.u(0) - AUX_WOBBLE * std::sin(t);
+    }
+    void AuxGPrime(Index, State &out, const State &s, Position, Time) override
+    {
+        out.phi(0) = 1.0;
+        out.u(0) = -2.0 * s.u(0);
+    }
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &s, Position, Time t) override
+    {
+        v[0] = (1.0 + s.phi(0)) * (1.0 + FLUX_DRIFT * t);
+    }
+    void dSigmaFn_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSigma_dPhi(Index, VectorRef v, const State &s, Position, Time t) override
+    {
+        v[0] = s.q(0) * (1.0 + FLUX_DRIFT * t);
+    }
+    void dSources_du(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dsigma(Index, VectorRef v, const State &, Position, Time) override { v[0] = 0.0; }
+    void dSources_dPhi(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = -s.phi(0);
+    }
+
+    Value InitialValue(Index, Position x) const override
+    {
+        return 0.4 * std::sin(std::numbers::pi * x);
+    }
+    Value InitialDerivative(Index, Position x) const override
+    {
+        return 0.4 * std::numbers::pi * std::cos(std::numbers::pi * x);
+    }
+    Value InitialAuxValue(Index, Position x) const override
+    {
+        const double u0 = InitialValue(0, x);
+        return u0 * u0;
+    }
+};
+
 // The J dy = g check of the first test case in this file, parameterised on the
 // flag and the physics so it can be run both ways.
 template <class Problem>
@@ -423,7 +495,7 @@ double solveResidualRatio(Index k, Index nCells, double tau, double cj,
     SUNContext ctx;
     SUNContext_Create(SUN_COMM_NULL, &ctx);
 
-    DGSoln shape(problem.getNumVars(), grid, k);
+    DGSoln shape(problem.getNumVars(), grid, k, problem.getNumScalars(), problem.getNumAux());
     const Index n = shape.getDoF();
 
     N_Vector Y = N_VNew_Serial(n, ctx), dYdt = N_VClone(Y);
@@ -573,6 +645,26 @@ BOOST_AUTO_TEST_CASE(the_superconvergent_jacobian_is_right_where_its_own_solve_f
                        "k = " << k << ", cj = " << cj << ": superconvergent " << star
                               << " against plain " << plain);
         }
+}
+
+BOOST_AUTO_TEST_CASE(an_aux_jacobian_matches_a_finite_difference_of_its_residual)
+{
+    // The aux rows and the sigma/phi coupling, plain and superconvergent, at the
+    // degrees the g++-14 reproduction failed at. A miscompiled reference shows
+    // as an O(1) ratio -- the drift was 1.2426406871192851, i.e. 1.5 /
+    // 1.2071067811865475 -- where a right one is at the difference's floor.
+    for (bool sc : {false, true})
+        for (Index k : {1, 2, 3})
+            for (int trial = 0; trial < 2; ++trial)
+            {
+                const double resid =
+                    solveResidualRatio<AuxDiffusion>(k, 4, 0.75, 3.7, sc, trial);
+                BOOST_TEST_MESSAGE("AuxDiffusion, k = " << k << (sc ? ", superconvergent" : "")
+                                                        << ", trial " << trial
+                                                        << ": ||J dy - g|| / ||g|| = " << resid);
+                BOOST_TEST(resid < 1e-6, "k = " << k << (sc ? " superconvergent" : "")
+                                                << ": ||J dy - g|| / ||g|| = " << resid);
+            }
 }
 
 BOOST_AUTO_TEST_CASE(solve_jac_eq_without_a_field_model_is_the_transport_solve)

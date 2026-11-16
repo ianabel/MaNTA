@@ -198,6 +198,8 @@ set(LAPACK_LIBRARIES "${LAPACK_LIBRARIES}" CACHE FILEPATH "LAPACK libraries" FOR
 # build_sundials, which switches the rest off -- KINSOL in particular is what
 # SteadyState drives for the PseudoTransient and Newton paths, and a SUNDIALS
 # built without it fails three files into the build rather than at the link.
+# sunlinsolspgmr is GMRES, which FieldSolve = "krylov" drives directly
+# (SystemSolver::couplingKrylov); build_sundials leaves the linear solvers on.
 # ./sundials/install is where the bundled build_sundials script puts one, so a
 # checkout that ran it configures with no arguments at all. SUNDIALS_ROOT is a
 # *preferred* prefix rather than an exclusive one, so setting it when the
@@ -210,10 +212,67 @@ if(NOT DEFINED SUNDIALS_ROOT AND NOT DEFINED ENV{SUNDIALS_ROOT}
 endif()
 
 find_package(SUNDIALS 7.1.0 REQUIRED
-             COMPONENTS core ida kinsol nvecserial sunnonlinsolnewton)
+             COMPONENTS core ida kinsol nvecserial sunnonlinsolnewton sunlinsolspgmr)
 target_link_libraries(manta_deps INTERFACE
   SUNDIALS::core SUNDIALS::ida SUNDIALS::kinsol SUNDIALS::nvecserial
-  SUNDIALS::sunnonlinsolnewton)
+  SUNDIALS::sunnonlinsolnewton SUNDIALS::sunlinsolspgmr)
+
+# Where the installed binaries look for SUNDIALS at run time. Not left to
+# INSTALL_RPATH_USE_LINK_PATH alone: that adds only directories *outside the
+# project*, and ./build_sundials installs into ./sundials/install, inside it --
+# so the documented setup installed a solver that could not find libsundials_ida
+# at startup. Named from the libraries actually linked, less the linker's own
+# search directories.
+# SUNDIALS::ida and its siblings are interface targets over SUNDIALS::ida_shared
+# (or _static), which carries the location, so they are followed down to it.
+function(_manta_library_dirs out)
+  set(_dirs "")
+  foreach(_t IN LISTS ARGN)
+    if(NOT TARGET ${_t})
+      continue()
+    endif()
+    get_target_property(_aliased ${_t} ALIASED_TARGET)
+    if(_aliased)
+      set(_t ${_aliased})
+    endif()
+    get_target_property(_type ${_t} TYPE)
+    if(_type STREQUAL "SHARED_LIBRARY")
+      get_target_property(_cfgs ${_t} IMPORTED_CONFIGURATIONS)
+      set(_props IMPORTED_LOCATION)
+      if(_cfgs)
+        foreach(_c IN LISTS _cfgs)
+          list(APPEND _props IMPORTED_LOCATION_${_c})
+        endforeach()
+      endif()
+      foreach(_prop IN LISTS _props)
+        get_target_property(_loc ${_t} ${_prop})
+        if(_loc)
+          get_filename_component(_d "${_loc}" DIRECTORY)
+          list(APPEND _dirs "${_d}")
+        endif()
+      endforeach()
+    endif()
+    get_target_property(_links ${_t} INTERFACE_LINK_LIBRARIES)
+    if(_links)
+      _manta_library_dirs(_sub ${_links})
+      list(APPEND _dirs ${_sub})
+    endif()
+  endforeach()
+  set(${out} "${_dirs}" PARENT_SCOPE)
+endfunction()
+
+_manta_library_dirs(_sundials_dirs
+  SUNDIALS::core SUNDIALS::ida SUNDIALS::kinsol SUNDIALS::nvecserial
+  SUNDIALS::sunnonlinsolnewton SUNDIALS::sunlinsolspgmr)
+set(MANTA_DEPENDENCY_RPATH "")
+foreach(_d IN LISTS _sundials_dirs)
+  if(NOT _d IN_LIST CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
+     AND NOT _d IN_LIST CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES)
+    list(APPEND MANTA_DEPENDENCY_RPATH "${_d}")
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES MANTA_DEPENDENCY_RPATH)
+message(STATUS "Install RPATH for SUNDIALS: ${MANTA_DEPENDENCY_RPATH}")
 
 # --------------------------------------------------------------------- Eigen --
 #
@@ -309,7 +368,15 @@ endif()
 # expression templates from the core's and the two disagree about layout. It is
 # also why every header must reach <Eigen/Core> and <Eigen/Dense> before the
 # project headers -- see the note in Postprocessing.hpp.
-target_compile_definitions(manta_deps INTERFACE EIGEN_USE_BLAS)
+#
+# EIGEN_DONT_PARALLELIZE because MaNTA's parallelism is explicit: every thread
+# team comes from util/ParallelFor.hpp. Under -fopenmp (MANTA_OPENMP) Eigen
+# would otherwise thread its own matrix-matrix products, making a second team
+# inside parallel_for's and a summation order that follows OMP_NUM_THREADS --
+# which is what the byte-identical serial-against-threaded check rests on not
+# happening. Without OpenMP it changes nothing. ABI like EIGEN_USE_BLAS, so it
+# travels in manta.pc too.
+target_compile_definitions(manta_deps INTERFACE EIGEN_USE_BLAS EIGEN_DONT_PARALLELIZE)
 
 find_package(Threads REQUIRED)
 target_link_libraries(manta_deps INTERFACE BLAS::BLAS Threads::Threads ${CMAKE_DL_LIBS} m)
