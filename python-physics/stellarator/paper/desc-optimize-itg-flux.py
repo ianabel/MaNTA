@@ -77,9 +77,18 @@ use_default = True
 # (PressureObjectives in objective.py), so DESC's model sees how a boundary step
 # moves it. See desc-optimize-stored-energy.py for the bootstrap current too.
 pressure_consistency = True
-# relative to stored_energy_weight, on the mismatch normalised by MaNTA's peak
-# pressure: below a percent it barely registers beside the stored energy
-pressure_weight = 0.5
+# relative to stored_energy_weight, on the mismatch normalised as below
+pressure_weight = 1.0
+# How the pressure mismatch is measured, as in desc-optimize-stored-energy.py.
+# "relative": (p_MaNTA - p_DESC) / peak p, so a 10% error costs the same at any
+# beta. "beta": the mismatch in units of beta, 2 mu_0 dp / B0^2 (B0 the fixed
+# normalisation's <|B|>_rms), divided by beta_error_tol -- the error counts only
+# as far as it can move the equilibrium. A pressure error moves |B| on the
+# transport grid by rms dB/B = (0.4-1.4) d<beta> (measured on eq5 and
+# eq_itg_flux; see the stored-energy driver), so beta_error_tol is roughly the
+# tolerable relative error in |B|.
+pressure_error_metric = "beta"
+beta_error_tol = 1e-4
 # L = M = N for DESC. At 4 the interior was poorly determined: a boundary change
 # of 7e-6 moved it by 1.4% and G by 4%, which stalled the trust region. None
 # keeps the resolution of the loaded equilibrium.
@@ -92,6 +101,16 @@ tight_solve = dict(ftol=1e-8, xtol=1e-8, gtol=1e-8, maxiter=100)
 
 if append:
     eq_in = eq_name
+
+# Restarts, as in desc-optimize-stored-energy.py: every primal run inside the
+# optimisation restarts from fname + "_acc.restart.nc", which only the gradient
+# solve writes (make_objective's grad_solver_config) -- and DESC asks for a
+# gradient only at accepted points. A primal run writes fname.restart.nc, which
+# the gradient solve reads, so a rejected trial point is never restarted from.
+acc_restart = fname + "_acc.restart.nc"
+# the cold MaNTA solve before optimising: always on a fresh start, and on an
+# append when there is no accepted state to restart from yet
+initial_run = not append or not os.path.exists(acc_restart)
 
 st_config = {
     "ParticleSourceCenter": 0.0,
@@ -137,9 +156,10 @@ nodes = np.linspace(0.05, 0.99 * rho_upper, npoints - 1)
 nodes = np.concatenate(([0.0], nodes, [rho_upper]))
 print(nodes)
 
-# the initial run, from a cold start
+# the initial run, from a cold start; it writes the accepted state the first
+# primal run restarts from
 initial_solver_config = {
-    "OutputFilename": fname,
+    "OutputFilename": fname + "_acc",
     "PolynomialDegree": degree,
     "GridPoints": nodes,
     "GridSize": len(nodes) - 1,
@@ -166,9 +186,10 @@ initial_solver_config = {
     "PseudoTransientSERFloor": 2.0,
 }
 
-# every run inside the optimisation: a Newton solve from the last restart file
+# every run inside the optimisation: a Newton solve from the last accepted state
 solver_config = {
     "OutputFilename": fname,
+    "RestartFile": acc_restart,
     "PolynomialDegree": degree,
     "GridPoints": nodes,
     "GridSize": len(nodes) - 1,
@@ -301,7 +322,7 @@ itg_builder = make_itg_builder(
 )
 
 config = normalized({"Stellarator": st_config, "Solver": initial_solver_config})
-if not append:
+if initial_run:
     st = StellaratorTransport(
         config, yancc_wrapper=yancc_wrapper, itg=itg_at(itg_builder, eq.params_dict)
     )
@@ -330,6 +351,12 @@ if continue_pressure:
     RHO_EDGE = np.linspace(points_np[-1], 1.0, 6)[1:-1]
     GRID_EDGE = Grid(np.stack([RHO_EDGE, 0 * RHO_EDGE, 0 * RHO_EDGE], 1), jitable=True)
 elif pressure_consistency:
+    if not initial_run:
+        raise ValueError(
+            "pressure_consistency starts DESC's pressure from MaNTA's, which needs "
+            f"the initial MaNTA solve: delete {acc_restart} to run it, or append "
+            "onto an equilibrium from a consistency run, whose pressure is continued"
+        )
     # one tracking step: DESC's pressure set to MaNTA's at the starting point
     pm0 = np.asarray(st.getPressure())
     p_ref = float(pm0.max())
@@ -357,6 +384,21 @@ elif pressure_consistency:
     itg_builder = make_itg_builder(
         st_config, eq, rho_upper, rho=itg_rho_at_nodes(points)
     )
+if pressure_consistency:
+    # Pa per unit of the pressure residual (see pressure_error_metric)
+    if pressure_error_metric == "relative":
+        pressure_error_scale = p_ref
+    elif pressure_error_metric == "beta":
+        # B0 is held fixed with the normalisation, so the scale cannot be
+        # traded against the geometry
+        p_mag = normalization["B0"] ** 2 / (2 * 4e-7 * np.pi)
+        pressure_error_scale = beta_error_tol * p_mag
+        print(
+            f"pressure residual in beta: peak beta {p_ref / p_mag:.2e}, so a "
+            f"unit residual is {pressure_error_scale / p_ref:.2e} of peak p"
+        )
+    else:
+        raise ValueError(f"unknown pressure_error_metric {pressure_error_metric!r}")
 
 config = normalized(
     {
@@ -422,7 +464,10 @@ def objective_from_user_fun(grid, data, params=None):
         return 1 / g
     p_edge_target = manta_pressure[-1] * (1.0 - RHO_EDGE) / (1.0 - points_np[-1])
     p_edge = desc_pressure(GRID_EDGE, params["p_l"])
-    r_p = jnp.concatenate([manta_pressure - desc_p, p_edge_target - p_edge]) / p_ref
+    r_p = (
+        jnp.concatenate([manta_pressure - desc_p, p_edge_target - p_edge])
+        / pressure_error_scale
+    )
     if not isinstance(manta_pressure, jax.core.Tracer) and not isinstance(
         desc_p, jax.core.Tracer
     ):
