@@ -1859,8 +1859,8 @@ class SystemSolver
         // callers should not have to care.
         mutable Integrator::Cache integrator;
 
-        // The scalar bordering's work vectors: v and w are the Woodbury update's
-        // columns and rows, and solveScalarD/E/G are solveTransportJac's scratch.
+        // The scalar bordering's work vectors: v and w are the border's columns
+        // and rows, and solveScalarD/E/G are solveTransportJac's scratch.
         //
         // All of them are as long as the whole solution vector and all of them
         // have the solver's own lifetime, because nScalars is fixed by the

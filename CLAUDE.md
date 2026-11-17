@@ -665,8 +665,16 @@ assembled.
   `MX` blocks from `Matrices.cpp`.
 * `SystemSolver::solveHDGJac` — static condensation onto `lambda`, then
   back-substitution.
-* `SystemSolver::solveJacEq` — wraps that in a Woodbury/bordered elimination for
-  the global scalars.
+* `SystemSolver::solveJacEq` — wraps that in a bordered elimination for the
+  global scalars: a Schur complement `(N + W^T A^-1 V) mu = s - W^T A^-1 r`,
+  then back-substitution. It costs `nScalars + 1` transport solves. **It never
+  inverts `N` on its own, and must not.** A differential scalar whose row reads
+  itself only through its own `d/dt` (an integral controller's `dH/dt - E`)
+  has `alpha` on its diagonal of `N` and nothing else, so `N` is exactly
+  singular at an undamped steady step and nearly so at a large pseudo-time
+  step, while the bordered system stays well posed. A Woodbury form, which
+  inverts `N`, returns NaN there, and the NewtonStep test then never passes.
+  `the_bordered_solve_does_not_invert_n_on_its_own` is the guard.
 
 Because the Jacobian is never formed, **an error in it does not produce a wrong
 answer — only slow Newton convergence**. That is why several defects in this area

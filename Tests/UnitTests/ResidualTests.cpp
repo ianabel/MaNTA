@@ -470,7 +470,7 @@ BOOST_AUTO_TEST_CASE(residual_is_affine_for_a_linear_problem)
 BOOST_AUTO_TEST_CASE(residual_scalar_rows_are_scalar_g)
 {
     // res.Scalar(j) = ScalarG(j, ...), verbatim. Cheap to pin,
-    // and it is the row block the Woodbury elimination borders onto.
+    // and it is the row block the bordered elimination borders onto.
     const Index k = 2, nCells = 4;
     Grid grid(-1.0, 1.0, nCells);
     ScalarTestLD3 problem(scalar_config, grid);

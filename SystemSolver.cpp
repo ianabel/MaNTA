@@ -2932,7 +2932,8 @@ void SystemSolver::solveJacEq(N_Vector res_g, N_Vector delY)
 }
 
 // The uncoupled transport operator: static condensation onto lambda, wrapped in
-// the Woodbury/bordered elimination when there are global scalars.
+// a bordered elimination (a Schur complement on the scalars) when there are
+// global scalars.
 //
 // This is the whole of what solveJacEq used to be, minus the field block that
 // used to sit at its foot. That block wrote dpsi from B alone -- the block-Jacobi
@@ -2970,40 +2971,39 @@ void SystemSolver::solveTransportJac(N_Vector res_g, N_Vector delY)
             solveHDGJac(v[i], e[i]);
         }
 
-        // One factorisation, not two: this was `N_global.inverse()` here and
-        // again for del_y.Scalars() below, on a matrix that does not change
-        // between them.
-        const Matrix N_global_inv = N_global.inverse();
-
-        Vector tmp_N = (N_global_inv * res_g_map.Scalars());
-        N_VLinearCombination(nScalars, tmp_N.data(), e, g); // g = Sum_i tmp_N[i]*e[i]
-        N_VLinearSum(1.0, g, 1.0, d, g);                    // g += d;
-
-        Vector wDotg(nScalars);
+        // The system is [[A, -V], [W^T, N]] [x; mu] = [r; s]. The first row
+        // gives x = d + e mu, and the second row then becomes the Schur
+        // complement on the scalars:
+        //
+        //     (N + W^T e) mu = s - W^T d.
+        //
+        // N is never inverted on its own, because it can be singular. A
+        // differential scalar whose row reads itself only through its own time
+        // derivative (an integral controller's dH/dt - E) has alpha on its
+        // diagonal and nothing else, so an undamped steady step (alpha = 0)
+        // makes N exactly singular. N + W^T e is not: the scalar reaches its
+        // row through the transport, by way of v and w. A Woodbury form, which
+        // inverts N, would return NaN at alpha = 0, and lose every digit at
+        // large finite pseudo-time steps, where N is nearly singular. This form
+        // costs the same nScalars + 1 transport solves as one would.
+        //
+        // d and e[] have zero scalar entries, because solveHDGJac zeroes its
+        // output before writing the transport DOFs. So the dot products below
+        // see only the transport block of w, and x is the transport part of
+        // delY.
+        Matrix S(nScalars, nScalars);
+        Vector rhs(nScalars);
         for (Index i = 0; i < nScalars; ++i)
         {
-            wDotg[i] = N_VDotProd(w[i], g);
-        }
-        Matrix wTe(nScalars, nScalars);
-        for (Index i = 0; i < nScalars; ++i)
+            rhs(i) = res_g_map.Scalar(i) - N_VDotProd(w[i], d);
             for (Index j = 0; j < nScalars; ++j)
-                wTe(i, j) = N_VDotProd(w[i], e[j]);
+                S(i, j) = N_global(i, j) + N_VDotProd(w[i], e[j]);
+        }
+        Vector mu = S.partialPivLu().solve(rhs);
 
-        Matrix Nwe = N_global + wTe;
-        Vector NweInv_w_g = -1 * Nwe.inverse() * wDotg;             // Uses PartialPivLU internally, never really does inverse (except for small matrices)
-        N_VLinearCombination(nScalars, NweInv_w_g.data(), e, delY); // Set delY = - [ e  ( N + w^T e )^-1  w ]  g
-        N_VLinearSum(1.0, delY, 1.0, g, delY);                      // delY += g; so delY = g - (....), which is the final answer
-
-        // Finally, set the components of delY related to the change of the scalars
-
-        del_y.Scalars() = Values::Zero(nScalars);
-
-        Vector del_y_scalars(nScalars);
-        for (Index i = 0; i < nScalars; ++i)
-            del_y_scalars(i) = res_g_map.Scalar(i) - N_VDotProd(w[i], delY);
-
-        del_y.Scalars() = N_global_inv * del_y_scalars;
-
+        N_VLinearCombination(nScalars, mu.data(), e, g); // g = e mu
+        N_VLinearSum(1.0, d, 1.0, g, delY);              // delY = d + e mu
+        del_y.Scalars() = mu;
     }
     else
     {

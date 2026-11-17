@@ -1,4 +1,4 @@
-// Settles the open question about solveJacEq's Woodbury/bordered elimination.
+// Settles the open question about solveJacEq's bordered elimination.
 //
 // The background: SolveJacTests.cpp finite-differences `residual` and requires
 // the vector the linear solve returns to satisfy J dy = g. With nScalars = 0
@@ -391,7 +391,7 @@ BOOST_AUTO_TEST_CASE(solve_jac_eq_inverts_the_bordered_jacobian)
 {
     // The decisive test. Every entry of the bordered system is exactly known,
     // so if J dy = g fails here the fault can only be in solveJacEq's
-    // Woodbury elimination.
+    // bordered elimination.
     MinimalScalarSystem problem;
     ScalarFixture f(problem, Grid(0.0, 1.0, 4), 2, 1.0, 2.5);
 
@@ -416,6 +416,30 @@ BOOST_AUTO_TEST_CASE(solve_jac_eq_weights_the_time_derivative_block_by_alpha)
     DifferentialScalarSystem problem;
 
     for (double cj : {1.0, 3.7})
+    {
+        ScalarFixture f(problem, Grid(0.0, 1.0, 4), 2, 1.0, cj);
+        const Residuals r = checkBorderedSolve(f);
+        BOOST_TEST_MESSAGE("differential scalar, alpha = " << cj << ": total " << r.total
+                                                           << "  field " << r.field
+                                                           << "  scalar " << r.scalar);
+        BOOST_TEST(r.total < 1e-7, "alpha = " << cj);
+        BOOST_TEST(r.scalar < 1e-7, "alpha = " << cj);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(the_bordered_solve_does_not_invert_n_on_its_own)
+{
+    // A differential scalar whose row reads itself only through its own d/dt
+    // has N = alpha. An undamped steady step is alpha = 0, so N is exactly
+    // singular there, and at a large pseudo-time step it is nearly so. The
+    // bordered system is still well posed: mu reaches its own row through the
+    // transport, by way of v and w, so the Schur complement N + w^T A^-1 v is
+    // not singular. An elimination that inverts N returns NaN at alpha = 0,
+    // and loses every digit at alpha = 1e-12 -- the case of a mirror plasma's
+    // integral controllers, whose steady solve could never pass its test.
+    DifferentialScalarSystem problem;
+
+    for (double cj : {0.0, 1e-12})
     {
         ScalarFixture f(problem, Grid(0.0, 1.0, 4), 2, 1.0, cj);
         const Residuals r = checkBorderedSolve(f);
