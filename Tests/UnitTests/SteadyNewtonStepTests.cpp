@@ -21,6 +21,8 @@
 
 #include <cmath>
 #include <exception>
+#include <limits>
+#include <stdexcept>
 #include <filesystem>
 #include <format>
 #include <string>
@@ -131,6 +133,52 @@ public:
 
     long calls = 0;
     long derivCalls = 0;
+};
+
+// A source that drives u to 1 everywhere, S = S0 (1 - u|u|), between Dirichlet
+// ends at 1: the steady state is u = 1 exactly. Started from a profile that
+// dips to 0.01 mid-way, where the linearised source has almost no restoring
+// term, a damped step at dt ~ 1 overshoots far past 1. Above U_MAX the case is
+// outside its domain: it returns NaN or, with `throws`, throws -- the two ways a
+// case says so.
+class OvershootingSource : public TransportSystem
+{
+public:
+    static constexpr double S0 = 100.0, U_MAX = 2.0;
+
+    explicit OvershootingSource(bool throws) : TransportSystem({.variables = numberedFields(1)}), throws(throws) {}
+
+    Value LowerBoundary(Index, Time) const override { return 1.0; }
+    Value UpperBoundary(Index, Time) const override { return 1.0; }
+
+    Value SigmaFn(Index, const State &s, Position, Time) override { return guard(s, s.q(0)); }
+    Value Sources(Index, const State &s, Position, Time) override
+    {
+        return guard(s, S0 * (1.0 - s.u(0) * std::abs(s.u(0))));
+    }
+
+    void dSigmaFn_dq(Index, VectorRef v, const State &, Position, Time) override { v[0] = 1.0; }
+    void dSigmaFn_du(Index, VectorRef, const State &, Position, Time) override {}
+    void dSources_du(Index, VectorRef v, const State &s, Position, Time) override
+    {
+        v[0] = -2.0 * S0 * std::abs(s.u(0));
+    }
+    void dSources_dq(Index, VectorRef, const State &, Position, Time) override {}
+    void dSources_dsigma(Index, VectorRef, const State &, Position, Time) override {}
+
+    Value InitialValue(Index, Position x) const override { return 1.0 - 3.96 * x * (1.0 - x); }
+    Value InitialDerivative(Index, Position x) const override { return -3.96 * (1.0 - 2.0 * x); }
+
+private:
+    Value guard(const State &s, Value v) const
+    {
+        if (s.u(0) <= U_MAX)
+            return v;
+        if (throws)
+            throw std::runtime_error("u outside the case's domain");
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    bool throws;
 };
 
 struct Answer
@@ -415,6 +463,62 @@ BOOST_AUTO_TEST_CASE(a_sliced_newton_step_solve_resumes_exactly)
         BOOST_TEST(slicedU(i) == wholeU(i));
 
     removeOutput("newton_step_resume");
+}
+
+BOOST_AUTO_TEST_CASE(a_damped_step_onto_a_state_with_no_residual_is_undone)
+{
+    // A damped step is one Newton iteration, accepted before the residual at its
+    // result is evaluated. When that residual is NaN, or the case throws there,
+    // the next step cannot start: retrying from the same state at a smaller dt
+    // evaluates the same residual. So the loop goes back to where the bad step
+    // started, with a quarter of its dt. It used to retry in place -- the NaN
+    // case then rejected every step until MaxRejectedSteps -- and to end the
+    // solve on the throw.
+    for (bool throws : {false, true})
+    {
+        const std::string stem = "newton_step_undo";
+        Grid grid(0.0, 1.0, nCells);
+        OvershootingSource problem(throws);
+        SystemSolver sys(grid, k, &problem);
+        configure(sys, stem);
+        sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+        sys.setPseudoTransientInitialStep(1.0);
+        sys.setSteadyStateTolerance(1e-3);
+        sys.setSteadyTest(SystemSolver::SteadyTest::NewtonStep);
+
+        std::string message;
+        {
+            CapturedOutput quiet;
+            sys.initialize();
+            try
+            {
+                sys.solveSteadyState();
+            }
+            catch (std::exception const &e)
+            {
+                message = e.what();
+            }
+            sys.captureState();
+        }
+        BOOST_TEST(message.empty(), (throws ? "throwing: " : "NaN: ") << message);
+        BOOST_TEST((sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged),
+                   (throws ? "throwing" : "NaN") << " case did not converge");
+
+        int undone = 0;
+        for (auto const &rec : sys.lastSteadyStepStats())
+            if (!rec.accepted && !std::isfinite(rec.residualNorm))
+                ++undone;
+        BOOST_TEST(undone >= 1, "the fixture never overshot, so it tests nothing");
+
+        for (Index i = 0; i < 9; ++i)
+            BOOST_TEST(sys.yJac.u(0)(0.1 * (i + 1)) == 1.0, boost::test_tools::tolerance(1e-6));
+
+        {
+            CapturedOutput quiet;
+            sys.destroySundials();
+        }
+        removeOutput(stem);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -26,6 +26,7 @@ from typing import Any
 from ._manta import (
     AdjointProblem as AdjointProblem,
     Aux as Aux,
+    Bound as Bound,
     BoundaryCondition as BoundaryCondition,
     BoundaryKind as BoundaryKind,
     EvaluationCadence as EvaluationCadence,

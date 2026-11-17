@@ -193,6 +193,11 @@ const std::vector<Entry> &table()
          "Run to a steady state using the default tolerance. SteadyStateTolerance "
          "does the same and names the tolerance; either arms it, and giving both "
          "uses the tolerance."},
+        {"BoundCheck", {}, Type::String, Category::Solver, false, false, std::string{"Nodal"},
+         "Where a variable's bound (Field bound = Positive or NonNegative) is checked: Nodal, at "
+         "the values the physics reads (u* at the star nodes under Superconvergent), or "
+         "WholeCell, also over the whole of each cell's interpolant of them, by its exact "
+         "minimum. WholeCell costs a small eigenproblem per bounded variable per cell per check."},
         {"MaxRejectedSteps", {}, Type::UInt, Category::Solver, false, false, 100u,
          "Rejected continuation steps a steady solve may take before it stops. It returns "
          "the last accepted state, with outcome OutOfSteps -- a spent budget, not a "

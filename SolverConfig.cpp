@@ -299,6 +299,7 @@ SolverConfig loadSolverConfig(ConfigSource const &source, Reader reader)
     READ(tauUpdate, std::string);
     READ(tauFloor, double);
     READ(TauKappa, std::string);
+    READ(BoundCheck, std::string);
     READ(delta_t, double);
     READ(t_initial, double);
     READ(RelativeTolerance, double);
@@ -1178,6 +1179,14 @@ void applySolverConfig(SolverConfig const &config, SystemSolver &system)
         system.setPseudoTransientMaxStep(config.PseudoTransientMaxStep);
 
     system.setMaxRejectedSteps(config.MaxRejectedSteps);
+
+    if (config.BoundCheck == "Nodal")
+        system.setBoundCheck(SystemSolver::BoundCheck::Nodal);
+    else if (config.BoundCheck == "WholeCell")
+        system.setBoundCheck(SystemSolver::BoundCheck::WholeCell);
+    else
+        throw std::invalid_argument("BoundCheck must be \"Nodal\" or \"WholeCell\"; got \"" +
+                                    config.BoundCheck + "\".");
 
     // Unconditional, unlike the two above: those use 0 as "unset", which works
     // because a zero step is meaningless, but a zero SER *rate* is a legitimate

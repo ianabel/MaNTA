@@ -7,7 +7,7 @@ import enum
 import numpy
 import numpy.typing
 import typing
-__all__: list[str] = ['AdjointProblem', 'Aux', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EquilibriumModel', 'EquilibriumResponse', 'EquilibriumSpec', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'GeometryDerivatives', 'GeometrySlot', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'getPhysicsNodes', 'getPhysicsWeights', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerEquilibriumModel', 'registerPhysicsCase', 'run']
+__all__: list[str] = ['AdjointProblem', 'Aux', 'Bound', 'BoundaryCondition', 'BoundaryKind', 'Dirichlet', 'EquilibriumModel', 'EquilibriumResponse', 'EquilibriumSpec', 'EvaluationCadence', 'EvaluationEntry', 'EvaluationKind', 'EvaluationPlan', 'EvaluationSite', 'Field', 'GeometryDerivatives', 'GeometrySlot', 'Grid', 'Mixed', 'Neumann', 'Regrid', 'Runner', 'Scalar', 'State', 'StateField', 'SteadyOutcome', 'SystemSpec', 'TomlValue', 'TransportSystem', 'getNodes', 'getPhysicsNodes', 'getPhysicsWeights', 'load_physics_plugin', 'numbered_spec', 'physics_cases', 'registerEquilibriumModel', 'registerPhysicsCase', 'run']
 class AdjointProblem:
     spatialParameters: bool
     def __init__(self) -> None:
@@ -53,6 +53,46 @@ class Aux:
     name: str
     units: str
     def __init__(self, name: str, description: str = '', units: str = '') -> None:
+        ...
+class Bound:
+    """
+    Members:
+    
+      Uncontrolled
+    
+      Positive
+    
+      NonNegative
+    """
+    NonNegative: typing.ClassVar[Bound]  # value = <Bound.NonNegative: 2>
+    Positive: typing.ClassVar[Bound]  # value = <Bound.Positive: 1>
+    Uncontrolled: typing.ClassVar[Bound]  # value = <Bound.Uncontrolled: 0>
+    __members__: typing.ClassVar[dict[str, Bound]]  # value = {'Uncontrolled': <Bound.Uncontrolled: 0>, 'Positive': <Bound.Positive: 1>, 'NonNegative': <Bound.NonNegative: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: typing.SupportsInt | typing.SupportsIndex) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
         ...
 class BoundaryCondition:
     __hash__: typing.ClassVar[None] = None
@@ -383,7 +423,23 @@ class Field:
     name: str
     units: str
     upper: BoundaryCondition
-    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryCondition = ..., upper: BoundaryCondition = ..., source_reads_time_derivatives: bool = False) -> None:
+    def __init__(self, name: str, description: str = '', units: str = '', lower: BoundaryCondition = ..., upper: BoundaryCondition = ..., source_reads_time_derivatives: bool = False, bound: Bound = ..., bound_epsilon: typing.SupportsFloat | typing.SupportsIndex | None = None) -> None:
+        ...
+    @property
+    def bound(self) -> Bound:
+        """
+        Positive keeps u > bound_epsilon; NonNegative keeps u >= -bound_epsilon and hands the physics max(u, 0). Uncontrolled, the default, never looks.
+        """
+    @bound.setter
+    def bound(self, arg0: Bound) -> None:
+        ...
+    @property
+    def bound_epsilon(self) -> float | None:
+        """
+        The bound's margin. None takes the default: 0 for Positive, the variable's absolute tolerance for NonNegative.
+        """
+    @bound_epsilon.setter
+    def bound_epsilon(self, arg0: typing.SupportsFloat | typing.SupportsIndex | None) -> None:
         ...
     @property
     def source_reads_time_derivatives(self) -> bool:

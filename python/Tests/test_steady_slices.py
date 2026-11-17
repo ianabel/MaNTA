@@ -451,3 +451,27 @@ def test_suppressing_the_estimate_saves_the_work_it_costs(tmp_path):
     # And it is the estimate, not just work: armed, the last slice leaves one.
     assert on_estimate, "estimate=True left no objective estimate"
     assert not off_estimate, "estimate=False left one anyway"
+
+
+def test_run_ss_starts_at_any_initial_time(tmp_path):
+    """run_ss() solves with tFinal = 0, and integrate() used to refuse a
+    t_initial past it ("Simulation ends before it begins") before noticing the
+    run was a steady one; the sliced path, which never reaches integrate(),
+    did not. A case whose inputs switch on in time is steady-solved from a
+    t_initial past the switch-on, since every time-dependent input is frozen
+    there, so this matters. SineSource does not read t, so the answer is the
+    t_initial = 0 one, bit for bit, by either route."""
+    answers = []
+    for name, t0 in (("zero", 0.0), ("late", 1.0)):
+        runner = MaNTA.Runner(SineSource())
+        runner.configure(slice_config(tmp_path / name, MaxContinuationSteps=200, t_initial=t0))
+        runner.run_ss()
+        answers.append(runner.getSolution(0, POINTS))
+    sliced = MaNTA.Runner(SineSource())
+    sliced.configure(slice_config(tmp_path / "sliced", t_initial=1.0))
+    with MaNTA.SteadySolve(sliced, estimate=False) as solve:
+        outcomes = [outcome for outcome, _ in solve]
+    assert outcomes[-1] == MaNTA.SteadyOutcome.Converged
+    answers.append(sliced.getSolution(0, POINTS))
+    assert np.array_equal(answers[1], answers[0]), np.max(np.abs(answers[1] - answers[0]))
+    assert np.array_equal(answers[2], answers[0]), np.max(np.abs(answers[2] - answers[0]))
