@@ -330,7 +330,7 @@ else()
   # and is the opposite: `find_package(Eigen3 3.4)` excludes half of what this
   # project supports.
   #
-  # MaNTA builds against Eigen 3.4.x and 5.0.x alike -- CLAUDE.md says so and the
+  # MaNTA builds against Eigen 3.4.x and 5.0.x alike -- docs/dev/build.md says so and the
   # CI matrix has legs for both -- but Eigen ships an Eigen3ConfigVersion.cmake
   # generated with SameMajorVersion compatibility. To that file a requested "3.4"
   # is not a *minimum*: it is a major version to match, so 5.0.1 is rejected

@@ -45,7 +45,7 @@ Raised 2026-11-06; the last attempt stalled on a choice rather than a defect.
 
 
 g++-14.2.0 miscompiled this tree at -O3 -flto -march=native. Root cause not found.
-Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
+Found 2026-08-23. docs/dev/build.md has the summary; this is the reproduction.
 
   To reproduce, on g++-14 (14.2.0 here) on an AVX2 host:
 
@@ -236,7 +236,7 @@ investigated. Each is a measurement that did not fit, with what was not tried.
     or of its configuration rather than of the coupling: a study of the theta
     pinch against a converged reference, by k, would say which.
   - A field grid much finer than the transport mesh stalls IDA, under
-    FieldSolve = exact as well as iterative. CLAUDE.md records why the knots
+    FieldSolve = exact as well as iterative. docs/dev/field-coupling.md records why the knots
     follow the mesh (p_h jumps at every face, and a finer spline resolves the
     jumps into spikes in dV'/dx); what is not known is whether the stall is that
     and nothing more.

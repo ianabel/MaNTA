@@ -30,7 +30,7 @@ jobs:
   #     numerics agree;
   #   - the pybind11 build is the only translation unit that pulls in Eigen's
   #     SparseCore, which is where -isystem-versus-I mistakes and clang-only
-  #     warnings surface (see CLAUDE.md). Building the _manta target is the step
+  #     warnings surface (see docs/dev/build.md). Building the _manta target is the step
   #     that finds those, so it has to run everywhere.
   #
   # fail-fast is off on purpose: when one compiler breaks, the others' results
@@ -69,7 +69,7 @@ jobs:
   # counting as the check they used to be. **A leg added, dropped or relabelled
   # here changes the set of contexts published, so the branch-protection required
   # list has to be updated in the same change** -- a required context that nothing
-  # publishes never arrives and blocks every non-admin silently. CLAUDE.md has the
+  # publishes never arrives and blocks every non-admin silently. docs/dev/ci.md has the
   # two-command diff for checking the rule and the run agree.
   build-and-test:
     name: Build + tests (${{ matrix.label || matrix.cxx }})
@@ -101,7 +101,7 @@ jobs:
           # an_aux_jacobian_matches_a_finite_difference_of_its_residual carries.
           # 14.3.0 passes every suite, padded member included. This leg, and the
           # almalinux:10 one below, are how a recurrence would be seen. See
-          # CLAUDE.md and TODO.
+          # docs/dev/build.md and TODO.
           - cxx: g++-14
             pkg: g++-14
           #
@@ -166,7 +166,7 @@ jobs:
           #
           # util/ParallelFor.hpp fixed it and utility_tests pins it, but those
           # cases only bite in a build that sets the option -- which is what this
-          # leg is for. See CLAUDE.md, "Parallelism".
+          # leg is for. See docs/dev/parallelism.md.
           - cxx: g++-15
             pkg: g++-15
             ppa: ubuntu-toolchain-r/test
@@ -428,7 +428,7 @@ jobs:
   # than a MaNTA one.
   #
   # _manta is built on both legs because it is the only translation unit that pulls
-  # in Eigen's SparseCore, which is where -isystem mistakes surface (see CLAUDE.md).
+  # in Eigen's SparseCore, which is where -isystem mistakes surface (see docs/dev/build.md).
   #
   # This is a separate job rather than another entry in build-and-test because it
   # shares almost none of that job's steps: dnf rather than apt, no sudo, no

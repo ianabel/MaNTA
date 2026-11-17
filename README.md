@@ -44,7 +44,7 @@ To compile and use MaNTA you will need a system with the following
    > system gcc 14.3.1 -- RHEL 10's compiler -- and the reproduction passes on
    > 14.3.0 with the member in place. Whether 14.3 fixed it or the test misses it
    > is not known, so the build still prints a warning when it sees g++ 14.
-   > `CLAUDE.md` and `TODO` have the reproduction.
+   > `docs/dev/build.md` and `TODO` have the reproduction.
 
    CI's ubuntu legs are g++ 14, 15 and 16 and clang++ 19, 20 and 21, then g++ 15
    and clang++ 19 again against Eigen 5.0.1; its container legs are Fedora and
@@ -104,7 +104,7 @@ and this one deliberately does not, because Eigen's own assertions are the
 diagnostic of record for a whole class of defect here. They cost about 2.5% at
 `Polynomial_degree = 3` and 7–9% at 8–10; `-DMANTA_ASSERTS=OFF` defines `NDEBUG`
 and buys that back, which is worth doing for a long high-degree run and not much
-else. `CLAUDE.md` has the numbers. The other presets are `debug`, `coverage` and
+else. `docs/dev/build.md` has the numbers. The other presets are `debug`, `coverage` and
 `portable` (Release without `-march=native`, for a binary that has to run on a
 different machine).
 

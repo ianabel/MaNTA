@@ -29,7 +29,7 @@
 // then the only step control -- which is what makes the SER schedule below mean
 // anything.
 //
-// This was very nearly justified on a different and false ground. CLAUDE.md
+// This was very nearly justified on a different and false ground. docs/dev/solver.md
 // describes the Dirichlet constraints as "imposed inside the linear solve",
 // which would make ||F|| blind to a Dirichlet violation and rule out any merit
 // function built on it. The code says otherwise: the block in solveHDGJac that

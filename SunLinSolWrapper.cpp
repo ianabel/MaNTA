@@ -16,7 +16,7 @@
 //
 // That exception is new. The banded trace solve reports a singular K_global,
 // where the dense FullPivLU it replaced silently returned the particular solution
-// with the free components zeroed (see CLAUDE.md, "The trace solve"). Nothing in
+// with the free components zeroed (see docs/dev/parallelism.md, "The trace solve"). Nothing in
 // the tree is expected to reach it -- the Dirichlet rows that made K genuinely
 // singular are imposed explicitly now -- but "not expected" is not "cannot", and
 // the alternative is unwinding through SUNDIALS.

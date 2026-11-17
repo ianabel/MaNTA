@@ -411,7 +411,7 @@ public:
 //     sigma_hat = ( 1 + phi ) q ( 1 + FLUX_DRIFT t )
 //     S         = sin(3x)(1 + t) - phi^2 / 2
 //
-// It is the case the g++-14 miscompilation was found on (CLAUDE.md, TODO): a
+// It is the case the g++-14 miscompilation was found on (docs/dev/build.md, TODO): a
 // dense finite difference of residual() inlined into a test translation unit
 // lost the column of the first interior trace DOF, at every k and with the flag
 // on and off, once SystemSolver's member layout changed. Kept as a J dy = g
