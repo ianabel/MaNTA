@@ -564,9 +564,15 @@ no merit evaluation exists to be duplicated. A damped continuation step is a
 single Newton iteration, accepted as it stands (Kelley and Keyes), halved when
 its correction reverses the last one -- the signature of a kink in the flux, which
 no `dt` damps because sigma and q are algebraic -- and only the undamped solve
-that ends the run is iterated and tested. Everything it carries between steps
-(`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`, `nsLambda`,
-`nsCalmSteps`, `nsHaveDprev` and the vector `nlsDprev`) is a member, so a
+that ends the run is iterated and tested. Because a damped step is accepted
+before its result's residual is evaluated, the loop keeps where the last one
+started (`nsLastGood`) and undoes it when the next step finds no finite
+residual there or the case throws there; retrying in place evaluates the same
+residual at any `dt`, and is what it used to do
+(`a_damped_step_onto_a_state_with_no_residual_is_undone`). Everything it carries
+between steps (`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`,
+`nsLambda`, `nsCalmSteps`, `nsHaveDprev`, the vector `nlsDprev` and the undo
+state `nsLastGood`, `nsHaveLastGood`, `nsLastGoodDt`, `nsLastGoodFprev`) is a member, so a
 sliced solve resumes bit for bit, and `a_sliced_newton_step_solve_resumes_exactly`
 pins that at zero tolerance. `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`
 is the design, including where the implementation departs from IDA and why;

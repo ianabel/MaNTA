@@ -2069,6 +2069,20 @@ class SystemSolver
         double nsNextUndampedDt = 0.0;
         bool nsUndampedNext = false;
 
+        // A damped step is accepted before the residual at its result is ever
+        // evaluated -- that happens at the start of the next step -- so a step
+        // can land on a state whose residual is not finite, or at which the case
+        // throws. Retrying from that state cannot help: its residual does not
+        // depend on dt. So the loop keeps the state the last accepted damped
+        // step started from, the dt it took and the SER memory before it, and
+        // goes back there with a quarter of that dt. Carried across slices.
+        N_Vector nsLastGood = nullptr;
+        bool nsHaveLastGood = false;
+        double nsLastGoodDt = std::numeric_limits<double>::quiet_NaN();
+        double nsLastGoodFprev = std::numeric_limits<double>::quiet_NaN();
+        // Set by nlsSys when the case throws at a step's starting state.
+        bool nlsStartThrew = false;
+
         // KINSOL's own settings. Every default here is what the code hardcoded
         // before they were configurable, so an unconfigured run is unchanged.
         long newtonMaxIters = 20;    // KINSOL's default is 200; see the setter

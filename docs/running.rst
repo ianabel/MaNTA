@@ -843,6 +843,12 @@ What changes with it:
   continuation goes on, trying again only after ``dt`` has grown sixteenfold.
 * **SER reads the steady residual at the start of each step**, which the step
   evaluates anyway, so the schedule costs nothing and lags by one step.
+* **A damped step is accepted before its result is evaluated**, so it can land
+  on a state with no finite residual, or one at which the case throws. Its
+  residual does not depend on ``dt``, so retrying from it cannot help: the step
+  that produced it is undone, and continuation resumes from where that step
+  started with a quarter of its ``dt``. A case throwing or returning NaN at the
+  initial state is still fatal, there being no step to undo.
 * **The converged iterate is never evaluated**, as IDA never evaluates its
   converged corrector: a ``Newton`` solve costs one flux sweep plus one flux and
   one derivative sweep per Newton iteration.

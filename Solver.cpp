@@ -1456,7 +1456,7 @@ void SystemSolver::destroySundials()
 
 	for (N_Vector *vec : {&Y, &dYdt, &constraints, &id, &res, &absTolVec,
 	                      &uPrev, &ptcDYdt, &kinScale, &resScale, &fScaleScratch,
-	                      &nlsYcor, &nlsU, &nlsEwt, &nlsTmp, &nlsDprev})
+	                      &nlsYcor, &nlsU, &nlsEwt, &nlsTmp, &nlsDprev, &nsLastGood})
 	{
 		if (*vec)
 		{
