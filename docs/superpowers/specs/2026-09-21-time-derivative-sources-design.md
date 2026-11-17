@@ -114,10 +114,8 @@ is that day, for the transport rows; the field rows follow in phase 3 below.
 ## Decisions taken
 
 **The time derivative reaches a case through `State`, not through a changed
-hook signature.** This is the decision the self-consistent-fields spec took for
-geometry (`2026-08-15-self-consistent-b-fields-design.md`, "Geometry reaches a
-case through `State`, not a changed signature") and the reasons carry over
-unchanged: every one of the forty-odd cases in `PhysicsCases/` keeps compiling,
+hook signature.** That is how geometry reaches a case (`State::geom`), and the
+reasons carry over unchanged: every one of the forty-odd cases in `PhysicsCases/` keeps compiling,
 every Python case keeps working, the batched path inherits it for free through
 `GlobalState::operator[]` and `setWithState`, and the autodiff layer inherits it
 by building one more `RealVector` from one more `State` field. A case that does

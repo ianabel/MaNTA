@@ -16,8 +16,7 @@
 
 /*
     A diamagnetic theta-pinch in a flux-conserving wall: the first field model
-    with physics in it. docs/superpowers/specs/2026-10-19-theta-pinch-field-model-design.md
-    is the design.
+    with physics in it. docs/field_coupling.rst describes it.
 
     The transport label is the normalised axial flux x = Phi / Phi_a. Radial force
     balance with no axial current is p + B^2 / 2 mu0 = C on every surface, and

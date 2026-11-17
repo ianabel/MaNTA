@@ -1,8 +1,8 @@
 // Tests for the HDG linear solve -- the largest untested piece of the solver.
 //
 // SystemSolver::solveHDGJac performs static condensation onto the lambda trace
-// unknowns and back-substitutes; solveJacEq wraps it in a Woodbury/bordered
-// elimination for the global scalars. Neither ever forms the Jacobian, so
+// unknowns and back-substitutes; solveJacEq wraps it in a bordered elimination
+// (a Schur complement on the scalars) for the global scalars. Neither ever forms the Jacobian, so
 // SUNDIALS never checks them and an error here shows up only as degraded Newton
 // convergence -- or as a wrong answer.
 //
@@ -735,7 +735,7 @@ BOOST_AUTO_TEST_CASE(solve_jac_eq_without_a_field_model_is_the_transport_solve)
     SUNContext_Free(&ctx);
 }
 
-// ------------------------------------------- the scalar (Woodbury) path --
+// -------------------------------------------- the scalar (bordered) path --
 //
 // Moved to ScalarJacobianTests.cpp, which settles it properly: the check here
 // used to assert only that the solve returned finite numbers, because with

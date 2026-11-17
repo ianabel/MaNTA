@@ -1,8 +1,7 @@
 // SteadyStateTest = NewtonStep: a steady solve that stops on IDA's corrector
 // test applied to the undamped Newton correction, rather than on ||F||.
 //
-// docs/superpowers/specs/2026-10-11-steady-state-termination-design.md is the
-// design. What these pin:
+// What these pin:
 //
 //  * the failure that motivated it -- a channel whose residual rows are small
 //    converges invisibly under the Residual test -- and that NewtonStep does not

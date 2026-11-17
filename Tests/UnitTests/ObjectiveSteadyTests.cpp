@@ -1,8 +1,7 @@
 // SteadyStateTest = Objective: a steady solve that stops when the objectives
 // are converged, rather than the whole solution.
 //
-// docs/superpowers/specs/2026-10-17-objective-error-control-design.md is the
-// design. The test is NewtonStep's continuation with another convergence test in
+// The test is NewtonStep's continuation with another convergence test in
 // its undamped solve: |z^T F| within the algebraic share of each objective's
 // tolerance, z the adjoint state at the iterate -- read, without solving for z,
 // as (dG/dy) . delta for the Newton correction delta. What these pin:

@@ -263,7 +263,7 @@ struct SampleRule
 constexpr double tFinal = 0.25;
 
 /// Which field-coupling tier carries the field
-/// (docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md).
+/// (docs/field_coupling.rst).
 enum class Tier
 {
     Coupled,    // tier 2: psi in the DAE, the coupled Jacobian (FieldCoupling = "coupled")

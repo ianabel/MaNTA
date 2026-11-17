@@ -1161,7 +1161,7 @@ more favourable:
 `L_global` and `HGlobalMat` are `nVars*(nCells+1)` square (`SystemSolver.cpp:280-284`),
 each cell contributes through fixed `2x2` blocks (`:1092`, `:536`), and a cell
 touches exactly two faces whatever its degree. So `solveHDGJac`'s static
-condensation, `solveJacEq`'s Woodbury pass for the global scalars, and the size
+condensation, `solveJacEq`'s bordered elimination for the global scalars, and the size
 and sparsity of the system actually solved are **untouched** by per-cell degrees.
 That is the property HDG is chosen for, and it holds in this code rather than
 merely in the literature.

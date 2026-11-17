@@ -14,8 +14,8 @@
 #include <vector>
 
 /*
-    A magnetic equilibrium as a black box: tier 0 of
-    docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md.
+    A magnetic equilibrium as a black box: tier 0 of the field coupling
+    (docs/field_coupling.rst).
 
     What the transport needs from the field is one map, from the transport state
     at the physics nodes to the geometry at them, g = G(p). A tier-0 model

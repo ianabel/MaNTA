@@ -138,8 +138,14 @@ supplies it in an unusual way:
 * **The Jacobian is never assembled.** Instead ``updateMatricesForJacSolve``
   builds and factorises the small per-cell blocks, ``solveHDGJac`` statically
   condenses the cell-local unknowns onto :math:`\lambda` and back-substitutes,
-  and ``solveJacEq`` wraps that in a Woodbury/bordered elimination to account for
-  the global scalars :math:`\mu`.
+  and ``solveJacEq`` wraps that in a bordered elimination to account for the
+  global scalars :math:`\mu`. That elimination is a Schur complement on the
+  scalars, :math:`(N + W^T A^{-1} V)\,\delta\mu = s - W^T A^{-1} r`, followed
+  by :math:`\delta x = A^{-1}(r + V\,\delta\mu)`. It needs
+  :math:`n_\mu + 1` transport solves, and never inverts :math:`N` on its own.
+  :math:`N` is singular at an undamped steady step whenever a differential
+  scalar's row reads that scalar only through its time derivative, as an
+  integral controller's does.
 * With a field model attached, ``solveJacEq`` wraps *that* in a second block
   elimination onto :math:`\psi` — exactly, or by an accelerated block
   Gauss–Seidel sweep that escalates to the exact form rather than returning an

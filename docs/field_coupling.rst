@@ -270,9 +270,7 @@ The theta pinch
 
 ``ThetaPinchEquilibrium`` is the field model registered in this tree, and
 ``ThetaPinchDiffusion`` the transport case written against it. Together they
-are a diamagnetic theta pinch in a flux-conserving wall:
-``docs/superpowers/specs/2026-10-19-theta-pinch-field-model-design.md`` is the
-design.
+are a diamagnetic theta pinch in a flux-conserving wall.
 
 * The transport label is the normalised axial flux :math:`x = \Phi/\Phi_a`, so
   surfaces move in :math:`r` while their labels do not, and the equilibrium
