@@ -42,6 +42,12 @@ SystemSolver::SystemSolver(Grid const &Grid, unsigned int polyNum, TransportSyst
 
     logmsg<LOG_LEVEL::INFO>("Total HDG degrees of freedom {}", (localDOF)*nCells + (nCells + 1) * nVars + nScalars );
     allocateScalarWorkVectors();
+
+    // The clamp to max(u, 0) is a property of the case, applied wherever its
+    // physics is evaluated -- including by a solver that never runs.
+    for (Index v = 0; v < nVars; ++v)
+        if (transpSystem->spec().variables[v].bound == VariableBound::NonNegative)
+            clampedVars.push_back(v);
     initialised = false; // Need to know tau to call this
 }
 
@@ -2226,13 +2232,18 @@ GlobalState SystemSolver::fieldStatesAt(DGSoln const &Y, DGSoln const &Ydot) con
     return states;
 }
 
-SystemSolver::PhysicsNodes SystemSolver::physicsNodesAt(DGSoln const &Y, Time tEval)
+SystemSolver::PhysicsNodes SystemSolver::physicsNodesAt(DGSoln const &Y, Time tEval, bool clamp)
 {
     if (superconvergent)
         postprocessor->computeUStar(Y);
 
     PhysicsNodes nodes{superconvergent ? postprocessor->starPoints() : Y.getPoints(),
-                       superconvergent ? postprocessor->evalOnStarNodes(Y) : Y.evalOnNodes()};
+                       superconvergent ? postprocessor->evalOnStarNodes(Y) : Y.evalOnNodes(), {}};
+
+    // A NonNegative variable reaches the physics as max(u, 0). A no-op for a
+    // case that declares none.
+    if (clamp)
+        clampForPhysics(nodes);
 
     // The metric the physics is about to be evaluated on, from the field model
     // at this state's psi. A no-op with no model attached, which is what keeps
@@ -2328,6 +2339,8 @@ SystemSolver::evaluatePhysicsDerivatives(DGSoln const &Y, DGSoln const &Ydot, Ti
 
     problem->ComputePhysicsDerivatives({dSigma_vals, dSource_vals, dAux_vals}, nodes.states,
                                        nodes.points, tEval);
+    // The clamp's derivative, which is zero wherever it acted.
+    zeroClampedDerivatives(nodes, dSigma_vals, dSource_vals, dAux_vals);
 
     // A separate pass, and only when asked. See
     // TransportSystem::ComputeSourceTimeDerivatives for why it is not a fourth
@@ -3762,6 +3775,11 @@ int static_residual(sunrealtype tres, N_Vector Y, N_Vector dYdt, N_Vector resval
     auto system = static_cast<SystemSolver *>(user_data);
     try
     {
+        // A state breaching a bound is not evaluated: the physics may not be
+        // defined there, and IDA answers a recoverable failure by cutting the
+        // step. A no-op for a case that bounds nothing.
+        if (system->refuseBreach(Y))
+            return 1;
         return system->residual(tres, Y, dYdt, resval);
     }
     catch (std::exception &e)
@@ -4027,6 +4045,7 @@ SystemSolver::adjointDerivativesAt(DGSoln const &Y, DGSoln const &Ydot, Time tEv
 
     problem->ComputePhysicsDerivatives({rec.dSigma, rec.dSource, rec.dAux}, nodes.states,
                                        nodes.points, tEval);
+    zeroClampedDerivatives(nodes, rec.dSigma, rec.dSource, rec.dAux);
 
     if (fieldModel)
     {
@@ -4063,7 +4082,7 @@ double SystemSolver::objectiveValue(AdjointProblem &objective, Index gIndex, DGS
 {
     if (fieldModel || reducedCoupling())
     {
-        PhysicsNodes nodes = physicsNodesAt(state, tEval);
+        PhysicsNodes nodes = physicsNodesAt(state, tEval, false);
         return objective.GFnAtNodes(gIndex, nodes.states, nodes.points, objectiveWeights(state),
                                     physicsNodesPerCell());
     }
@@ -4086,7 +4105,7 @@ std::vector<Vector> SystemSolver::assembleObjectiveGradient(AdjointProblem &obje
     const Index derivK = superconvergent ? k + 1 : k;
 
     GlobalState dGdvars(grid.getNCells(), derivK, nVars, nScalars, nAux, nGeom);
-    PhysicsNodes nodes = physicsNodesAt(state, tEval);
+    PhysicsNodes nodes = physicsNodesAt(state, tEval, false);
     objective.dg(gIndex, dGdvars, nodes.states, nodes.points);
     if (dGdmu != nullptr)
     {

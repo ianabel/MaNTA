@@ -247,22 +247,42 @@ PYBIND11_MODULE(_manta, m) {
         "what LowerBoundary/UpperBoundary returns. sigma is the stored flux, "
         "which is -sigma_hat. At least one of b and d must be nonzero.");
 
+  // A bound on a variable's value: SystemSpec.hpp's VariableBound. Bound
+  // before Field, so the generated stub names it in Field's signature.
+  py::enum_<VariableBound>(m, "Bound")
+      .value("Uncontrolled", VariableBound::Uncontrolled)
+      .value("Positive", VariableBound::Positive)
+      .value("NonNegative", VariableBound::NonNegative);
+
   py::class_<FieldSpec>(m, "Field")
       .def(py::init([](std::string name, std::string description,
                        std::string units, BoundaryCondition lower,
                        BoundaryCondition upper,
-                       bool source_reads_time_derivatives) {
+                       bool source_reads_time_derivatives, VariableBound bound,
+                       std::optional<double> bound_epsilon) {
              return FieldSpec{std::move(name),
                               std::move(description),
                               std::move(units),
                               lower,
                               upper,
-                              source_reads_time_derivatives};
+                              source_reads_time_derivatives,
+                              bound,
+                              bound_epsilon};
            }),
            py::arg("name"), py::arg("description") = "", py::arg("units") = "",
            py::arg("lower") = BoundaryCondition(BoundaryKind::Dirichlet),
            py::arg("upper") = BoundaryCondition(BoundaryKind::Dirichlet),
-           py::arg("source_reads_time_derivatives") = false)
+           py::arg("source_reads_time_derivatives") = false,
+           py::arg("bound") = VariableBound::Uncontrolled,
+           py::arg("bound_epsilon") = std::optional<double>{})
+      .def_readwrite("bound", &FieldSpec::bound,
+                     "Positive keeps u > bound_epsilon; NonNegative keeps u >= "
+                     "-bound_epsilon and hands the physics max(u, 0). "
+                     "Uncontrolled, the default, never looks.")
+      .def_readwrite("bound_epsilon", &FieldSpec::boundEpsilon,
+                     "The bound's margin. None takes the default: 0 for "
+                     "Positive, the variable's absolute tolerance for "
+                     "NonNegative.")
       .def_readwrite("name", &FieldSpec::name)
       .def_readwrite("description", &FieldSpec::description)
       .def_readwrite("units", &FieldSpec::units)

@@ -149,6 +149,11 @@ void SystemSolver::initialize()
 	// count reported as a per-run one is a lie a second run would tell silently.
 	fieldSweepSolves = 0;
 	fieldSweepIterations = 0;
+
+	// The bounds on the case's variables, against this run's tolerances, and
+	// the count of states refused for them. Per run, beside the sweep counts,
+	// for the same reason.
+	resolveBounds();
 	fieldSweepFallbacks = 0;
 	fieldAdjointSweeps = 0;
 	fieldAdjointFellBack = false;
@@ -225,6 +230,21 @@ void SystemSolver::initialize()
 
 	// Initialise Y and dYdt
 	setInitialConditions(Y, dYdt);
+
+	// A state that breaches a bound is never evaluated and never accepted, so
+	// a run cannot start from one: every solve would refuse its first residual
+	// and report something about step sizes. The initial condition is the
+	// case's, or the restart file's, and is reported as such.
+	if (boundsActive())
+	{
+		DGSoln Y0(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+		if (auto breach = boundViolation(Y0))
+			throw std::invalid_argument(std::format(
+				"The {} breaches a bound the case declares: {}. A run cannot start from a state "
+				"its physics may not be evaluated at; fix the {}, or the bound.",
+				problem->isRestarting() ? "restart state" : "initial condition", describe(*breach),
+				problem->isRestarting() ? "restart file" : "case's InitialValue"));
+	}
 
 	// Seed yJac/dydtJac with the initial condition. `y` and `dydt` are
 	// non-owning views over memory SUNDIALS owns, so yJac is the only copy of the
@@ -343,7 +363,15 @@ void SystemSolver::initialize()
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
 	// sunrealtype tRes;
 
-	// No constraints are imposed as negative coefficients may allow for a better fit across a cell
+	// IDA's own constraints are never set. A variable a case needs kept above a
+	// bound declares it (FieldSpec::bound), and that is enforced by refusing
+	// the state -- in the residual callback and on the converged corrector,
+	// attachBoundedNonlinearSolver below -- rather than through
+	// IDASetConstraints, which bounds only at zero, sees the coefficients but
+	// not the u* the superconvergent scheme evaluates, and projects a small
+	// violation onto the bound instead of refusing it. An undeclared variable is
+	// free to go negative between or at the nodes, which may be the better fit
+	// across a cell. The vector below is allocated but never handed to IDA.
 	constraints = N_VClone(Y);
 	if (ErrorChecker::check_retval((void *)constraints, "N_VClone", 0))
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
@@ -425,6 +453,12 @@ void SystemSolver::initialize()
 	retval = IDAInit(IDA_mem, static_residual, t0, Y, dYdt);
 	if (ErrorChecker::check_retval(&retval, "IDAInit", 1))
 		throw std::runtime_error("Sundials initialization Error, run in debug to find");
+
+	// With a bounded variable, IDA's Newton is wrapped so that a corrector whose
+	// result breaches a bound is a convergence failure, and IDA cuts the step
+	// (Bounds.cpp). Before IDASetMaxNonlinIters below, which configures
+	// whichever nonlinear solver is attached. Nothing at all otherwise.
+	attachBoundedNonlinearSolver();
 
 	// Set tolerances
 	absTolVec = N_VClone(Y);
@@ -675,9 +709,15 @@ void SystemSolver::initialize()
 		// runs take the same steps and residuals with it on or off.
 		if (equilibriumModel && !reducedCoupling())
 			IDASetLineSearchOffIC(IDA_mem, SUNTRUE);
+		const long boundRejectionsBeforeIC = nBoundRejections;
 		retval = IDACalcIC(IDA_mem, IDA_YA_YDP_INIT, t0 + (dt0 > 0.0 ? dt0 : dt));
 		if (ErrorChecker::check_retval(&retval, "IDACalcIC", 1))
 		{
+			if (nBoundRejections > boundRejectionsBeforeIC && lastBoundBreach)
+				throw std::runtime_error(std::format(
+					"IDACalcIC could not complete: the consistent initial condition it was looking "
+					"for breaches a bound ({} of its states refused; the last: {}).",
+					nBoundRejections - boundRejectionsBeforeIC, describe(*lastBoundBreach)));
 			throw std::runtime_error("IDACalcIC could not complete");
 		}
 	}
@@ -719,6 +759,18 @@ void SystemSolver::initialize()
 		retval = IDAGetConsistentIC(IDA_mem, Y, dYdt);
 		if (ErrorChecker::check_retval(&retval, "IDAGetConsistentIC", 1))
 			throw std::runtime_error("Could not retrieve the corrected initial condition");
+
+		// IDACalcIC holds u fixed, but under the superconvergent scheme the
+		// physics reads u*, which q moves; and IDA never evaluates the state its
+		// last Newton correction lands on.
+		if (boundsActive())
+		{
+			DGSoln Y0(nVars, grid, k, N_VGetArrayPointer(Y), nScalars, nAux, nField);
+			if (auto breach = boundViolation(Y0))
+				throw std::runtime_error(std::format(
+					"The consistent initial condition IDACalcIC found breaches a bound: {}.",
+					describe(*breach)));
+		}
 
 		// The zero algebraic y' above is wrong wherever the algebraic components
 		// move, and IDA's predictor then carries an error of h |y'| in sigma, q,
@@ -1137,6 +1189,7 @@ void SystemSolver::integrate(double tFinal)
 		tout += dt;
 		if (tout > tFinal && !TerminateOnSteadyState)
 			tout = tFinal; // Never ask for results beyond tFinal
+		const long boundRejectionsBeforeSolve = nBoundRejections;
 		retval = IDASolve(IDA_mem, tout, &tret, Y, dYdt, IDA_NORMAL);
 
 		// Put the boundary datum back into the Dirichlet trace entries before
@@ -1182,6 +1235,14 @@ void SystemSolver::integrate(double tFinal)
 			if (writeOutput)
 				nc_output.Close();
 
+			// A step IDA could not take because every attempt breached a bound
+			// is the one failure here the solver can name.
+			if (nBoundRejections > boundRejectionsBeforeSolve && lastBoundBreach)
+				throw std::runtime_error(std::format(
+					"IDASolve could not complete at t = {:g}: {} states breached a bound on the way, the "
+					"last {}. The solution may be crossing the bound, which no step size can cure.",
+					tret, nBoundRejections - boundRejectionsBeforeSolve,
+					describe(*lastBoundBreach)));
 			throw std::runtime_error("IDASolve could not complete");
 		}
 
@@ -1443,6 +1504,13 @@ void SystemSolver::destroySundials()
 
 	if (IDA_mem)
 		IDAFree(&IDA_mem); // IDAFree nulls its argument itself
+
+	// Ours, not IDA's: an attached nonlinear solver is not freed by IDAFree.
+	if (idaBoundedNLS)
+	{
+		SUNNonlinSolFree(idaBoundedNLS);
+		idaBoundedNLS = nullptr;
+	}
 
 	// Free the raw data buffers allocated by SUNDIALS
 

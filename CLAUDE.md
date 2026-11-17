@@ -569,7 +569,12 @@ before its result's residual is evaluated, the loop keeps where the last one
 started (`nsLastGood`) and undoes it when the next step finds no finite
 residual there or the case throws there; retrying in place evaluates the same
 residual at any `dt`, and is what it used to do
-(`a_damped_step_onto_a_state_with_no_residual_is_undone`). Everything it carries
+(`a_damped_step_onto_a_state_with_no_residual_is_undone`). A step whose result
+breaches a variable's bound is not taken in the first place: `steadyNewtonSolve`
+checks the result before acceptance, puts `Y` back and returns it unconverged
+(`nlsBoundRejected`, per step, not carried), so the undo is never needed for a
+bound -- relying on it costs 14 continuation steps on the saturating-sink
+fixture where checking first costs 11 (see "Bounds" below). Everything it carries
 between steps (`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`,
 `nsLambda`, `nsCalmSteps`, `nsHaveDprev`, the vector `nlsDprev` and the undo
 state `nsLastGood`, `nsHaveLastGood`, `nsLastGoodDt`, `nsLastGoodFprev`) is a member, so a
@@ -732,6 +737,59 @@ Two return codes worth being able to read without looking them up:
   A scalar whose `d/dt` some row wants is not thereby differential. The trap is that the
   residual can be tiny — 4.3e-6 there, just the difference between two quadrature
   rules for the same integral — and still fatal, because irreducible beats small.
+
+### Bounds on a case's variables (`FieldSpec::bound`)
+
+A variable may be declared `VariableBound::Positive` (`u > eps`, eps default 0)
+or `NonNegative` (`u >= -eps`, eps default the variable's `AbsoluteTolerance`,
+and the physics handed `max(u, 0)`); `manta.Field(bound=manta.Bound.Positive,
+bound_epsilon=...)` from Python. `Bounds.cpp` is the whole mechanism and
+`docs/running.rst` "Bounded variables" what each solve does. What to know before
+touching it:
+
+* **The invariant is "never evaluated, never accepted", and it takes two
+  checks per solver.** A residual callback refuses a breaching state as a
+  recoverable failure before the physics is called -- `static_residual` (IDA,
+  `IDACalcIC`) and `steadyResidual` (KINSOL, the NewtonStep loop) -- and every
+  acceptance point checks the result: `steadyNewtonSolve` after forming `Y`;
+  the KINSOL loop, which also turns `KIN_REPTD_SYSFUNC_ERR` into a rejected step
+  *only* when the bound count moved during that call (otherwise it stays the
+  fatal error it always was); and IDA through `idaBoundedNLS`, SUNDIALS' Newton
+  wrapped so a converged corrector whose `y0 + ycor` breaches is
+  `SUN_NLS_CONV_RECVR`. IDA never evaluates its converged corrector, so the
+  residual check alone cannot cover it -- though in every time-march fixture in
+  `VariableBoundTests.cpp` the residual callback refuses the breaching iterate
+  first and the wrapper never fires in a run, which is why it is tested directly
+  (`the_corrector_is_checked_before_ida_accepts_it`).
+* **`IDASetConstraints` is deliberately not used**, and `Solver.cpp`'s
+  `constraints` vector is allocated and never handed to IDA. IDA's constraints
+  bound only at zero, check the coefficients rather than the `u*` the
+  superconvergent scheme evaluates, and *project* a small violation (one within
+  the Newton tolerance) onto zero, or to `0.2 (rtol |y| + atol)` above it for a
+  strict bound, rather than refuse it: the run carries on from a state nobody
+  computed, which is what refusing exists to avoid.
+* **Checked where the physics reads u**: the k+1 basis-node coefficients, or
+  `u* = B11 q + B12 u` at the star nodes, formed in `boundViolation` itself
+  rather than through `postprocessor->computeUStar`, whose cache the residual and
+  the output own. `BoundCheck = "WholeCell"` adds the exact minimum of each
+  cell's interpolant of those values (`util/PolynomialMinimum.hpp`: endpoints
+  plus the real parts of the derivative's colleague-matrix eigenvalues, clipped
+  into the cell, which can only add candidates, never miss one).
+* **The clamp lives in `physicsNodesAt`, with its derivative beside every
+  `ComputePhysicsDerivatives` on those nodes.** `zeroClampedDerivatives` runs in
+  `evaluatePhysicsDerivatives` and `adjointDerivativesAt`; `dSources_dScalars_Mat`
+  builds its `State` from `evalOnNode` and clamps it itself. A new derivative
+  site on physics nodes needs the same call, or its Jacobian is that of an
+  unclamped residual -- `the_clamp_jacobian_matches_a_finite_difference_of_its_residual`
+  goes from 1.7e-10 to 3e-2 without it. The objective's two evaluations pass
+  `clamp = false`: an objective reads the state as it is, as `GFn` does.
+  `clampedVars` is filled in the *constructor*, so the discretisation
+  estimate's `enrichedSolver`, which never initialises, clamps too.
+  `NonNegative` is refused with `tauScaling = "Diffusive"` (`resolveBounds`): the
+  face kappa and the nodal `d tau / dy` differencing do not see the clamp.
+* **Inert when unused, checked by `cmp`.** Every entry point returns on an
+  empty `boundedVars` / `clampedVars`, and no wrapper is attached. Re-run the
+  regression-config byte comparison after touching any of it.
 
 ### Parallelism (`MANTA_OPENMP`, off by default)
 

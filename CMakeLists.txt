@@ -61,6 +61,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(MANTA_CORE_SOURCES
   AdjointVectors.cpp
+  Bounds.cpp
   Config.cpp
   ConfigSchema.cpp
   DGStatic.cpp

@@ -246,29 +246,21 @@ investigated. Each is a measurement that did not fit, with what was not tried.
     AdaptationTarget = "Objective" can run on a coupled case.
 
 
-Positivity constraints for a case's variables.
+Positivity beyond refusing a breach.
 Raised 2026-11-16, from a steady solve of a rotating-mirror case (mirror-physics, GF1).
 
-  Nothing in MaNTA keeps a variable a case requires to be positive -- a
-  density, an energy -- positive. Solver.cpp imposes no IDA constraints, on
-  purpose ("negative coefficients may allow for a better fit across a cell"),
-  and the steady solvers have none either. In that case a damped NewtonStep
-  continuation step drove an edge layer to a negative ion energy, T_i = -1 keV,
-  at which the residual was still finite. The undo added in f287110 fires only
-  on a non-finite residual, so the step was kept, and the solve then cycled
-  between a residual of ~4e7 and NaN at dt ~ 1e-13.
-
-  The cell-fit argument is about the polynomial's coefficients between the
-  nodes; a constraint on the nodal values the physics is evaluated at, which is
-  what a case divides by, would not interfere with it. Options, cheapest first:
-  - a per-field flag in SystemSpec (Field(..., positive=True)), honoured by the
-    NewtonStep loop as it now honours a non-finite residual: a damped step that
-    takes a flagged field non-positive at any physics node is undone, with dt
-    cut;
-  - the same flag passed to KINSOL (KINSetConstraints) on the Residual path, and
-    to IDA (IDASetConstraints) when time-marching;
-  - a positivity-preserving limiter or variable transform (log n, log T), which
-    changes the discretisation and is a much larger job.
-  To decide: whether the flag should cover u only or also sigma/q (it should
-  not: those are signed), and whether IDA's constraint test, which rejects a
-  step rather than limiting it, is wanted in transients or only steady solves.
+  A variable can be declared Positive or NonNegative (FieldSpec::bound,
+  manta.Field(bound=...)); every solve then refuses a residual at a breaching
+  state and a step whose result breaches (Bounds.cpp, docs/running.rst
+  "Bounded variables"). What that cannot do is change the answer: a solution
+  whose discrete steady state itself undershoots -- a sharp layer the mesh does
+  not resolve -- is refused step after step and reported, not reached. Two
+  things are left:
+  - a positivity-preserving limiter, or a variable transform (log n, log T),
+    which changes the discretisation and is a much larger job;
+  - the check of IDA's converged corrector (the wrapped Newton in Bounds.cpp)
+    has never fired in a run: in every time-march fixture in
+    VariableBoundTests.cpp the residual callback refuses the breaching iterate
+    first, so the wrapper is tested only directly. A run where it matters --
+    first-iteration convergence onto a breaching state -- would be worth
+    finding, to measure what it costs IDA.

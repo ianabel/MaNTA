@@ -90,6 +90,7 @@ set(MANTA_TEST_SOURCES
   TimeDerivativeSourceTests.cpp
   TransportSystemTests.cpp
   UtilityTests.cpp
+  VariableBoundTests.cpp
   main.cpp
 )
 

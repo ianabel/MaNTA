@@ -48,6 +48,7 @@ from . import _manta as _core
 from ._manta import (  # noqa: F401
     AdjointProblem,
     Aux,
+    Bound,
     BoundaryCondition,
     BoundaryKind,
     Dirichlet,
@@ -84,6 +85,7 @@ from ._manta import (  # noqa: F401
 __all__ = [
     "AdjointProblem",
     "Aux",
+    "Bound",
     "BoundaryCondition",
     "BoundaryKind",
     "Dirichlet",
