@@ -348,8 +348,7 @@ class SystemSolver
         // -- converges invisibly; and under a noisy flux ||F|| floors, so the
         // acceptance rule rejects every step near it. NewtonStep measures the
         // distance to the solution per component, in units of the run's own
-        // tolerances. docs/superpowers/specs/2026-10-11-steady-state-termination-
-        // design.md has the measurements behind both claims.
+        // tolerances.
         //
         //  * Objective: NewtonStep's continuation, with the undamped solve
         //    stopped on the objectives instead of on the whole solution: when
@@ -361,7 +360,6 @@ class SystemSolver
         //    product, and asks the case for nothing. It controls only the named
         //    objectives: anything else the run reports may be less converged
         //    than NewtonStep would leave it.
-        //    docs/superpowers/specs/2026-10-17-objective-error-control-design.md.
         enum class SteadyTest { Residual, NewtonStep, Objective };
         void setSteadyTest(SteadyTest test) { steadyTest = test; };
         SteadyTest getSteadyTest() const { return steadyTest; };

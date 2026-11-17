@@ -264,3 +264,22 @@ Raised 2026-11-16, from a steady solve of a rotating-mirror case (mirror-physics
     first, so the wrapper is tested only directly. A run where it matters --
     first-iteration convergence onto a breaching state -- would be worth
     finding, to measure what it costs IDA.
+
+
+Field-model loose ends.
+Raised 2026-08-16 in the self-consistent field work, and not rechecked since.
+
+  * FieldResidual receives no states_dot, so a field row cannot read the
+    transport's time derivatives, and FieldResidualPrime's dRdot cannot be
+    filled. Leaving it zero is correct today. The hazard is a model author
+    putting d(row)/d(psi') into dRdot instead of dRddpsidt, where it lands in
+    the A2 row at the wrong DOFs. FieldModel.hpp warns about this.
+  * Coverage. Every field-Jacobian fixture has nVars = 1, so the nVars factors
+    in the coupling blocks are untested. ManufacturedCoupledDiffusion's twin in
+    CoupledResidualTests.cpp has no dSigmaFn_dGeometry, so its A1 is zero; an
+    A1 check written against it would pass vacuously.
+  * Resources on throw paths. solveCoupledJacExact leaks nField + 2 N_Vectors
+    on a throw, solveCoupledJacIterative leaks its work vector if
+    solveTransportJac throws, and CoupledFixture's defaulted move constructor
+    relies on NRVO to avoid a double free. Decide together whether a leak on a
+    path that ends the run is acceptable, and make all three follow that.

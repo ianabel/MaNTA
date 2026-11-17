@@ -15,9 +15,9 @@
 namespace py = pybind11;
 
 /*
-    An EquilibriumModel written in Python: tiers 0 and 1 of
-    docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md, which a
-    black-box equilibrium code driven from Python can supply.
+    An EquilibriumModel written in Python: tiers 0 and 1 of the field coupling
+    (docs/field_coupling.rst), which a black-box equilibrium code driven from
+    Python can supply.
 
     A subclass defines
 

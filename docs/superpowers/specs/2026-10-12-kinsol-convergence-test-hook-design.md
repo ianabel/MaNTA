@@ -2,7 +2,7 @@
 
 Date: 2026-10-12
 Status: design; nothing written against SUNDIALS. Branch `gp-toy-model`.
-Companion to `2026-10-11-steady-state-termination-design.md`.
+The NewtonStep test it would serve is described in `docs/running.rst`.
 
 ## Why
 

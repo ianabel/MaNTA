@@ -579,8 +579,7 @@ between steps (`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`,
 `nsLambda`, `nsCalmSteps`, `nsHaveDprev`, the vector `nlsDprev` and the undo
 state `nsLastGood`, `nsHaveLastGood`, `nsLastGoodDt`, `nsLastGoodFprev`) is a member, so a
 sliced solve resumes bit for bit, and `a_sliced_newton_step_solve_resumes_exactly`
-pins that at zero tolerance. `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`
-is the design, including where the implementation departs from IDA and why;
+pins that at zero tolerance.
 `docs/superpowers/specs/2026-10-12-kinsol-convergence-test-hook-design.md` is the
 upstream KINSOL change that would let this path return to KINSOL.
 
@@ -1412,9 +1411,6 @@ It follows the physics-case pattern throughout — a validated spec, a
 process-global registry with the same two throws, its own toml table, selected
 by name from the config. `docs/field_coupling.rst` is the interface document and
 `--list-options` prints the five keys; what follows is what neither says.
-`docs/superpowers/notes/2026-08-16-self-consistent-b-fields-design-notes.md`
-records why the design has this shape, where it departed from its own spec, and
-every number quoted below.
 
 **The geometry slots are the only channel into the transport physics**, and they
 are not unknowns: they are a function of `(psi, x)` evaluated at the physics
@@ -1475,8 +1471,7 @@ moves the answer by 3.2e-4. And `psi_round_trips_through_a_restart` uses a
 state and the case would pass without ever reading `psi` off disk.
 
 **A field can also be a black box: `EquilibriumModel`, `FieldCoupling =
-"consistent"`** (tier 0 of `docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md`,
-which has the as-built record and the measurements). It adds no unknowns: the
+"consistent"`** (tier 0). It adds no unknowns: the
 solver holds the last `Equilibrium` as a cache keyed byte for byte on the
 solution vector's cell prefix and the time (`equilibriumAt`), solves a new one
 only when that changes, warm-starts it from the last, and fills `State::geom`
@@ -1502,9 +1497,9 @@ no-op defaults would build A1 out of zeros -- and runs as a black box;
 `Analytic` couples; `Differenced` couples transients and runs steady solves as
 a black box, because the solver then differences `ComputePhysics` once per
 geometry slot plus once at the state per Jacobian build, and a steady solve
-builds a Jacobian nearly every iteration. That last rule departs from the
-design's, which coupled a differenced `Newton` solve against its own numbers;
-`docs/field_coupling.rst` has the measured table. A field with dynamics or an
+builds a Jacobian nearly every iteration, so coupling a differenced steady
+solve costs more than the black box saves; `docs/field_coupling.rst` has the
+measured table. A field with dynamics or an
 adjoint forces the coupled mode, and is refused for a `None` case. Two things
 are load-bearing. **The `Analytic` path is byte identical to the code before
 `geometryResponse`**, which only hoisted `dGeometry/dpsi` out of the row loop:
@@ -1569,8 +1564,7 @@ registered one: the theta pinch's balance in closed form on the transport's own
 `p_h`. **Its `dV'/dx` reads `p_x` from a fit to cell means, and that is
 load-bearing**: read off `p_h` the manufactured study goes at k, and fitted to
 `p_h`'s nodal values it decays to order 1 at k = 1, because the fit
-differentiates the shape the interpolation error repeats in every cell. The
-spec's "The equilibrium registry" has the measurements;
+differentiates the shape the interpolation error repeats in every cell.
 `the_native_balance_converges_slot_by_slot` is the guard.
 
 **The theta pinch is the registered model** (`PhysicsCases/ThetaPinchEquilibrium`,
@@ -2059,8 +2053,6 @@ meshes). It turns the estimate on and makes `"Objective"` the default steady
 test, so both shares of `ObjectiveBudget` are enforced. The degree ceiling is
 held so the enriched batch, `N(k+3)` or more, fits `MaxPhysicsBatch`
 (`discretisationEstimateFits`); `ParallelFill` itself does not know about it.
-`docs/superpowers/specs/2026-10-17-objective-error-control-design.md` is the
-design, with an "as built" section per phase recording each measured departure.
 
 Anything indexed per auxiliary variable is sized `nAux`, not `nVars`. Those
 coincide in every fixture except `test_adjoint_aux.py`, so a confusion between

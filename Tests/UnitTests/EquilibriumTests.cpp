@@ -1,4 +1,4 @@
-// Tier 0 of the field coupling (docs/superpowers/specs/2026-10-23-field-coupling-tiers-design.md):
+// Tier 0 of the field coupling (docs/field_coupling.rst):
 // an equilibrium evaluated as a black box, held by the solver as a cache rather
 // than as unknowns. What these pin is the cache -- where it is refreshed, where
 // it is reused, where it is dropped -- and that a run built on it converges to
