@@ -841,6 +841,11 @@ What changes with it:
   correction is within one tolerance unit, or ``dt`` has reached its cap, an
   undamped solve is tried from it; if it fails the state is put back and
   continuation goes on, trying again only after ``dt`` has grown sixteenfold.
+  Where ``PseudoTransientMaxStep`` stops ``dt`` short of that, it tries again
+  once a damped step's correction is within one tolerance unit, and after each
+  further failure within a sixteenth of the last such bound: a wait on ``dt``
+  alone would never end, and the run would converge under its damped steps
+  without ever passing the test.
 * **SER reads the steady residual at the start of each step**, which the step
   evaluates anyway, so the schedule costs nothing and lags by one step.
 * **A damped step is accepted before its result is evaluated**, so it can land

@@ -204,7 +204,7 @@ checks the result before acceptance, puts `Y` back and returns it unconverged
 (`nlsBoundRejected`, per step, not carried), so the undo is never needed for a
 bound -- relying on it costs 14 continuation steps on the saturating-sink
 fixture where checking first costs 11 (see "Bounds" below). Everything it carries
-between steps (`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedNext`,
+between steps (`ptcStep`, `nsFprev`, `nsNextUndampedDt`, `nsUndampedCorrectionLimit`, `nsUndampedNext`,
 `nsLambda`, `nsCalmSteps`, `nsHaveDprev`, the vector `nlsDprev` and the undo
 state `nsLastGood`, `nsHaveLastGood`, `nsLastGoodDt`, `nsLastGoodFprev`) is a member, so a
 sliced solve resumes bit for bit, and `a_sliced_newton_step_solve_resumes_exactly`

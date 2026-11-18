@@ -2107,10 +2107,13 @@ class SystemSolver
         std::exception_ptr nlsException;
 
         // Carried across slices, like ptcStep: the steady residual at the start
-        // of the last accepted damped step, for SER, and the least dt at which
-        // the next undamped attempt may be made.
+        // of the last accepted damped step, for SER; the least dt at which the
+        // next undamped attempt may be made; and the largest damped correction
+        // at which it may, finite only once an attempt has failed where
+        // PseudoTransientMaxStep stops dt growing past it.
         double nsFprev = std::numeric_limits<double>::quiet_NaN();
         double nsNextUndampedDt = 0.0;
+        double nsUndampedCorrectionLimit = std::numeric_limits<double>::infinity();
         bool nsUndampedNext = false;
 
         // A damped step is accepted before the residual at its result is ever
