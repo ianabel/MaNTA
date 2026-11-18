@@ -862,14 +862,19 @@ arrays, and a case overrides the hook like any other:
 Regridding
 ~~~~~~~~~~
 
-Once a case has been handed a plan, a *different* plan is a regrid: a new mesh, or
-a new degree, which adds nodes and moves the old ones. The adaptation drivers —
+Once a case has been handed a plan, a plan that evaluates it at *different points*
+is a regrid: a new mesh, or a new degree, which adds nodes and moves the old ones.
+A plan that changes only how often the same points are visited is not -- a steady
+solve after a time march on the same mesh, which skips the initial :math:`du/dt`
+solve -- and every case takes it through ``prepareEvaluation``, whatever its
+policy. The adaptation drivers —
 ``MeshAdaptation``, ``DegreeAdaptation`` and the ladders — make them, and so does
 reconfiguring a Python ``Runner`` onto another grid with the same case object.
 Whether a case can follow one is its own declaration, ``SystemSpec::regrid``:
 
 ``RegridPolicy::Fixed`` (the default)
-   The case is evaluated by its first plan only. A changed plan is refused with
+   The case is evaluated at its first plan's points only. A plan at other points
+   is refused with
    ``std::invalid_argument`` (``RuntimeError`` from ``Runner.configure``), before
    the solve that would need it — and a driver that may change the plan refuses
    before its first solve.

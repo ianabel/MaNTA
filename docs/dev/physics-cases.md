@@ -104,11 +104,20 @@ site only some runs reach is listed always, with its count an upper bound --
 site conditional on `initialised`, the restart state or anything else a run
 moves turns every rerun into a spurious regrid.
 
-**A changed plan on an instance that already has one is a regrid, and the case
-decides whether it survives one.** `SystemSpec::regrid` is `RegridPolicy::Fixed`
+**A plan at other points on an instance that already has one is a regrid, and
+the case decides whether it survives one.** Other points, not merely a plan that
+is not `==`: `EvaluationPlan::evaluatesAtTheSamePointsAs` compares the grid, the
+degree, the Superconvergent flag and the distinct point sets. The plan's `steady`
+flag is the reason. A Runner arms a steady solve only when `run_ss()` or
+`start_steady()` is called, unless `SteadyStateTolerance` is configured, so
+`configure()` checks a time march's plan against the steady one the last solve
+delivered; the two differ in counts and in the march-only sites, never in their
+points, and `==` would refuse a `Fixed` case object every reconfigure after a
+steady solve. `SystemSpec::regrid` is `RegridPolicy::Fixed`
 by default (a Python attribute cannot be called `None`) or `InPlace`, which takes
-the new plan through `prepareEvaluation`. A `Fixed` case is refused a changed plan
-(`deliverEvaluationPlan`, and `PyRunner::configure` for a reconfigured case object)
+the new plan through `prepareEvaluation`. A `Fixed` case is refused a plan at other
+points (`deliverEvaluationPlan`, and `PyRunner::configure` for a reconfigured case
+object; `PhysicsInstance::usable` for the drivers)
 -- unless an adaptation driver may rebuild it. That is the configuration key
 `RebuildPhysicsOnRegrid`, a fallback for cases written before plans:
 `PhysicsInstance` (`PhysicsInstance.hpp`) holds the caller's case and adjoint

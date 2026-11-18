@@ -134,6 +134,35 @@ def test_a_fixed_case_runs_and_reruns_on_an_unchanged_plan(tmp_path):
     assert case.unannounced == []
 
 
+@pytest.mark.parametrize("restart", [False, True], ids=["fresh", "restart"])
+def test_a_fixed_case_object_is_reconfigured_after_a_steady_solve(tmp_path, monkeypatch, restart):
+    """A steady solve settles that it is one only when run_ss() arms
+    termination, so the plan configure() checks is a time march's, and the one
+    the solve delivered a steady solve's. They visit the same points, which is
+    all a Fixed case has to keep: reconfiguring onto the same mesh and degree,
+    to restart from the steady state or not, goes ahead.
+    """
+    monkeypatch.chdir(tmp_path)  # the output goes to the working directory
+    case = AnnouncedVectorised()
+    assert case.regridPolicy() == MaNTA.Regrid.Fixed
+    runner = MaNTA.Runner(case)
+    cfg = config(tmp_path, WriteOutput=True)
+    assert "SteadyStateTolerance" not in cfg
+    runner.configure(cfg)
+    runner.run_ss()
+    assert len(case.plans) == 1 and case.plans[0].steady
+
+    again = config(tmp_path, WriteOutput=True, OutputFilename=str(tmp_path / "again"))
+    if restart:
+        again.update(restart=True, RestartFile=str(tmp_path / "trampoline.restart.nc"))
+    runner.configure(again)
+    runner.run_ss()
+    assert case.unannounced == []
+    # ...and another degree is still refused
+    with pytest.raises(RuntimeError, match="RegridPolicy is Fixed"):
+        runner.configure(config(tmp_path, PolynomialDegree=2))
+
+
 def test_reconfiguring_a_fixed_case_object_onto_a_new_plan_is_refused(tmp_path):
     case = AnnouncedVectorised()
     runner = MaNTA.Runner(case)
