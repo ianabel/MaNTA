@@ -93,12 +93,16 @@ public:
       Called only when the plan *changes*: on the first run an instance takes
       part in, and afterwards only when a run would evaluate it differently from
       the last plan it was handed. A rerun on the same mesh, degree and
-      configuration makes no call. A change after the first is a **regrid** --
-      a new mesh, or a new degree, which adds nodes and moves the old ones -- and
-      reaches this hook only for a case whose spec's RegridPolicy is InPlace. Any
-      other case sees exactly one plan in its life: the change is refused, or,
-      where the configuration sets RebuildPhysicsOnRegrid, a driver replaces the
-      case with a new instance built from the registry (PhysicsInstance.hpp).
+      configuration makes no call. A change of the points it is evaluated at
+      after the first is a **regrid** -- a new mesh, or a new degree, which adds
+      nodes and moves the old ones -- and reaches this hook only for a case
+      whose spec's RegridPolicy is InPlace. Any other case is evaluated at one
+      set of points in its life: the change is refused, or, where the
+      configuration sets RebuildPhysicsOnRegrid, a driver replaces the case
+      with a new instance built from the registry (PhysicsInstance.hpp). A plan
+      that changes only how often those points are visited -- a steady solve
+      after a time march on the same mesh -- is no regrid, and reaches this hook
+      whatever the policy (EvaluationPlan::evaluatesAtTheSamePointsAs).
 
       Here rather than at construction, because a case is built from (config,
       grid) before any solver exists, and the degree, Superconvergent and the tau
@@ -115,11 +119,11 @@ public:
   RegridPolicy regridPolicy() const { return m_spec.regrid; }
 
   /// May this instance be evaluated according to `plan`? Always before its first
-  /// plan, and afterwards if the plan is the one it already has or the case
-  /// takes a new one in place.
+  /// plan, and afterwards if the plan evaluates it at the points its last one
+  /// did, or the case takes new ones in place.
   bool acceptsPlan(EvaluationPlan const &plan) const
   {
-    return !m_evaluationPlan || *m_evaluationPlan == plan ||
+    return !m_evaluationPlan || m_evaluationPlan->evaluatesAtTheSamePointsAs(plan) ||
            regridPolicy() == RegridPolicy::InPlace;
   }
 

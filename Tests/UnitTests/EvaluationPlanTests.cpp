@@ -479,6 +479,50 @@ BOOST_AUTO_TEST_CASE(a_fixed_case_is_refused_a_changed_plan)
     BOOST_TEST(problem.calls.empty());
 }
 
+BOOST_AUTO_TEST_CASE(a_fixed_case_follows_a_steady_solve_on_its_own_points)
+{
+    // A steady solve after a time march on the same mesh and degree is a
+    // different plan -- it skips the initial du/dt solve, so it lists the
+    // initial-condition sweep once rather than twice -- but not a regrid: every
+    // point it visits the march visited. A Fixed case takes it and is told, and
+    // a Runner that reconfigures a case object after a steady solve depends on
+    // exactly this (test_evaluation_plan.py).
+    Grid grid(0.0, 1.0, nCells);
+    RecordingCase problem;
+    BOOST_TEST((problem.regridPolicy() == RegridPolicy::Fixed));
+    SystemSolver march(grid, k, &problem);
+    configure(march, {.label = "fixed_march"}, nullptr);
+    {
+        CapturedOutput quiet;
+        march.runSolver(0.1);
+    }
+    BOOST_TEST_REQUIRE(problem.plans.size() == 1u);
+
+    SystemSolver steady(grid, k, &problem);
+    configure(steady, {.label = "fixed_steady", .steady = true}, nullptr);
+    const EvaluationPlan plan = steady.evaluationPlan();
+    BOOST_TEST(!(plan == problem.plans[0]));
+    BOOST_TEST(plan.evaluatesAtTheSamePointsAs(problem.plans[0]));
+    BOOST_TEST(problem.acceptsPlan(plan));
+
+    problem.calls.clear();
+    problem.initialPoints.clear();
+    problem.massPoints.clear();
+    {
+        CapturedOutput quiet;
+        BOOST_CHECK_NO_THROW(steady.runSolver(0.1));
+    }
+    BOOST_TEST_REQUIRE(problem.plans.size() == 2u);
+    BOOST_TEST((problem.plans[1] == plan));
+    checkAgainstPlan(plan, problem, false);
+
+    // ...and one degree down is still a regrid.
+    SystemSolver lower(grid, k - 1, &problem);
+    configure(lower, {.label = "fixed_lower", .steady = true}, nullptr);
+    BOOST_TEST(!lower.evaluationPlan().evaluatesAtTheSamePointsAs(plan));
+    BOOST_TEST(!problem.acceptsPlan(lower.evaluationPlan()));
+}
+
 BOOST_AUTO_TEST_CASE(a_restart_is_not_a_change_of_plan)
 {
     // A restart copied at the same discretisation makes neither the projection

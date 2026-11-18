@@ -33,6 +33,14 @@
     `==` mean "this case is evaluated at the same points in the same way", which
     is the test for whether a case must be told anything at all.
 
+    Whether the run is a steady solve is part of the plan, and a Runner settles
+    it only when run_ss() or start_steady() arms termination, unless
+    SteadyStateTolerance is configured. So the same configuration can give a
+    steady plan and a time-marching one, which differ in counts and in the sites
+    only a march reaches, never in their points. Whether a case whose
+    RegridPolicy is Fixed may be evaluated by a new plan is therefore
+    evaluatesAtTheSamePointsAs, not `==`.
+
     SystemSolver::evaluationPlan() builds one, and initialize() hands it to the
     case through TransportSystem::deliverEvaluationPlan before the first physics
     call of the run. See docs/physics_interface.rst, "Evaluation plans".
@@ -138,6 +146,35 @@ struct EvaluationPlan
     /// Nothing in a plan depends on the run, so two runs that evaluate a case the
     /// same way compare equal and one that does not compares unequal.
     bool operator==(EvaluationPlan const &) const = default;
+
+    /// Does this plan evaluate a case at the same points as `other`: the same
+    /// grid, degree and Superconvergent flag, and the same point sets, however
+    /// often and through whichever entries each is visited? This, and not
+    /// `==`, is what a case whose RegridPolicy is Fixed has to keep, since what
+    /// it derives from where it is evaluated -- a batch shape it compiled for, a
+    /// profile it tabulated -- depends on the points alone. A steady solve and
+    /// a time march on one mesh are such a pair: the steady solve skips the
+    /// initial du/dt solve, so it lists the initial-condition sweep once rather
+    /// than twice, and drops the sites only that solve reaches, but every point
+    /// it visits the march visits too.
+    bool evaluatesAtTheSamePointsAs(EvaluationPlan const &other) const
+    {
+        return grid == other.grid && k == other.k && superconvergent == other.superconvergent &&
+               pointSets() == other.pointSets();
+    }
+
+    /// Every distinct point set the plan lists, each once, in lexicographic
+    /// order: what evaluatesAtTheSamePointsAs compares.
+    std::vector<std::vector<Position>> pointSets() const
+    {
+        std::vector<std::vector<Position>> sets;
+        sets.reserve(sites.size());
+        for (auto const &s : sites)
+            sets.push_back(s.points);
+        std::sort(sets.begin(), sets.end());
+        sets.erase(std::unique(sets.begin(), sets.end()), sets.end());
+        return sets;
+    }
 
     /// Does any evaluation of this kind happen in this run?
     bool has(EvaluationKind kind) const

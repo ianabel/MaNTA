@@ -53,7 +53,7 @@ bool PhysicsInstance::usable(EvaluationPlan const &plan) const
     if (p.regridPolicy() == RegridPolicy::InPlace)
         return true;
     if (EvaluationPlan const *last = p.evaluationPlan())
-        return *last == plan;
+        return last->evaluatesAtTheSamePointsAs(plan);
     // Never evaluated yet, so its only commitment is the grid it was built on.
     return plan.grid == builtFor_;
 }
