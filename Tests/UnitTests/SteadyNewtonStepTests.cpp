@@ -10,7 +10,9 @@
 //  * that the test fires at the tolerance it is given, and that tolerance
 //    controls the error;
 //  * the sweep budget, one flux and one derivative sweep per Newton iteration;
-//  * that a sliced solve resumes exactly where it stopped.
+//  * that a sliced solve resumes exactly where it stopped;
+//  * that a solve whose dt is capped still finishes after an undamped attempt
+//    fails.
 
 #include <boost/test/unit_test.hpp>
 
@@ -518,6 +520,75 @@ BOOST_AUTO_TEST_CASE(a_damped_step_onto_a_state_with_no_residual_is_undone)
         }
         removeOutput(stem);
     }
+}
+
+BOOST_AUTO_TEST_CASE(a_capped_solve_retries_its_undamped_attempt)
+{
+    // Only an undamped solve can pass the NewtonStep test, so a run has to
+    // attempt one again after an attempt fails -- which it does once dt has
+    // grown sixteenfold since. Under PseudoTransientMaxStep dt may not be able
+    // to: the wait then has to end some other way, or the run converges under
+    // its damped steps and never says so. Here dt starts at the cap, so the
+    // first attempt is made from a state that still dips to 0.01, where an
+    // undamped Newton step overshoots: it fails, and without the second wait
+    // the solve ran out of 400 steps without attempting again. It must attempt
+    // again once its damped steps' correction is within one tolerance unit, and
+    // converge.
+    const std::string stem = "newton_step_capped";
+    constexpr double CAP = 1e-3;
+    Grid grid(0.0, 1.0, nCells);
+    OvershootingSource problem(false);
+    SystemSolver sys(grid, k, &problem);
+    configure(sys, stem);
+    sys.setSteadyMode(SystemSolver::SteadyMode::PseudoTransient);
+    sys.setPseudoTransientInitialStep(CAP);
+    sys.setPseudoTransientMaxStep(CAP);
+    sys.setSteadyStateTolerance(1e-3);
+    sys.setSteadyTest(SystemSolver::SteadyTest::NewtonStep);
+    sys.setMaxContinuationSteps(400);
+
+    std::string message;
+    {
+        CapturedOutput quiet;
+        sys.initialize();
+        try
+        {
+            sys.solveSteadyState();
+        }
+        catch (std::exception const &e)
+        {
+            message = e.what();
+        }
+        sys.captureState();
+    }
+
+    int failed = 0, attempts = 0;
+    double failedAt = 0.0;
+    for (auto const &rec : sys.lastSteadyStepStats())
+    {
+        if (!rec.undamped)
+            continue;
+        ++attempts;
+        if (!rec.accepted)
+        {
+            ++failed;
+            failedAt = rec.step;
+        }
+    }
+    BOOST_TEST_MESSAGE(std::format("{} undamped attempts, {} failed, the last failure at step {}, {} steps",
+                                   attempts, failed, failedAt, sys.lastSteadyStats().steps));
+    BOOST_TEST(failed >= 1, "no undamped attempt failed, so the fixture tests nothing");
+    BOOST_TEST(message.empty(), message);
+    BOOST_TEST((sys.lastSteadyOutcome() == SystemSolver::SteadyOutcome::Converged),
+               "a capped solve never attempted an undamped solve again");
+    for (Index i = 0; i < 9; ++i)
+        BOOST_TEST(sys.yJac.u(0)(0.1 * (i + 1)) == 1.0, boost::test_tools::tolerance(1e-6));
+
+    {
+        CapturedOutput quiet;
+        sys.destroySundials();
+    }
+    removeOutput(stem);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

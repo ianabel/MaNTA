@@ -117,9 +117,14 @@ namespace
     // An undamped solve is attempted from a damped step only once that step's
     // first correction is within one tolerance unit -- the state has stopped
     // moving at this dt -- and, after an attempt fails, only once dt has grown
-    // by this much since. A failed attempt costs two residuals and two builds
-    // (the rate test stops a diverging Newton at its second correction), so the
-    // backoff bounds what probing costs while dt climbs.
+    // by UNDAMPED_ATTEMPT_BACKOFF since. A failed attempt costs two residuals
+    // and two builds (the rate test stops a diverging Newton at its second
+    // correction), so the backoff bounds what probing costs while dt climbs.
+    // Where PseudoTransientMaxStep stops dt short of that, the wait is on the
+    // correction instead: the next attempt comes once the damped step's first
+    // correction is within one tolerance unit, and after each further failure
+    // within a sixteenth of the last such bound. A wait on dt alone would never
+    // end, and with it the solve, since only an undamped solve can pass the test.
     constexpr double UNDAMPED_ATTEMPT_CORRECTION = 1.0;
 
     // A single Newton iteration per damped step cycles where the flux has a
@@ -1443,6 +1448,7 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
                       : (ptcInitialStep > 0.0 ? ptcInitialStep : fallback);
         nsFprev = std::numeric_limits<double>::quiet_NaN();
         nsNextUndampedDt = 0.0;
+        nsUndampedCorrectionLimit = std::numeric_limits<double>::infinity();
         // Undamped from the start in Newton mode; otherwise when a damped step
         // asks for it.
         nsUndampedNext = !std::isfinite(ptcStep);
@@ -1717,7 +1723,8 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
 
             nsUndampedNext = (rec.firstCorrection <= UNDAMPED_ATTEMPT_CORRECTION ||
                             ptcStep >= ptcMaxStep) &&
-                           ptcStep >= nsNextUndampedDt;
+                           ptcStep >= nsNextUndampedDt &&
+                           !(rec.firstCorrection > nsUndampedCorrectionLimit);
             continue;
         }
 
@@ -1726,10 +1733,19 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         if (rec.undamped && std::isfinite(ptcStep))
         {
             // A probe from a damped continuation failed: carry on damped from
-            // the same state and dt, and wait for dt to grow before probing again.
+            // the same state and dt, and wait for dt to grow before probing
+            // again -- or, where the cap stops it growing that far, for the
+            // damped steps' correction to fall (UNDAMPED_ATTEMPT_CORRECTION).
             closeRecord(false, nlsBoundRejected ? "undamped attempt breaches a bound"
                                                 : "undamped attempt failed");
             nsNextUndampedDt = ptcStep * UNDAMPED_ATTEMPT_BACKOFF;
+            if (nsNextUndampedDt > ptcMaxStep)
+            {
+                nsNextUndampedDt = ptcMaxStep;
+                nsUndampedCorrectionLimit =
+                    std::min(UNDAMPED_ATTEMPT_CORRECTION,
+                             nsUndampedCorrectionLimit / UNDAMPED_ATTEMPT_BACKOFF);
+            }
             nsUndampedNext = false;
             continue;
         }
