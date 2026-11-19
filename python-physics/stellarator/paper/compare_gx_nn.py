@@ -19,11 +19,21 @@ gradients the GX inputs were written with, and plots
     python compare_gx_nn.py eq_itg_flux_all_equilibria.h5 \\
         stellarator_opteq_itg_flux.nc gx_runs/rho* --out figs/gx_vs_nn.pdf
 
+    python compare_gx_nn.py eq_itg_flux_all_equilibria.h5 \\
+        stellarator_opteq_itg_flux.nc gx_runs --out figs/gx_vs_nn.pdf
+
     python compare_gx_nn.py eq.h5 run.nc 0.85="~/sample gx/gx.out.nc"
 
-Each GX argument is a directory holding one `*.out.nc` (as
-`gx_inputs_from_manta.py` lays them out; rho is read from the `rhoX.XXX` name)
-or a file, either given as `RHO=PATH` when the path does not carry rho.
+Each GX argument is one of
+
+* a directory of `rhoX.XXX/` run directories, as `gx_inputs_from_manta.py
+  --out` writes them: every one holding a `*.out.nc` is read, and one without
+  (a run not yet made, or still going) is skipped with a note;
+* a run directory holding one `*.out.nc` (rho is read from its `rhoX.XXX` name);
+* a `*.out.nc` file;
+
+and a run directory or file may be given as `RHO=PATH` when the path does not
+carry rho. All the runs found are overlaid on the one plot.
 
 Conventions, and what is and is not checked:
 
@@ -85,26 +95,63 @@ RHO_IN_NAME = re.compile(r"rho(\d+(?:\.\d*)?)")
 # --- GX output ----------------------------------------------------------------
 
 
+def _one_output(path):
+    """The single `*.out.nc` in a run directory, or None if there is none."""
+    found = sorted(glob.glob(os.path.join(path, "*.out.nc")))
+    if len(found) > 1:
+        raise ValueError(f"{path}: expected one *.out.nc, found {len(found)}")
+    return found[0] if found else None
+
+
+def _rho_from_path(path, arg):
+    m = RHO_IN_NAME.search(os.path.abspath(path))
+    if m is None:
+        raise ValueError(f"no rho in {path!r}: give it as RHO={arg}")
+    return float(m.group(1).rstrip("."))
+
+
 def parse_gx_arg(arg):
-    """`RHO=PATH` or `PATH` -> (rho or None, path to the .out.nc)."""
+    """A GX argument -> [(rho, path to the .out.nc), ...].
+
+    `RHO=PATH`, a run directory or an `.out.nc` give one run; a directory of
+    `rho*` run directories gives every one of them that has an output.
+    """
     rho = None
     m = re.match(r"^(\d*\.?\d+)=(.+)$", arg)
     if m:
         rho, arg = float(m.group(1)), m.group(2)
     path = os.path.expanduser(arg)
-    if os.path.isdir(path):
-        found = sorted(glob.glob(os.path.join(path, "*.out.nc")))
-        if len(found) != 1:
-            raise ValueError(f"{path}: expected one *.out.nc, found {len(found)}")
-        path = found[0]
-    if not os.path.isfile(path):
+    if not os.path.exists(path):
         raise FileNotFoundError(path)
+
+    if os.path.isdir(path):
+        out = _one_output(path)
+        if out is None:
+            # a parent of rho* run directories
+            if rho is not None:
+                raise ValueError(f"{path}: RHO= needs a run directory or file")
+            subdirs = sorted(
+                d for d in glob.glob(os.path.join(path, "rho*")) if os.path.isdir(d)
+            )
+            if not subdirs:
+                raise ValueError(f"{path}: no *.out.nc and no rho* run directories")
+            runs = []
+            for d in subdirs:
+                o = _one_output(d)
+                if o is None:
+                    print(f"{d}: no *.out.nc yet, skipping")
+                    continue
+                runs.append((_rho_from_path(d, d), o))
+            if not runs:
+                raise ValueError(f"{path}: none of {len(subdirs)} rho* directories "
+                                 f"has a *.out.nc")
+            print(f"{path}: {len(runs)} GX run(s) of {len(subdirs)} rho* directories")
+            return runs
+        path = out
+
     if rho is None:
-        m = RHO_IN_NAME.search(os.path.abspath(path))
-        if m is None:
-            raise ValueError(f"no rho in {path!r}: give it as RHO={arg}")
-        rho = float(m.group(1))
-    return rho, path
+        rho = _rho_from_path(path, arg)
+    return [(rho, path)]
 
 
 Q_CUTOFF = 1.0e6  # the database's: samples at or above are dropped
@@ -204,7 +251,7 @@ def main(argv=None):
     )
     p.add_argument("equilibrium", help="DESC .h5 (an Equilibrium or EquilibriaFamily)")
     p.add_argument("manta", help="MaNTA netCDF output the GX inputs were made from")
-    p.add_argument("gx", nargs="+", help="GX run directory or .out.nc, or RHO=PATH")
+    p.add_argument("gx", nargs="+", help="directory of rho* GX runs, a GX run directory or .out.nc, or RHO=PATH")
     p.add_argument("--eq-index", type=int, default=-1, help="member of a family")
     p.add_argument("--time-index", type=int, default=-1, help="MaNTA output slice")
     p.add_argument("--edge-density", type=float, default=DENSITY_PROFILE["EdgeDensity"],
@@ -240,8 +287,13 @@ def main(argv=None):
         raise FileNotFoundError(f"no NN model directory {model_dir}; pass --model-dir")
 
     runs = []
-    for a in args.gx:
-        r, path = parse_gx_arg(a)
+    found = [rp for a in args.gx for rp in parse_gx_arg(a)]
+    seen = set()
+    for r, path in found:
+        key = os.path.realpath(path)
+        if key in seen:  # gx_runs and gx_runs/rho0.500 both given, say
+            continue
+        seen.add(key)
         run = read_gx(path, args.t_start, args.navgfac)
         run["rho"] = r
         run["Q_nn_target"] = run["Q"] if args.raw_gx else run["Q"] * run["grad_x"]
