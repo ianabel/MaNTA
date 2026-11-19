@@ -772,7 +772,10 @@ documents; on this table's configuration both steady modes beat it.
    past the transient, for a fraction of the work.
 
    Explicitly time-dependent data — boundary values, sources — is frozen at
-   ``t_initial``. There is no time axis to evaluate it on.
+   ``t_initial``. There is no time axis to evaluate it on. So a case whose inputs
+   switch on or decay in time — a ramp, a start-up source, a controller — is
+   steady-solved at the state they reach: set ``t_initial`` past the switch-on.
+   ``t_final`` plays no part, and a ``t_initial`` beyond it is accepted.
 
 .. _steady-state-test:
 
@@ -837,8 +840,22 @@ What changes with it:
   correction is within one tolerance unit, or ``dt`` has reached its cap, an
   undamped solve is tried from it; if it fails the state is put back and
   continuation goes on, trying again only after ``dt`` has grown sixteenfold.
+  Where ``PseudoTransientMaxStep`` stops ``dt`` short of that, it tries again
+  once a damped step's correction is within one tolerance unit, and after each
+  further failure within a sixteenth of the last such bound: a wait on ``dt``
+  alone would never end, and the run would converge under its damped steps
+  without ever passing the test.
 * **SER reads the steady residual at the start of each step**, which the step
   evaluates anyway, so the schedule costs nothing and lags by one step.
+* **A damped step is accepted before its result is evaluated**, so it can land
+  on a state with no finite residual, or one at which the case throws. Its
+  residual does not depend on ``dt``, so retrying from it cannot help: the step
+  that produced it is undone, and continuation resumes from where that step
+  started with a quarter of its ``dt``. A case throwing or returning NaN at the
+  initial state is still fatal, there being no step to undo.
+* **A step whose result breaches a variable's bound is not taken**: it is
+  checked before it is accepted, put back, and rejected with ``dt`` cut by four
+  (:ref:`bounded-variables`).
 * **The converged iterate is never evaluated**, as IDA never evaluates its
   converged corrector: a ``Newton`` solve costs one flux sweep plus one flux and
   one derivative sweep per Newton iteration.
@@ -1470,6 +1487,62 @@ therefore 1. The cost model above says the opposite case exists -- a physics cas
 whose Jacobian is finite-differenced from expensive flux calls pays far more per
 assembly than these do, and would rather have the iterations -- and that is what
 raising it is for.
+
+.. _bounded-variables:
+
+Bounded variables
+-----------------
+
+A variable declared ``Positive`` or ``NonNegative`` (:doc:`physics_interface`,
+"Bounding a variable") is held to its bound by every solve, in the same two
+moves: a residual asked for at a breaching state is **refused** --- a recoverable
+failure, with the physics not called --- and a step whose result breaches is
+**not taken**. What each solver does with that:
+
+``SteadyStateTest = "NewtonStep"`` (the default)
+   A damped continuation step's result is checked before it is accepted. If it
+   breaches, ``Y`` goes back to where the step started and the step counts as a
+   rejection: ``dt`` is cut by four, towards ``MaxRejectedSteps``. An undamped
+   attempt whose iterate or result breaches fails like any other, and
+   continuation carries on damped. Checking before acceptance is cheaper than
+   discovering the breach at the next step and undoing it, which is what a
+   non-finite residual costs: on the saturating-sink fixture of
+   ``VariableBoundTests.cpp`` the bounded solve takes 11 continuation steps,
+   the same as the unbounded one, against 14 through the undo.
+
+``SteadyStateTest = "Residual"``
+   KINSOL answers a refused residual by halving its Newton step, up to five
+   times; a step still breaching after that ends the call, and the loop rejects
+   it as it rejects a step that raised ``||F||`` --- ``uPrev`` restored, ``dt``
+   cut by four. Every iterate KINSOL accepts has been evaluated, so none
+   breaches.
+
+Time marching
+   IDA answers a refused residual by cutting the step by four and trying
+   again, as for any convergence failure. Its converged corrector, which IDA
+   never evaluates, is checked before the error test: with a bounded variable
+   IDA is given SUNDIALS' Newton wrapped so that a breaching result is a
+   convergence failure too. IDA's own ``IDASetConstraints`` is not used: it
+   bounds only at zero, sees the coefficients rather than the :math:`u^*` the
+   superconvergent scheme evaluates, and projects a small violation onto the
+   bound instead of refusing it. ``IDACalcIC`` holds ``u`` fixed, so it can
+   breach only through :math:`u^*`, which ``q`` moves; the consistent initial
+   condition it returns is checked.
+
+A breach no step size can cure --- the solution itself crossing the bound ---
+ends the solve, and the message names the variable, the place, the value and
+the bound: ``IDASolve could not complete at t = 0.1515: 30 states breached a
+bound on the way, the last n = -4.35e-13 at x = 0.489, breaching the bound n > 0
+(Positive)``. A steady solve stopped by ``MaxRejectedSteps`` or by its step
+budget says the same in its warning or its exception. An initial condition, a
+restart state or the state a steady solve starts from that breaches a bound is
+refused before anything is evaluated, and named; for a ``NonNegative`` variable
+that includes a state brought onto a new degree or mesh by adaptation, whose
+projection can undershoot. ``SystemSolver::boundRejections()`` counts the states
+a run refused, and ``lastBoundViolation()`` is the last of them.
+
+A case that bounds nothing takes none of this path: no check, no wrapper, and
+output bit for bit what it was.
 
 .. _degree-adaptation:
 

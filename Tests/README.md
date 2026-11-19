@@ -256,7 +256,7 @@ were both imported from the build under test -- an installed `manta` ahead on
 the binding layer. If a binding-layer figure ever looks impossibly low, that
 check is the first thing to suspect.
 
-## The scalar (Woodbury) path in solveJacEq
+## The scalar (bordered) path in solveJacEq
 
 `SolveJacTests.cpp` builds the Jacobian by finite-differencing `residual` under
 IDA's convention (`J = dF/dY + cj dF/dY'`) and requires the vector the linear
@@ -274,6 +274,12 @@ so `v = COUPLING`, `w = -BETA * Int phi`, `N = 1`, with a differential variant
 (`G = d(mu)/dt - BETA * Int u dx`, giving `N = alpha`) run at two values of
 alpha, because with an algebraic scalar the `alpha * dG/dmu'` term is identically
 zero and any handling of it looks correct.
+
+The differential variant also runs at `alpha = 0` and `alpha = 1e-12`. There
+`N = alpha` is singular or nearly so, while the bordered system is not, so the
+elimination must not invert `N` on its own; a Woodbury form does, and returns
+NaN at `alpha = 0`. That is an undamped steady step on any case with an
+integral controller (`the_bordered_solve_does_not_invert_n_on_its_own`).
 
 **`solveJacEq` is correct**: both satisfy `J dy = g` at 1e-10. The O(1) failure
 was three separate defects, none of them in the elimination:
@@ -1622,7 +1628,7 @@ hooks are serial loops whatever `MANTA_OPENMP` says, because a case that supplie
 only pointwise hooks never agreed to be called concurrently, and because a Python
 case's GIL makes it more than 13x *slower* rather than faster. Only the solver's
 own cell loops are parallel. `docs/physics_interface.rst` states the rule and
-`CLAUDE.md` has the measurements.
+`docs/dev/parallelism.md` has the measurements.
 
 `UtilityTests.cpp` carries four `parallel_for` cases. Three of them are near-
 tautologies in an ordinary build — without `MANTA_OPENMP` the helper is a plain

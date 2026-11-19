@@ -29,7 +29,7 @@
 // then the only step control -- which is what makes the SER schedule below mean
 // anything.
 //
-// This was very nearly justified on a different and false ground. CLAUDE.md
+// This was very nearly justified on a different and false ground. docs/dev/solver.md
 // describes the Dirichlet constraints as "imposed inside the linear solve",
 // which would make ||F|| blind to a Dirichlet violation and rule out any merit
 // function built on it. The code says otherwise: the block in solveHDGJac that
@@ -117,9 +117,14 @@ namespace
     // An undamped solve is attempted from a damped step only once that step's
     // first correction is within one tolerance unit -- the state has stopped
     // moving at this dt -- and, after an attempt fails, only once dt has grown
-    // by this much since. A failed attempt costs two residuals and two builds
-    // (the rate test stops a diverging Newton at its second correction), so the
-    // backoff bounds what probing costs while dt climbs.
+    // by UNDAMPED_ATTEMPT_BACKOFF since. A failed attempt costs two residuals
+    // and two builds (the rate test stops a diverging Newton at its second
+    // correction), so the backoff bounds what probing costs while dt climbs.
+    // Where PseudoTransientMaxStep stops dt short of that, the wait is on the
+    // correction instead: the next attempt comes once the damped step's first
+    // correction is within one tolerance unit, and after each further failure
+    // within a sixteenth of the last such bound. A wait on dt alone would never
+    // end, and with it the solve, since only an undamped solve can pass the test.
     constexpr double UNDAMPED_ATTEMPT_CORRECTION = 1.0;
 
     // A single Newton iteration per damped step cycles where the flux has a
@@ -158,8 +163,9 @@ void SystemSolver::allocateNewtonStepScratch()
     nlsEwt = N_VClone(Y);
     nlsTmp = N_VClone(Y);
     nlsDprev = N_VClone(Y);
+    nsLastGood = N_VClone(Y);
     if (nlsYcor == nullptr || nlsU == nullptr || nlsEwt == nullptr || nlsTmp == nullptr ||
-        nlsDprev == nullptr)
+        nlsDprev == nullptr || nsLastGood == nullptr)
         throw std::runtime_error("N_VClone failed in solveSteadyState");
 
     steadyNLS = SUNNonlinSol_Newton(Y, ctx);
@@ -190,10 +196,12 @@ int SystemSolver::nlsSys(N_Vector ycor, N_Vector F)
         // At ycor = 0 the state is one a previous step accepted, so a case
         // throwing there is not a step to damp away; anywhere else it is the
         // ordinary sign of a step that left the case's domain, and a
-        // recoverable failure is the answer, as static_residual gives IDA.
+        // recoverable failure is the answer, as static_residual gives IDA. The
+        // loop may still undo the accepted step that led here (nsLastGood).
         if (atStart)
         {
             nlsException = std::current_exception();
+            nlsStartThrew = true;
             return -1;
         }
         return 1;
@@ -523,6 +531,8 @@ int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
     nlsObjectiveTolerance.resize(0);
     nlsObjectiveStalled = false;
     nlsException = nullptr;
+    nlsStartThrew = false;
+    nlsBoundRejected = false;
 
     SUNNonlinSolSetMaxIters(steadyNLS, static_cast<int>(newtonMaxIters));
     SUNNonlinSolSetup(steadyNLS, nlsYcor, this);
@@ -577,6 +587,20 @@ int SystemSolver::steadyNewtonSolve(SteadyStepStats &rec)
     }
     else
         N_VLinearSum(1.0, uPrev, 1.0, nlsYcor, Y);
+
+    // The step's result is checked before it is accepted, not at the start of
+    // the next step: a breach there would have to be undone, here it is only
+    // not taken. Y goes back to where the step started, and the step is not
+    // converged -- which the loop answers as it answers any failed step, by a
+    // smaller dt. The reversal memory describes a step that did not happen.
+    if (refuseBreach(Y))
+    {
+        N_VScale(1.0, uPrev, Y);
+        nlsBoundRejected = true;
+        nsHaveDprev = false;
+        nsCalmSteps = 0;
+        return SUN_NLS_CONV_RECVR;
+    }
     return retval;
 }
 
@@ -643,6 +667,12 @@ bool SystemSolver::timeMarchIsSteady(Time t)
 
 int SystemSolver::steadyResidual(N_Vector u, N_Vector fval)
 {
+    // A state breaching a bound is not evaluated: a recoverable failure, which
+    // KINSOL answers by halving its step and a NewtonStep solve by failing the
+    // iteration. A no-op for a case that bounds nothing.
+    if (refuseBreach(u))
+        return 1;
+
     if (std::isfinite(ptcStep))
     {
         // ptcDYdt = id * (u - uPrev)/dt. Multiplying by `id` is what keeps the
@@ -997,6 +1027,11 @@ void SystemSolver::solveSteadyState(bool resume)
     // on OutOfSteps would loop forever.
     steadyOutcome = SteadyOutcome::NotRun;
 
+    // After the outcome is cleared, so a refusal here is not read as the last
+    // solve's verdict.
+    checkSteadyStartWithinBounds();
+    const long boundRejections0 = nBoundRejections;
+
     double Fprev = steadyNorm();
 
     // Every way out of the loop goes through here, including the two that then
@@ -1150,11 +1185,41 @@ void SystemSolver::solveSteadyState(bool resume)
         // earlier step, or an earlier solve".
         const long kinNormStamp = kinSteadyNormStamp;
 
+        const long stepBoundRejections0 = nBoundRejections;
         const int retval = KINSol(kin_mem, Y, KIN_NONE, kinScale, fScale);
         rec.kinRetval = retval;
 
         // Immediately: KINSOL zeroes its counters at the top of each KINSol.
         readKinStats(rec);
+
+        // A step the bounds refused. steadyResidual will not evaluate a
+        // breaching state, and KINSOL answers that by halving its step; five
+        // halvings that all still breach end the call with
+        // KIN_REPTD_SYSFUNC_ERR, which is a rejected step like any other here,
+        // not a broken solve. Every iterate KINSOL accepts was evaluated, so
+        // the check of Y itself is belt and braces.
+        if (boundsActive() &&
+            ((retval == KIN_REPTD_SYSFUNC_ERR && nBoundRejections != stepBoundRejections0) ||
+             refuseBreach(Y)))
+        {
+            closeRecord(std::numeric_limits<double>::quiet_NaN(), false);
+            N_VScale(1.0, uPrev, Y);
+            tauAtY = false;
+            ptcStep = std::isfinite(ptcStep) ? ptcStep * 0.25 : fallback;
+            ++rejected;
+            if (rejected > maxRejectedSteps)
+            {
+                finish("stopped: MaxRejectedSteps reached", step + 1, rejected,
+                       SteadyOutcome::OutOfSteps, Fprev);
+                logmsg<LOG_LEVEL::WARNING>(
+                    "Steady solve stopped after {} rejected continuation steps "
+                    "(MaxRejectedSteps = {}) with ||F|| = {:g}; the last accepted state is the "
+                    "result.{}",
+                    rejected, maxRejectedSteps, Fprev, boundRejectionNote(boundRejections0));
+                return;
+            }
+            continue;
+        }
 
         // Only a genuinely broken solve is fatal. "Ran out of iterations"
         // (KIN_MAXITER_REACHED) and "the Newton direction kept coming back
@@ -1330,8 +1395,9 @@ void SystemSolver::solveSteadyState(bool resume)
             logmsg<LOG_LEVEL::WARNING>(
                 "Steady solve stopped after {} rejected continuation steps "
                 "(MaxRejectedSteps = {}) with ||F|| = {:g} against a tolerance of {:g}; "
-                "the last accepted state is the result.",
-                rejected, maxRejectedSteps, Fprev, steady_state_tol);
+                "the last accepted state is the result.{}",
+                rejected, maxRejectedSteps, Fprev, steady_state_tol,
+                boundRejectionNote(boundRejections0));
             return;
         }
     }
@@ -1342,8 +1408,9 @@ void SystemSolver::solveSteadyState(bool resume)
     throw std::runtime_error(std::format(
         "Steady solve did not converge in {} continuation steps: ||F|| = {:g} "
         "against a tolerance of {:g}, with dt = {:g}. The residual is not "
-        "falling; SteadyStateSolver = \"TimeMarch\" is the fallback.",
-        maxContinuationSteps, Fprev, steady_state_tol, ptcStep));
+        "falling; SteadyStateSolver = \"TimeMarch\" is the fallback.{}",
+        maxContinuationSteps, Fprev, steady_state_tol, ptcStep,
+        boundRejectionNote(boundRejections0)));
 }
 
 // The NewtonStep path: IDA's corrector test on the undamped Newton correction,
@@ -1381,12 +1448,14 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
                       : (ptcInitialStep > 0.0 ? ptcInitialStep : fallback);
         nsFprev = std::numeric_limits<double>::quiet_NaN();
         nsNextUndampedDt = 0.0;
+        nsUndampedCorrectionLimit = std::numeric_limits<double>::infinity();
         // Undamped from the start in Newton mode; otherwise when a damped step
         // asks for it.
         nsUndampedNext = !std::isfinite(ptcStep);
         nsLambda = 1.0;
         nsCalmSteps = 0;
         nsHaveDprev = false;
+        nsHaveLastGood = false;
     }
 
     if (!(ptcStep > 0.0))
@@ -1410,6 +1479,8 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
                jacSolves0 = nJacSolves, adjointSolves0 = nAdjointSolves;
     steadyStepStats.clear();
     steadyOutcome = SteadyOutcome::NotRun;
+    checkSteadyStartWithinBounds();
+    const long boundRejections0 = nBoundRejections;
 
     // The steady residual at the start of the last step, for the stats: the
     // final state itself is never evaluated, as IDA never evaluates its
@@ -1499,9 +1570,24 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         nlsStrictDivergence = rec.undamped && std::isfinite(dampedStep);
         nlsSingleIteration = !rec.undamped;
         int retval = 0;
+        bool startThrew = false;
         try
         {
             retval = steadyNewtonSolve(rec);
+        }
+        catch (std::exception const &e)
+        {
+            ptcStep = dampedStep;
+            // Thrown at the step's starting state, which the last damped step
+            // produced: undo that step below rather than end the solve. With no
+            // step to undo, the initial state itself is outside the case's
+            // domain, and that is fatal.
+            if (!(nlsStartThrew && nsHaveLastGood))
+                throw;
+            logmsg<LOG_LEVEL::WARNING>("The case threw at the state the last continuation step "
+                                       "produced ({}); going back to the state before it.",
+                                       e.what());
+            startThrew = true;
         }
         catch (...)
         {
@@ -1510,6 +1596,35 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         }
         ptcStep = dampedStep;
         lastStartNorm = rec.residualNorm;
+
+        // The step's starting state has no finite residual: the last damped
+        // step was accepted before its result's residual was evaluated, and
+        // landed outside the case's domain. Its result cannot be retried from,
+        // so go back to where that step started, with a quarter of its dt.
+        if ((startThrew || !std::isfinite(rec.residualNorm)) && nsHaveLastGood)
+        {
+            closeRecord(false, "no residual at the last step's result: undone");
+            N_VScale(1.0, nsLastGood, Y);
+            ptcStep = nsLastGoodDt * 0.25;
+            nsFprev = nsLastGoodFprev;
+            nsHaveLastGood = false;
+            nsHaveDprev = false;
+            nsCalmSteps = 0;
+            nsUndampedNext = false;
+            tauAtY = false;
+            ++rejected;
+            if (rejected > maxRejectedSteps)
+            {
+                finish("stopped: MaxRejectedSteps reached", step + 1, rejected,
+                       SteadyOutcome::OutOfSteps);
+                logmsg<LOG_LEVEL::WARNING>(
+                    "Steady solve stopped after {} rejected continuation steps "
+                    "(MaxRejectedSteps = {}); the last accepted state is the result.{}",
+                    rejected, maxRejectedSteps, boundRejectionNote(boundRejections0));
+                return;
+            }
+            continue;
+        }
 
         // Negative is unrecoverable: a callback reported a failure it could not
         // turn into a damped retry.
@@ -1578,7 +1693,14 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
 
         if (converged)
         {
-            // An accepted damped step. Y has moved, so a held tau is stale.
+            // An accepted damped step: remember where it started, in case its
+            // result turns out to have no residual (see nsLastGood).
+            N_VScale(1.0, uPrev, nsLastGood);
+            nsHaveLastGood = true;
+            nsLastGoodDt = rec.dt;
+            nsLastGoodFprev = nsFprev;
+
+            // Y has moved, so a held tau is stale.
             closeRecord(true, rec.relaxation < 1.0
                                   ? std::format("accepted, step x {:g}", rec.relaxation)
                                   : std::string("accepted"));
@@ -1601,7 +1723,8 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
 
             nsUndampedNext = (rec.firstCorrection <= UNDAMPED_ATTEMPT_CORRECTION ||
                             ptcStep >= ptcMaxStep) &&
-                           ptcStep >= nsNextUndampedDt;
+                           ptcStep >= nsNextUndampedDt &&
+                           !(rec.firstCorrection > nsUndampedCorrectionLimit);
             continue;
         }
 
@@ -1610,16 +1733,26 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         if (rec.undamped && std::isfinite(ptcStep))
         {
             // A probe from a damped continuation failed: carry on damped from
-            // the same state and dt, and wait for dt to grow before probing again.
-            closeRecord(false, "undamped attempt failed");
+            // the same state and dt, and wait for dt to grow before probing
+            // again -- or, where the cap stops it growing that far, for the
+            // damped steps' correction to fall (UNDAMPED_ATTEMPT_CORRECTION).
+            closeRecord(false, nlsBoundRejected ? "undamped attempt breaches a bound"
+                                                : "undamped attempt failed");
             nsNextUndampedDt = ptcStep * UNDAMPED_ATTEMPT_BACKOFF;
+            if (nsNextUndampedDt > ptcMaxStep)
+            {
+                nsNextUndampedDt = ptcMaxStep;
+                nsUndampedCorrectionLimit =
+                    std::min(UNDAMPED_ATTEMPT_CORRECTION,
+                             nsUndampedCorrectionLimit / UNDAMPED_ATTEMPT_BACKOFF);
+            }
             nsUndampedNext = false;
             continue;
         }
 
         // A rejected step. In Newton mode there is no dt to damp, so drop to a
         // finite one and continue as pseudo-transient, as the Residual path does.
-        closeRecord(false, "rejected");
+        closeRecord(false, nlsBoundRejected ? "result breaches a bound: rejected" : "rejected");
         ptcStep = std::isfinite(ptcStep) ? ptcStep * 0.25 : fallback;
         nsUndampedNext = false;
         ++rejected;
@@ -1629,8 +1762,8 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
                    SteadyOutcome::OutOfSteps);
             logmsg<LOG_LEVEL::WARNING>(
                 "Steady solve stopped after {} rejected continuation steps "
-                "(MaxRejectedSteps = {}); the last accepted state is the result.",
-                rejected, maxRejectedSteps);
+                "(MaxRejectedSteps = {}); the last accepted state is the result.{}",
+                rejected, maxRejectedSteps, boundRejectionNote(boundRejections0));
             return;
         }
     }
@@ -1640,10 +1773,10 @@ void SystemSolver::solveSteadyStateNewtonStep(bool resume)
         throw std::runtime_error(std::format(
             "Steady solve did not converge in {} continuation steps (Objective test; last "
             "max |z^T F| / tolerance {:g}), with dt = {:g}. SteadyStateSolver = \"TimeMarch\" "
-            "is the fallback.",
-            maxContinuationSteps, stats.objectiveTest, ptcStep));
+            "is the fallback.{}",
+            maxContinuationSteps, stats.objectiveTest, ptcStep, boundRejectionNote(boundRejections0)));
     throw std::runtime_error(std::format(
         "Steady solve did not converge in {} continuation steps (NewtonStep test at {:g}), "
-        "with dt = {:g}. SteadyStateSolver = \"TimeMarch\" is the fallback.",
-        maxContinuationSteps, steadyStepTol, ptcStep));
+        "with dt = {:g}. SteadyStateSolver = \"TimeMarch\" is the fallback.{}",
+        maxContinuationSteps, steadyStepTol, ptcStep, boundRejectionNote(boundRejections0)));
 }

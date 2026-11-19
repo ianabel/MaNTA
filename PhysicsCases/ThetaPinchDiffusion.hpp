@@ -6,8 +6,7 @@
 /*
     Isothermal density transport in a theta-pinch, on the normalised flux label
     x = Phi / Phi_wall, reading its geometry from a field model
-    (ThetaPinchEquilibrium). docs/superpowers/specs/2026-10-19-theta-pinch-field-model-design.md
-    is the design.
+    (ThetaPinchEquilibrium). docs/field_coupling.rst describes the pair.
 
     The evolved variable is N = V' n, particles per unit flux per unit length.
     With labels that move with the field, continuity is

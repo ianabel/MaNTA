@@ -235,7 +235,7 @@ SUNDIALS" half of that entry. So this gives the transfer operator and leaves the
 harder question untouched. Two MaNTA-specific pieces come with it: an index-1 DAE
 has to be made *consistent* on the new mesh, not merely interpolated onto it —
 `sigma`, `q`, `phi` and `lambda` are algebraic, so a transfer would be followed by
-something like a fresh `IDACalcIC`, with the failure modes CLAUDE.md catalogues —
+something like a fresh `IDACalcIC`, with the failure modes `docs/dev/solver.md` catalogues —
 and MaNTA carries auxiliary variables and global scalars that their `(q, w, λ)`
 triple has no analogue for.
 

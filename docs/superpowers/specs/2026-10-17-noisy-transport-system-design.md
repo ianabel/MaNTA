@@ -4,7 +4,9 @@
 **Builds on:** `docs/superpowers/notes/2026-10-17-noisy-flux-error-bars-notes.md`
 (the measurements this rests on) and
 `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`
-("Noise: phase 2", which this replaces for noisy cases).
+("Noise: phase 2", which this replaces for noisy cases) -- removed from `main`
+as finished in `c0dcbce`; read it with
+`git show 308079d:docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`.
 
 ## Goal
 

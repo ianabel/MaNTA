@@ -422,7 +422,7 @@ pinned, best of 3:
 
 The k = 10 row is not the factorisation at all, which was 2% of that run: it is
 the dense `(nCells + 1)^2` allocate-and-zero and the `FullPivLU`'s own per-call
-buffers, 627 times over. CLAUDE.md ("The trace solve") has what the change turned
+buffers, 627 times over. `docs/dev/parallelism.md` ("The trace solve") has what the change turned
 up: `K_global` is singular by the number of Dirichlet boundaries, which the dense
 factorisation absorbed, and the banded answer differs from the dense one in the
 last bits rather than not at all.

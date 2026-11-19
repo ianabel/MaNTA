@@ -4,6 +4,8 @@
 #include "Types.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -139,6 +141,34 @@ enum class GeometryDerivatives
     Differenced,
 };
 
+/*
+    A bound on a transport variable's value u -- never on q or sigma, which are
+    signed by nature.
+
+    Uncontrolled  the default: u may take any value, and the solver never looks.
+    Positive      u > eps. For a variable the case divides by, or takes the log
+                  of. eps defaults to 0, i.e. strictly positive.
+    NonNegative   u >= -eps, and the physics is handed max(u, 0) in place of u.
+                  For a variable that may legitimately reach zero -- a density
+                  burnt out in a layer -- where an undershoot the solver cannot
+                  resolve must not reach the case. eps defaults to the
+                  variable's absolute tolerance, the size below which the solver
+                  cannot tell a value from zero.
+
+    The bound is checked where the physics reads u: at the k+1 basis nodes, or
+    at the k+2 star nodes on u* under Superconvergent = true -- and, with
+    BoundCheck = "WholeCell", over the whole of each cell's interpolant of those
+    values. A state that breaches it is never accepted, and the physics is never
+    evaluated at one; docs/physics_interface.rst says what each solve does about
+    it.
+ */
+enum class VariableBound
+{
+    Uncontrolled,
+    Positive,
+    NonNegative,
+};
+
 struct FieldSpec
 {
     std::string name;
@@ -157,6 +187,13 @@ struct FieldSpec
     // `{"n", "density", "m^-3", BoundaryKind::Neumann, BoundaryKind::Dirichlet}`
     // -- keeps compiling and keeps meaning what it did.
     bool sourceReadsTimeDerivatives = false;
+
+    // The bound on u (see VariableBound), and its margin eps. An absent eps
+    // takes the kind's default -- 0 for Positive, the variable's absolute
+    // tolerance for NonNegative -- which the solver resolves, since only it
+    // knows the tolerance. Trailing and defaulted, for the reason above.
+    VariableBound bound = VariableBound::Uncontrolled;
+    std::optional<double> boundEpsilon = std::nullopt;
 };
 
 struct ScalarSpec
@@ -283,6 +320,20 @@ struct SystemSpec
         {
             checkMixed(v.lower, v.name, "lower");
             checkMixed(v.upper, v.name, "upper");
+
+            // A margin is a distance, and a margin on an unbounded variable
+            // bounds nothing: both are refused rather than read some other way.
+            if (v.boundEpsilon)
+            {
+                if (v.bound == VariableBound::Uncontrolled)
+                    throw std::invalid_argument("Variable '" + v.name +
+                                                "' sets a bound margin but no bound; set bound to "
+                                                "Positive or NonNegative, or drop the margin");
+                if (!std::isfinite(*v.boundEpsilon) || *v.boundEpsilon < 0.0)
+                    throw std::invalid_argument("Variable '" + v.name +
+                                                "' sets a bound margin of " + std::to_string(*v.boundEpsilon) +
+                                                "; it must be finite and non-negative");
+            }
         }
 
         // Derivatives in a geometry the case says it does not read are a

@@ -179,6 +179,11 @@ void SystemSolver::dSources_dScalars_Mat( Matrix& mat, DGSoln const& Y, Index in
 			dSdS.setZero();
 			double x_j = I.fromRef( Y.getBasis().Nodes( j ) );
 			State s = Y.evalOnNode( intervalIndex, j );
+			// At the state the residual evaluated the source at: a NonNegative
+			// variable reaches it as max(u, 0) (physicsNodesAt).
+			for ( Index v : clampedVars )
+				if ( s.u( v ) < 0.0 )
+					s.u( v ) = 0.0;
 			problem->dSources_dScalars( XVar, dSdS, s, x_j, tEval );
 			nodal.col( j ) = dSdS;
 		}

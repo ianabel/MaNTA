@@ -12,7 +12,7 @@
 //    source at each physics node is -z^T dF/dGamma, one column of the test-space
 //    projection. A sign or operator error in it is invisible to every aggregate,
 //    so it is checked against finite differences of G under a perturbation of
-//    one node at a time -- and the check is guarded against the trap CLAUDE.md
+//    one node at a time -- and the check is guarded against the trap docs/dev/adjoints.md
 //    records for the adjoint's dG/dZ: diag(w) and the mass matrix agree on
 //    anything the interpolatory rule integrates exactly, so the guard requires
 //    the two candidate operators to differ by far more than the tolerance.

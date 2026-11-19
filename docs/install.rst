@@ -19,7 +19,7 @@ compiler: g++ 14.3 or newer, or clang++ 18 or newer.
    compiler, which RHEL keeps for the life of the release -- and the reproduction
    passes on 14.3.0 with the member in place. Whether 14.3 fixed it or the test
    misses it is not known, so the build still warns when it sees g++ 14;
-   ``CLAUDE.md`` and ``TODO`` carry the reproduction.
+   ``docs/dev/build.md`` and ``TODO`` carry the reproduction.
 
 The clang floor is measured rather than assumed, and so was the old gcc one:
 g++ 13 cannot build MaNTA at all — libstdc++ 13 has no ``<print>``, and the output
@@ -180,7 +180,7 @@ coexist:
    What they cost was measured rather than assumed, and it depends on the
    polynomial degree: about 2.5% at ``Polynomial_degree = 3``, and 7-9% at 8-10,
    where the per-cell blocks are large. ``-DMANTA_ASSERTS=OFF`` defines
-   ``NDEBUG`` and buys that back. ``CLAUDE.md`` has the table and the reason the
+   ``NDEBUG`` and buys that back. ``docs/dev/build.md`` has the table and the reason the
    effect grows with ``k``.
 
 .. _openmp:

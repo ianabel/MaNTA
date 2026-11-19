@@ -13,7 +13,7 @@ solve do better than when it only has the noisy value and must fight it?
 |---|---|
 | `python-examples/toy-model/README.md`, last two sections | the measured tables and how to reproduce them |
 | `python-examples/toy-model/reporting.py` | the box that reports an error bar and the filter that uses it; the docstring has the mechanisms |
-| `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`, "Noise: phase 2" | the planned solver-side work: `NoiseLimited`, iterate averaging, a noise hook |
+| `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`, "Noise: phase 2" (removed from `main` in `c0dcbce`; `git show 308079d:<path>`) | the planned solver-side work: `NoiseLimited`, iterate averaging, a noise hook |
 | `refs/TransportWithNoise.pdf` | Parker, LoDestro & Campos (2018), summarised below |
 
 These notes record what was found, how it connects to the paper and to the

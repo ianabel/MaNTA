@@ -37,7 +37,7 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
 #
 # What they cost depends on the polynomial degree, and it is small: measured
 # +2.5% at k = 3, +8.5% at k = 8 and +7.4% at k = 10 (paired A/B, 5 reps,
-# medians, MKL pinned). CLAUDE.md carries the table.
+# medians, MKL pinned). docs/dev/build.md carries the table.
 #
 # The shape of that is worth knowing before anyone re-derives it. Eigen's
 # assertions guard its *API* -- operator(), resize, block construction -- not its
@@ -247,7 +247,7 @@ endif()
 # did, so it surfaces as a single red matrix leg that depends on which runner
 # GitHub allocated rather than on the commit.
 #
-# CLAUDE.md argues against blanket -Wno- flags and is right to: the two this
+# docs/dev/build.md argues against blanket -Wno- flags and is right to: the two this
 # build used to carry outlived their reason and went on hiding defects in our own
 # code. This one is different in kind -- it reports how the compiler resolved
 # -march=native into a feature set, so there is no MaNTA-side defect it could
@@ -266,7 +266,7 @@ endif()
 # g++ 14.2 miscompiled this tree at exactly the release flags -- all three of
 # g++-14, -flto and -march=native were required, and the trigger was SystemSolver's
 # member layout, so whether a given tree is affected is luck rather than something
-# a build can test for. See CLAUDE.md, "g++-14.2.0 miscompiled this tree".
+# a build can test for. See docs/dev/build.md, "g++-14.2.0 miscompiled this tree".
 #
 # Warn rather than refuse: it is the compiler Ubuntu noble ships as its archive
 # default, this is the one place a person reliably meets the fact, and a hard
@@ -285,7 +285,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
   message(WARNING
     "g++ 14.2 miscompiled this tree at -O3 -flto -march=native. Numbers from this "
     "build are not trustworthy if SystemSolver's members have changed. See "
-    "CLAUDE.md. Use g++ 14.3 or later, or clang.")
+    "docs/dev/build.md. Use g++ 14.3 or later, or clang.")
 endif()
 
 # gcov must match the compiler that wrote the .gcno files, or gcovr exits 3 with

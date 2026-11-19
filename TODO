@@ -45,7 +45,7 @@ Raised 2026-11-06; the last attempt stalled on a choice rather than a defect.
 
 
 g++-14.2.0 miscompiled this tree at -O3 -flto -march=native. Root cause not found.
-Found 2026-08-23. CLAUDE.md has the summary; this is the reproduction.
+Found 2026-08-23. docs/dev/build.md has the summary; this is the reproduction.
 
   To reproduce, on g++-14 (14.2.0 here) on an AVX2 host:
 
@@ -236,7 +236,7 @@ investigated. Each is a measurement that did not fit, with what was not tried.
     or of its configuration rather than of the coupling: a study of the theta
     pinch against a converged reference, by k, would say which.
   - A field grid much finer than the transport mesh stalls IDA, under
-    FieldSolve = exact as well as iterative. CLAUDE.md records why the knots
+    FieldSolve = exact as well as iterative. docs/dev/field-coupling.md records why the knots
     follow the mesh (p_h jumps at every face, and a finer spline resolves the
     jumps into spikes in dV'/dx); what is not known is whether the stall is that
     and nothing more.
@@ -244,3 +244,42 @@ investigated. Each is a measurement that did not fit, with what was not tried.
     every tier (DiscretisationEstimate.cpp): the enriched residual has no field
     rows, so the estimate would leave out the geometry's share. Needed before
     AdaptationTarget = "Objective" can run on a coupled case.
+
+
+Positivity beyond refusing a breach.
+Raised 2026-11-16, from a steady solve of a rotating-mirror case (mirror-physics, GF1).
+
+  A variable can be declared Positive or NonNegative (FieldSpec::bound,
+  manta.Field(bound=...)); every solve then refuses a residual at a breaching
+  state and a step whose result breaches (Bounds.cpp, docs/running.rst
+  "Bounded variables"). What that cannot do is change the answer: a solution
+  whose discrete steady state itself undershoots -- a sharp layer the mesh does
+  not resolve -- is refused step after step and reported, not reached. Two
+  things are left:
+  - a positivity-preserving limiter, or a variable transform (log n, log T),
+    which changes the discretisation and is a much larger job;
+  - the check of IDA's converged corrector (the wrapped Newton in Bounds.cpp)
+    has never fired in a run: in every time-march fixture in
+    VariableBoundTests.cpp the residual callback refuses the breaching iterate
+    first, so the wrapper is tested only directly. A run where it matters --
+    first-iteration convergence onto a breaching state -- would be worth
+    finding, to measure what it costs IDA.
+
+
+Field-model loose ends.
+Raised 2026-08-16 in the self-consistent field work, and not rechecked since.
+
+  * FieldResidual receives no states_dot, so a field row cannot read the
+    transport's time derivatives, and FieldResidualPrime's dRdot cannot be
+    filled. Leaving it zero is correct today. The hazard is a model author
+    putting d(row)/d(psi') into dRdot instead of dRddpsidt, where it lands in
+    the A2 row at the wrong DOFs. FieldModel.hpp warns about this.
+  * Coverage. Every field-Jacobian fixture has nVars = 1, so the nVars factors
+    in the coupling blocks are untested. ManufacturedCoupledDiffusion's twin in
+    CoupledResidualTests.cpp has no dSigmaFn_dGeometry, so its A1 is zero; an
+    A1 check written against it would pass vacuously.
+  * Resources on throw paths. solveCoupledJacExact leaks nField + 2 N_Vectors
+    on a throw, solveCoupledJacIterative leaks its work vector if
+    solveTransportJac throws, and CoupledFixture's defaulted move constructor
+    relies on NRVO to avoid a double free. Decide together whether a leak on a
+    path that ends the run is acceptable, and make all three follow that.

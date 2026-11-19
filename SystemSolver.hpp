@@ -11,6 +11,7 @@
 #include "PyIntegrator.hpp"
 #include "Types.hpp"
 #include "util/BandedMatrix.hpp"
+#include "util/PolynomialMinimum.hpp"
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -148,6 +149,51 @@ class SystemSolver
         long getMaxContinuationSteps() const { return maxContinuationSteps; };
         void setPseudoTransientMaxStep(double dt) { ptcMaxStep = dt; };
         void setMaxRejectedSteps(unsigned int steps) { maxRejectedSteps = steps; };
+
+        // ---- Bounds on a case's variables (FieldSpec::bound).
+        //
+        // Where a bound is checked: Nodal at the values the physics reads -- u_h
+        // at the k+1 basis nodes, u* at the k+2 star nodes under Superconvergent
+        // -- and WholeCell over the whole of each cell's interpolant of those
+        // values too, by its exact minimum (util/PolynomialMinimum.hpp). With no
+        // bounded variable neither does anything at all.
+        enum class BoundCheck { Nodal, WholeCell };
+        void setBoundCheck(BoundCheck c) { boundCheck = c; };
+        BoundCheck getBoundCheck() const { return boundCheck; };
+
+        // A breach, the worst one in the state it was found in: variable, place
+        // and amount. `limit` is eps for a Positive variable (which needs
+        // value > limit) and -eps for a NonNegative one (value >= limit).
+        // `betweenNodes` says only the whole-cell check saw it.
+        struct BoundViolation
+        {
+            Index var = 0;
+            Position x = 0.0;
+            double value = 0.0;
+            double limit = 0.0;
+            VariableBound kind = VariableBound::Uncontrolled;
+            bool betweenNodes = false;
+        };
+
+        // The worst breach of a bound in Y, or nothing. Reads Y only: under the
+        // superconvergent scheme it forms u* itself rather than through the
+        // postprocessor, whose u* the residual and the output own. The margins
+        // are resolved in initialize(), so before the first one this sees no
+        // bound.
+        std::optional<BoundViolation> boundViolation(DGSoln const &Y) const;
+        std::string describe(BoundViolation const &v) const;
+
+        // How many states this run's solves refused for a breach -- a residual
+        // not evaluated, a step not accepted -- and the last one refused.
+        long boundRejections() const { return nBoundRejections; };
+
+        // True, counted and recorded, when y breaches a bound: what every
+        // evaluation and acceptance point asks before going on -- including
+        // IDA's residual callback and corrector, which are not members. False
+        // at no cost when no variable is bounded.
+        bool refuseBreach(N_Vector y);
+        bool refuseBreach(DGSoln const &Y);
+        std::optional<BoundViolation> const &lastBoundViolation() const { return lastBoundBreach; };
 
         // The SER schedule on an accepted step:
         //
@@ -302,8 +348,7 @@ class SystemSolver
         // -- converges invisibly; and under a noisy flux ||F|| floors, so the
         // acceptance rule rejects every step near it. NewtonStep measures the
         // distance to the solution per component, in units of the run's own
-        // tolerances. docs/superpowers/specs/2026-10-11-steady-state-termination-
-        // design.md has the measurements behind both claims.
+        // tolerances.
         //
         //  * Objective: NewtonStep's continuation, with the undamped solve
         //    stopped on the objectives instead of on the whole solution: when
@@ -315,7 +360,6 @@ class SystemSolver
         //    product, and asks the case for nothing. It controls only the named
         //    objectives: anything else the run reports may be less converged
         //    than NewtonStep would leave it.
-        //    docs/superpowers/specs/2026-10-17-objective-error-control-design.md.
         enum class SteadyTest { Residual, NewtonStep, Objective };
         void setSteadyTest(SteadyTest test) { steadyTest = test; };
         SteadyTest getSteadyTest() const { return steadyTest; };
@@ -1813,8 +1857,8 @@ class SystemSolver
         // callers should not have to care.
         mutable Integrator::Cache integrator;
 
-        // The scalar bordering's work vectors: v and w are the Woodbury update's
-        // columns and rows, and solveScalarD/E/G are solveTransportJac's scratch.
+        // The scalar bordering's work vectors: v and w are the border's columns
+        // and rows, and solveScalarD/E/G are solveTransportJac's scratch.
         //
         // All of them are as long as the whole solution vector and all of them
         // have the solver's own lifetime, because nScalars is fixed by the
@@ -2063,11 +2107,44 @@ class SystemSolver
         std::exception_ptr nlsException;
 
         // Carried across slices, like ptcStep: the steady residual at the start
-        // of the last accepted damped step, for SER, and the least dt at which
-        // the next undamped attempt may be made.
+        // of the last accepted damped step, for SER; the least dt at which the
+        // next undamped attempt may be made; and the largest damped correction
+        // at which it may, finite only once an attempt has failed where
+        // PseudoTransientMaxStep stops dt growing past it.
         double nsFprev = std::numeric_limits<double>::quiet_NaN();
         double nsNextUndampedDt = 0.0;
+        double nsUndampedCorrectionLimit = std::numeric_limits<double>::infinity();
         bool nsUndampedNext = false;
+
+        // A damped step is accepted before the residual at its result is ever
+        // evaluated -- that happens at the start of the next step -- so a step
+        // can land on a state whose residual is not finite, or at which the case
+        // throws. Retrying from that state cannot help: its residual does not
+        // depend on dt. So the loop keeps the state the last accepted damped
+        // step started from, the dt it took and the SER memory before it, and
+        // goes back there with a quarter of that dt. Carried across slices.
+        N_Vector nsLastGood = nullptr;
+        bool nsHaveLastGood = false;
+        double nsLastGoodDt = std::numeric_limits<double>::quiet_NaN();
+        double nsLastGoodFprev = std::numeric_limits<double>::quiet_NaN();
+        // Set by nlsSys when the case throws at a step's starting state.
+        bool nlsStartThrew = false;
+        // Set by steadyNewtonSolve when the step's result breaches a bound and
+        // Y was put back: the step is then not converged, and the loop treats
+        // it as it treats any other.
+        bool nlsBoundRejected = false;
+
+        // IDA's nonlinear solver when a variable is bounded: SUNDIALS' Newton,
+        // wrapped so that a converged corrector whose result breaches a bound is
+        // a recoverable convergence failure, and IDA cuts the step. IDA's own
+        // constraints (IDASetConstraints) bound only at zero, see only the
+        // coefficients -- not u* -- and project a small violation onto the
+        // bound rather than refusing it, so they cannot say what a bound here
+        // says. Null, and IDA's default Newton in place, when nothing is bounded.
+        SUNNonlinearSolver idaBoundedNLS = nullptr;
+        void attachBoundedNonlinearSolver();
+        // The wrapper itself, over a Newton sized like `like`; the caller owns it.
+        SUNNonlinearSolver makeBoundedNonlinearSolver(N_Vector like);
 
         // KINSOL's own settings. Every default here is what the code hardcoded
         // before they were configurable, so an unconfigured run is unchanged.
@@ -2139,6 +2216,10 @@ class SystemSolver
         {
             std::vector<Position> points;
             GlobalState states;
+            // (variable, point) for every value of a NonNegative variable that
+            // was negative and is handed to the physics as zero. Empty unless
+            // the case declares one; see clampForPhysics.
+            std::vector<std::pair<Index, Index>> clamped;
         };
 
         // The cell nodes the physics is evaluated at, and the state there with
@@ -2147,7 +2228,46 @@ class SystemSolver
         // evaluation -- the residual, the Jacobian, the adjoint and both sweeps
         // of the initial condition -- takes its nodes from here, so a case is
         // handed one set of cell points per level, never two.
-        PhysicsNodes physicsNodesAt(DGSoln const &Y, Time tEval);
+        //
+        // A NonNegative variable's u is handed over as max(u, 0) unless
+        // `clamp` is false, which only the objective's evaluations ask for: an
+        // objective reads the state as it is, as GFn always has.
+        PhysicsNodes physicsNodesAt(DGSoln const &Y, Time tEval, bool clamp = true);
+
+        // ---- Bounds.
+        //
+        // The NonNegative variables, from the spec, in the constructor: the
+        // clamp is a property of the case, and a solver that never runs (the
+        // discretisation estimate's enrichedSolver) must apply it too.
+        std::vector<Index> clampedVars;
+        // Resolved in initialize(), where the tolerances are known: the bounded
+        // variables, and each one's limit (eps, or -eps for NonNegative).
+        std::vector<Index> boundedVars;
+        std::vector<double> boundLimit; // indexed by variable
+        BoundCheck boundCheck = BoundCheck::Nodal;
+        long nBoundRejections = 0;
+        std::optional<BoundViolation> lastBoundBreach;
+        // The cell polynomial minimum for the basis nodes and for the star
+        // nodes, built on first use.
+        mutable std::unique_ptr<manta::PolynomialMinimum> basisMinimum, starMinimum;
+
+        // Replace a negative value of each NonNegative variable by zero, and
+        // record where; a no-op for a case that declares none.
+        void clampForPhysics(PhysicsNodes &nodes) const;
+        // The clamp's derivative is zero below zero: d(anything)/du is zeroed
+        // at every clamped point, so the Jacobian is that of the residual the
+        // physics was actually evaluated for.
+        void zeroClampedDerivatives(PhysicsNodes const &nodes, GlobalStateMatrix &dSigma,
+                                    GlobalStateMatrix &dSource, GlobalStateMatrix &dAux) const;
+        // Resolve the margins against the tolerances, and refuse what cannot
+        // run with a bound. Called from initialize()'s unconditional part.
+        void resolveBounds();
+        bool boundsActive() const { return !boundedVars.empty(); };
+        // Refuse to start a steady solve from a state that breaches a bound.
+        void checkSteadyStartWithinBounds();
+        // " n states were refused for a bound, the last ...", or nothing when
+        // none have been since the count was `since`.
+        std::string boundRejectionNote(long since) const;
 
         // How many of those nodes each cell has.
         Index physicsNodesPerCell() const { return superconvergent ? k + 2 : k + 1; }

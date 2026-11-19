@@ -427,6 +427,88 @@ homogeneous flux condition is unambiguous, but a nonzero :math:`c` with
 ``aFn(i, x)`` supplies the coefficient :math:`a_i` multiplying
 :math:`\partial_t u_i`, and defaults to 1.
 
+Bounding a variable
+-------------------
+
+Nothing in the discretisation keeps a variable positive. HDG is free to
+undershoot between and at the nodes, and a Newton step or an IDA corrector is
+free to land anywhere, including on a state whose residual is perfectly finite
+but whose density or temperature is negative. A variable the physics cannot be
+evaluated at, or must not be, below some value declares it:
+
+.. code-block:: cpp
+
+   FieldSpec n{"n", "density", "m^-3"};
+   n.bound = VariableBound::Positive;           // n > eps
+   FieldSpec T{"T", "temperature", "keV"};
+   T.bound = VariableBound::NonNegative;        // T >= -eps, read as max(T, 0)
+   T.boundEpsilon = 1e-6;
+
+.. code-block:: python
+
+   variables = [manta.Field("n", "density", bound=manta.Bound.Positive),
+                manta.Field("T", "temperature", bound=manta.Bound.NonNegative,
+                            bound_epsilon=1e-6)]
+
+``Uncontrolled``
+   The default. The solver never looks.
+
+``Positive``
+   :math:`u > \epsilon`. For a variable the case divides by or takes the
+   logarithm of. :math:`\epsilon` defaults to 0: strictly positive.
+
+``NonNegative``
+   :math:`u \ge -\epsilon`, and the physics is handed :math:`\max(u, 0)` in place
+   of :math:`u`. For a variable that may legitimately reach zero, where an
+   undershoot the solver cannot resolve must not reach the case.
+   :math:`\epsilon` defaults to the variable's ``AbsoluteTolerance``, the size
+   below which the solver cannot tell a value from zero.
+
+The bound is on :math:`u` only; :math:`q` and :math:`\sigma` are signed by
+nature. A margin with no bound, or a negative or non-finite one, is refused when
+the spec is validated.
+
+**Where it is checked: at the values the physics reads.** That is :math:`u_h` at
+the :math:`k+1` basis nodes, or :math:`u^*` at the :math:`k+2` star nodes under
+``Superconvergent = true`` --- a bound on the coefficients of :math:`u_h` would
+say nothing about the values the case is actually handed there. With
+``BoundCheck = "WholeCell"`` it is also checked over the whole of each cell's
+interpolant of those values, through the interpolant's exact minimum: the
+minimum of a polynomial on an interval is at an endpoint or at a real root of
+its derivative, and the roots come from the eigenvalues of the derivative's
+colleague matrix, so the check is exact up to round-off rather than sampled. It
+costs a small eigenproblem per bounded variable per cell per check, and is off
+by default. A ``Positive`` variable with a zero Dirichlet value cannot satisfy
+it, since the interpolant reaches the wall; declare such a variable
+``NonNegative``.
+
+**What is guaranteed: the physics is never evaluated at a state that breaches a
+bound, and no such state is accepted.** Every residual a solve asks for is
+checked first and refused as a recoverable failure if it breaches --- the
+physics is not called --- and every step is checked before it is accepted.
+:doc:`running` says what each solve does with a refusal. A breach that no step
+can cure, because the solution itself crosses the bound, ends the solve with the
+variable, the place and the value named. An initial condition or restart state
+that breaches a bound is refused before anything is evaluated.
+
+**The clamp has a derivative, and the Jacobian carries it.** Below zero
+:math:`\max(u, 0)` does not move, so every derivative in :math:`u` of the flux,
+the sources and the auxiliary rows is zeroed at a clamped point: the Jacobian is
+the derivative of the residual the case was actually evaluated for, which
+``Tests/UnitTests/VariableBoundTests.cpp`` checks against a finite difference of
+it. The clamp is applied in C++ before the state reaches the case, so a C++,
+Python, vectorised Python or ``manta.jax`` case sees it alike. It applies to the
+transport physics --- the flux, sources and auxiliary constraints, with their
+derivatives, and ``dSources_dScalars`` --- and not to an adjoint objective or a
+global scalar's ``ScalarG``, which read the state as it is.
+
+.. note::
+
+   ``NonNegative`` is refused with ``tauScaling = "Diffusive"``: the
+   stabilisation evaluates :math:`\kappa` at the faces, from the trace, and
+   differences it at the nodes, and neither applies the clamp. ``Positive`` has
+   no clamp and works with either.
+
 Auxiliary variables and global scalars
 --------------------------------------
 
