@@ -1,6 +1,10 @@
 # Error control on an objective, and the `NoisyTransportSystem` interface — design
 
 **Status:** draft, 2026-10-17. Branch `feat/noisy-transport-system`.
+**Superseded as the entry point by**
+`docs/superpowers/specs/2026-11-19-noisy-transport-plan.md`, which records
+where each phase stands. Phases 1-4 below are built and on `main`, so "What
+exists" describes the tree before them.
 **Builds on:** `docs/superpowers/notes/2026-10-17-noisy-flux-error-bars-notes.md`
 (the measurements this rests on) and
 `docs/superpowers/specs/2026-10-11-steady-state-termination-design.md`
