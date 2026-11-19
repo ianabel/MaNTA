@@ -13,6 +13,13 @@ class StellaratorConfig(eqx.Module):
     ECHCenter: float
     ECHPower: float
     ECHWidth: float
+    # Sources uniform in volume, from the axis to the edge, beside the
+    # Gaussians above: what make_source_height.py fits alongside each Gaussian
+    # so the integrated source, and so the edge flux, is exactly what the
+    # target profile carries. In the units of the Gaussian heights.
+    UniformParticleSource: float
+    UniformIonHeating: float
+    UniformElectronHeating: float
     EdgeTemperature: float
     EdgeDensity: float
     ADCoefficient: float
@@ -74,6 +81,9 @@ class StellaratorConfig(eqx.Module):
         ParticleSourceCenter=0.0,
         ParticleSourceWidth=0.1,
         ParticleSourceHeight=1.0,
+        UniformParticleSource=0.0,
+        UniformIonHeating=0.0,
+        UniformElectronHeating=0.0,
         ADCoefficient=0.0,
         rhoUpper=1.0,
         T0=None,
@@ -104,6 +114,9 @@ class StellaratorConfig(eqx.Module):
         self.ECHCenter = ECHCenter
         self.ECHPower = ECHPower
         self.ECHWidth = ECHWidth
+        self.UniformParticleSource = UniformParticleSource
+        self.UniformIonHeating = UniformIonHeating
+        self.UniformElectronHeating = UniformElectronHeating
         self.EdgeTemperature = EdgeTemperature
         self.EdgeDensity = EdgeDensity
         self.ADCoefficient = ADCoefficient
@@ -218,6 +231,9 @@ STELLARATOR_UNITS = {
     "ParticleSourceHeight": "particle_rate",
     "NBIPower": "heat_rate",
     "ECHPower": "heat_rate",
+    "UniformParticleSource": "particle_rate",
+    "UniformIonHeating": "heat_rate",
+    "UniformElectronHeating": "heat_rate",
     "ADCoefficient": "rate",
     # The Er row is current balance: J is in CurrentNormalization and Er in
     # T0eV volts per unit rho, so D_E is a current per Er and the inertia a

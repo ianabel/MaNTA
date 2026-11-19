@@ -75,6 +75,11 @@ def ParticleSource(state: StellaratorState, x, t, vp, params: StellaratorParams)
     )
 
 
+@register_source(Channel.Density)
+def UniformParticleSource(state, x, t, vp, params):
+    return params.config.UniformParticleSource + 0.0 * x
+
+
 @register_sink(Channel.Density)
 def FusionParticleLosses(state, x, t, vp, params):
     return (
@@ -100,6 +105,16 @@ def ECHHeating(state, x, t, vp, params):
     return _gaussian(
         x, params.config.ECHPower, params.config.ECHCenter, params.config.ECHWidth
     )
+
+
+@register_source(Channel.IonEnergy)
+def UniformIonHeating(state, x, t, vp, params):
+    return params.config.UniformIonHeating + 0.0 * x
+
+
+@register_source(Channel.ElectronEnergy)
+def UniformElectronHeating(state, x, t, vp, params):
+    return params.config.UniformElectronHeating + 0.0 * x
 
 
 # electrons to ions: a source for the ions and the same sink for the electrons
