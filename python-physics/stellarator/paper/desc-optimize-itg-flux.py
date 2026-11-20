@@ -549,6 +549,10 @@ obj_mirror_ratio = ObjectiveFromUser(
     jac_chunk_size=jac_chunk_size,
 )
 
+# objective_from_user_fun's rows under pressure_consistency: 1/g, the
+# pressure residual at every MaNTA node, and the edge rows at RHO_EDGE
+manta_objective_rows = 1 + len(points_np) + len(RHO_EDGE) if pressure_consistency else 1
+
 # as in desc-optimize-stored-energy.py
 stored_energy_weight = 20.0
 max_it = 80
@@ -568,9 +572,14 @@ objectives = [
         weight=stored_energy_weight,
         grid=yancc_desc_grid,
         deriv_mode="rev",  # a scalar: see jac_chunk_size above
-        # with the pressure residual it is a vector: a row at a time keeps the
-        # backward pass through DESC's geometry and the ITG proxy small
-        **(dict(jac_chunk_size=1) if pressure_consistency else {}),
+        # with the pressure residual it is a vector, and every row in one
+        # chunk: DESC runs more rows than jac_chunk_size as an eager
+        # lax.scan over a fresh pullback closure, which it traces and
+        # compiles again on every Jacobian -- with the ITG proxy's backward
+        # pass inside, minutes per iteration (plus writing it to the
+        # persistent compilation cache). One chunk is one eager vmapped
+        # pullback, at the price of every row's cotangent at once.
+        **(dict(jac_chunk_size=manta_objective_rows) if pressure_consistency else {}),
     ),
 ]
 
