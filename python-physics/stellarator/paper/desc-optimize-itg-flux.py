@@ -30,7 +30,14 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 sys.path.append("..")
 from stellarator_multichannel import StellaratorTransport
 from objective import make_objective, ObjectiveFromUserWithParams, ObjectiveHistory
-from itg_wrapper import make_itg_builder, itg_at, with_itg, itg_rho_at_nodes
+from itg_wrapper import (
+    make_itg_builder,
+    itg_at,
+    with_itg,
+    itg_rho_at_nodes,
+    itg_field_lines,
+    ITG_N_ALPHA,
+)
 from config import rescale_config, field_norm_from_eq
 from yancc_wrapper import yancc_data
 
@@ -148,6 +155,14 @@ npoints = 9
 degree = 4
 base = 1.9
 tau = 0.2
+
+# Field lines the ITG flux is averaged over (itg_field_lines: midpoints of
+# the whole circle, in +-alpha pairs, since the network is not
+# reflection-invariant). One line is exploitable: optimising against
+# alpha = 0 alone cut the network's core Q there 3x while its surface
+# average fell 1.4x. ITG_N_ALPHA (8, 4 per half-circle) is within 5% of a
+# converged average, 16 within 1.6%. [0.0] restores the single alpha = 0 line.
+itg_alpha = itg_field_lines(ITG_N_ALPHA)
 
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 nodes = np.concatenate(([0, 0.05, 0.15, 0.3], nodes, [rho_upper]))
@@ -319,6 +334,7 @@ itg_builder = make_itg_builder(
     eq if desc_resolution is not None else eq_init,
     rho_upper,
     rho=itg_rho_at_nodes(points),
+    alpha=itg_alpha,
 )
 
 config = normalized({"Stellarator": st_config, "Solver": initial_solver_config})
@@ -382,7 +398,7 @@ elif pressure_consistency:
     # the ITG proxy holds the pressure profile's layout from the equilibrium it
     # was built on, and it has just changed
     itg_builder = make_itg_builder(
-        st_config, eq, rho_upper, rho=itg_rho_at_nodes(points)
+        st_config, eq, rho_upper, rho=itg_rho_at_nodes(points), alpha=itg_alpha
     )
 if pressure_consistency:
     # Pa per unit of the pressure residual (see pressure_error_metric)

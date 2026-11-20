@@ -99,6 +99,11 @@ A_OVER_LN_RANGE = (-0.5, 9.0)
 # log Q was clipped at this value for pre_method = 2
 _LOG_Q_CLIP = {2: -2.0}
 
+# Field lines build_itg_proxy averages over by default (itg_field_lines). Not
+# one: the stored-energy optimisation against alpha = 0 alone cut the
+# network's core Q there 3x while its average over the surface fell 1.4x.
+ITG_N_ALPHA = 8
+
 
 def _detect_pre_method(ensemble_csv, n_ensemble):
     """The preprocessing method NNITGProxy will pick for this ensemble.
@@ -309,6 +314,11 @@ def build_itg_proxy(
 ):
     """Declare and build the NNITGProxy an `ITGFluxBuilder` reads from.
 
+    `alpha` are the field lines Q is averaged over, `itg_field_lines(
+    ITG_N_ALPHA)` when None -- deliberately not DESC's default of the single
+    line alpha = 0, which an optimiser can game (see `itg_field_lines`). Pass
+    `alpha=0.0` for that single line, e.g. to compare with a GX run on it.
+
     Everything expensive and equilibrium-independent happens here, once: the
     weights are loaded, the transforms built, and the flux-tube extent solved
     for. `rho` are the tabulation points -- increasing, and off the axis, where
@@ -335,10 +345,13 @@ def build_itg_proxy(
     if np.any(np.diff(rho) <= 0):
         raise ValueError("rho must be strictly increasing")
 
+    if alpha is None:
+        alpha = itg_field_lines(ITG_N_ALPHA)
+
     obj = NNITGProxy(
         eq=eq,
         rho=rho,
-        alpha=alpha,
+        alpha=np.atleast_1d(np.asarray(alpha, dtype=float)),
         model_path=model_path,
         ensemble_dir=ensemble_dir,
         ensemble_csv=ensemble_csv,
@@ -471,6 +484,37 @@ def itg_rho_at_nodes(points, rho_min=ITG_RHO_MIN):
     the shear-normalised GX coefficients are singular on the axis.
     """
     return np.unique(np.clip(np.asarray(points, dtype=float), rho_min, None))
+
+
+def itg_field_lines(n):
+    """`n` field-line labels for a surface-averaged ITG flux, as `alpha`.
+
+    Pass the result as `make_itg_builder(..., alpha=...)`; `ITGFlux._Q` then
+    averages Q over them, as `NNITGProxy.compute` does. One field line is not
+    enough to optimise against: on the stored-energy optimum with the linear
+    test flux the network's core Q at alpha = 0 fell 3x while its average
+    over alpha fell 1.4x, the turbulence having moved to other field lines,
+    which the optimiser could not see.
+
+    The labels are the midpoints of n equal intervals of the whole circle
+    [0, 2 pi), so that the plain mean `_Q` takes is the midpoint rule, and for
+    even n they come in pairs +-alpha. That is deliberate. In a
+    stellarator-symmetric equilibrium the tube at -alpha is the tube at alpha
+    mirrored (z reversed, gbdrift0 and gds21 negated), and GX's Q is the same
+    for both; but the network is cyclic-invariant only, not
+    reflection-invariant, and gives the two Q differing by 20-45% on the
+    eq_itg_flux_no_nc family. Half the circle would therefore not cover the
+    rest by symmetry: the full circle averages each tube with its mirror.
+
+    Convergence of the average on that family's first and last equilibria at
+    fixed gradients: 4 lines per half-circle within 1% at most radii and 5%
+    at worst, 8 within 1.6%, against 16. `build_itg_proxy` uses
+    `ITG_N_ALPHA` of them when not given `alpha`. n = 1 is pi, not 0 -- pass
+    `alpha=0.0` for the single line the proxy used to be built on.
+    """
+    if n < 1:
+        raise ValueError(f"need at least one field line, got n = {n}")
+    return (np.arange(n) + 0.5) * 2.0 * np.pi / n
 
 
 def make_itg_builder(

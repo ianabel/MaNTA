@@ -62,7 +62,7 @@ from desc.optimize._constraint_wrappers import ProximalProjection
 import manta as MaNTA
 import objective as objective_module
 from objective import ObjectiveFromUserWithParams, make_objective
-from itg_wrapper import ITGFluxBuilder, build_itg_proxy
+from itg_wrapper import ITGFluxBuilder, build_itg_proxy, itg_field_lines
 from fd_check_objective import DATA_NAMES, YANCC_RES, load_eq, make_config
 
 MODEL_ROOT = os.environ.get(
@@ -80,12 +80,23 @@ def parse_args():
     p.add_argument("--N", type=int, default=None, help="DESC grid N (default eq.N_grid)")
     p.add_argument("--itg-rho", type=int, default=8, help="ITG table points in [0.1, 1]")
     p.add_argument("--n-ensemble", type=int, default=3)
+    p.add_argument("--n-alpha", type=int, default=None,
+                   help="field lines the ITG flux averages over (itg_field_lines); "
+                   "default itg_wrapper.ITG_N_ALPHA, 0 for the single alpha = 0 line")
     p.add_argument("--mode-MN", default="1,1", help="boundary R mode M,N to perturb")
-    p.add_argument("--eps", type=float, default=1e-4, help="relative perturbation size")
+    p.add_argument("--eps", type=float, default=1e-5,
+                   help="relative perturbation size. The network is only piecewise "
+                   "smooth in the geometry (max pooling), so a larger step can "
+                   "cross a pooling switch and the difference stops being a "
+                   "derivative: with 8 field lines and ITGScale 1, params agreed "
+                   "to 6.5e-4 at 1e-5, 5.5e-3 at 1e-4 and 9.7e-3 at 1e-3")
     p.add_argument("--tol", type=float, default=1e-3, help="relative agreement required")
     p.add_argument("--ss-tol", type=float, default=1e-10, help="primal SteadyStateTolerance")
     p.add_argument("--evolve-density", action="store_true")
-    p.add_argument("--itg-scale", type=float, default=1e-2, help="ITGScale")
+    p.add_argument("--itg-scale", type=float, default=1.0,
+                   help="ITGScale. Below 1 the ITG term is a small share of the "
+                   "transport, and the proximal JVP's ITG part (0.3%% of it at "
+                   "1e-2) falls below what the check can resolve")
     p.add_argument("--objective", default="StoredEnergy",
                    help="StellaratorTransport objective G, e.g. ITGHeatFlux")
     p.add_argument("--sweep", type=int, default=7,
@@ -339,9 +350,17 @@ def main():
         ensemble_dir=os.path.join(MODEL_ROOT, "cyclic_invariant_models"),
         ensemble_csv=os.path.join(MODEL_ROOT, "deephyper_exp", "results.csv"),
         n_ensemble=args.n_ensemble,
+        alpha=(
+            None if args.n_alpha is None
+            else 0.0 if args.n_alpha == 0
+            else itg_field_lines(args.n_alpha)
+        ),
     )
     builder = ITGFluxBuilder(proxy)
-    print(f"ITG proxy built ({time.time() - t0:.1f} s)")
+    print(
+        f"ITG proxy built on {len(proxy.constants['alpha'])} field line(s) "
+        f"({time.time() - t0:.1f} s)"
+    )
 
     # jax.jvp below, and LAST_JVP_PARTS, need the custom JVP
     manta_objective = make_objective(config, yancc_res=YANCC_RES, mode="fwd")
