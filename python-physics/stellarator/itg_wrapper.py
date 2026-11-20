@@ -307,7 +307,7 @@ def build_itg_proxy(
     n_ensemble=10,
     target_flux_tube_length=75.4,
     npoints=96,
-    nz_internal=1001,
+    nz_internal=201,
     solve_length_at_compute=False,
     use_jit=True,
     verbose=0,
@@ -318,6 +318,17 @@ def build_itg_proxy(
     ITG_N_ALPHA)` when None -- deliberately not DESC's default of the single
     line alpha = 0, which an optimiser can game (see `itg_field_lines`). Pass
     `alpha=0.0` for that single line, e.g. to compare with a GX run on it.
+
+    `nz_internal` is the points per tube DESC computes the geometry on before
+    resampling to the network's `npoints`; memory and time go linearly with
+    it, times the field lines. 201, not DESC's 1001: on the eq_itg_flux_no_nc
+    optimum (39 radii, 4 lines) it moves the 96-point signals by 4.2e-4 of
+    their scale at worst (gbdrift0) and Q by 1.7e-4 per tube, 4.4e-5 averaged
+    over alpha, while the build's peak fell 14.2 -> 5.8 GB (301: 1.3e-4,
+    3.9e-5, 6.8 GB). Both are far below the network's own error. At
+    1001, 8 lines and every MaNTA node, the reverse-mode gradient held the
+    geometry's intermediates through the MaNTA solve and ran a GPU out of
+    memory.
 
     Everything expensive and equilibrium-independent happens here, once: the
     weights are loaded, the transforms built, and the flux-tube extent solved
