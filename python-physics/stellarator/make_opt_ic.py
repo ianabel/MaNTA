@@ -53,7 +53,7 @@ st_config = {
     "n0": 0.5,
     "evolveDensity": True,
     "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
-    "ITGScale": 1e-2,  # gyro-Bohm is large in these units; scales the prediction
+    "ITGScale": 1.0,  # 1 is the network's prediction, as transported
 }
 
 rho_upper = 1.0

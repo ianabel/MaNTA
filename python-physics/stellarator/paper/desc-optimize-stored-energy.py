@@ -100,7 +100,7 @@ def make_config(Spi=300.0, Sn=1.2):
         "ErDiffusion": 1e-6,
         "ErInertia": 5e-6,
         "useITGProxy": False,  # NN ITG heat flux (itg_wrapper.py); needs torch + ITG_MODEL_DIR
-        "ITGScale": 1.0,  # gyro-Bohm is large in these units; scales the prediction
+        "ITGScale": 1.0,  # 1 is the network's prediction, as transported
         "useBatching": True,
         "batch_size": 24,
         "nchunks": 2,

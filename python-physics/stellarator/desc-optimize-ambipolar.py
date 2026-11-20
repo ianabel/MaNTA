@@ -85,7 +85,7 @@ st_config = {
     # itg-proxy model data (ITG_MODEL_DIR)
     "useITGProxy": False,
     # gyro-Bohm fluxes are large in MaNTA's units; turn the prediction down
-    "ITGScale": 1e-2,
+    "ITGScale": 1.0,
 }
 
 rho_upper = 1.0
