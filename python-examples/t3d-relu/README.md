@@ -128,23 +128,31 @@ corrections are not `J^-1 F` (0.83 against 0.18 at 3e-3).
 
 With noise, `SuppressAlgebraicError = true` is required, so that only u is
 tested: sigma is an algebraic unknown equal to the flux, its correction carries
-the +-20% noise at full strength, and no step damps it. With it:
+the +-20% noise at full strength, and no step damps it. With it (measured at
+`1b7f5d0`, after `main`'s steady-solver fixes of November 2026 -- see below):
 
 | Jacobian | rtol = atol | converged | box calls, median (max) | noise error n | p_H | p_e |
 |---|---|---|---|---|---|---|
-| control | 1e-2 | 8/8 | 14 (16) | 3.4e-3 (8.3e-3) | 5.2e-3 (5.7e-2) | 1.4e-2 (5.8e-2) |
-| control | 3e-3 | 2/8 | 221 (229) | 3.2e-4 (3.1e-3) | 6.3e-4 (7.3e-3) | 6.6e-4 (4.4e-3) |
-| t3d, f = 0.5 | 1e-2 | 8/8 | 57 (132) | 1.0e-2 (1.8e-2) | 1.1e-2 (1.4e-2) | 3.0e-2 (1.2e-1) |
-| t3d, f = 0.5 | 3e-3 | 8/8 | 67 (177) | 1.5e-2 (1.8e-2) | 1.2e-2 (1.5e-2) | 7.8e-3 (3.0e-2) |
+| control | 1e-2 | 8/8 | 14 (20) | 2.9e-3 (6.3e-3) | 4.3e-3 (5.7e-2) | 1.4e-2 (3.1e-2) |
+| control | 3e-3 | 4/8 | 180 (240) | 5.4e-4 (3.1e-3) | 1.5e-3 (7.3e-3) | 2.0e-3 (5.7e-3) |
+| t3d, f = 0.5 | 1e-2 | 8/8 | 57 (140) | 1.2e-2 (1.8e-2) | 1.1e-2 (1.4e-2) | 3.3e-2 (1.2e-1) |
+| t3d, f = 0.5 | 3e-3 | 8/8 | 127 (513) | 1.2e-2 (1.8e-2) | 1.1e-2 (1.4e-2) | 5.5e-3 (1.2e-2) |
 
 So at 1e-2 the noisy solve converges every seed, for a fifth of T3D's 68
 calls (exact derivatives) or about as many (T3D's own Jacobian), at errors of
 the order of T3D's below. At 3e-3 with exact derivatives the test asks for a
-correction at the level the noise itself produces, and only two seeds of eight
-converge -- the noise floor the design's phase 4 (a `NoiseLimited` outcome
-and iterate averaging) is for. T3D's Jacobian "converges" there in every seed
-only because its corrections understate the distance, as the noiseless row at
-3e-3 shows.
+correction at the level the noise itself produces, and only half the seeds
+converge -- the noise floor that a noise-aware stopping test is for
+(`README-NOISE.md` at the repository root). T3D's Jacobian "converges" there in
+every seed only because its corrections understate the distance, as the
+noiseless row at 3e-3 shows.
+
+The 3e-3 rows moved with `main`'s steady-solver changes in November 2026 (an
+undamped solve retried when continuation is capped, a damped step undone when
+its result has no residual): before them two seeds of eight converged with
+exact derivatives, and T3D's Jacobian took a median of 67 calls. Which change
+moved them was not isolated. Every other row, and every `Residual` result
+above, reproduced exactly.
 
 **The error the noise itself causes is much smaller.** Frozen -- the same draw on
 every call -- a +-20% particle-flux error moves n by 3-4e-3, and a constant

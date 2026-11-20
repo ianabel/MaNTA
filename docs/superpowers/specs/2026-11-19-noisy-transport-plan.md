@@ -372,9 +372,9 @@ calls, where T3D needs 1352. Under noise:
   Continuation follows Kelley & Keyes [5] and Coffey, Kelley & Keyes [6].
 * At a tolerance of 1e-2, every seed converges, for a fifth of T3D's 68 calls
   with exact derivatives, or about as many with T3D's own Jacobian.
-* At 3e-3 with exact derivatives, only 2 of 8 seeds converge: the test asks
-  for a correction smaller than the noise produces. This is the floor that
-  phase 6's stopping test is designed for.
+* At 3e-3 with exact derivatives, only about half the seeds converge: the
+  test asks for a correction smaller than the noise produces. This is the floor
+  that phase 6's stopping test is designed for.
 
 ## Design decisions that were settled by measurement
 
