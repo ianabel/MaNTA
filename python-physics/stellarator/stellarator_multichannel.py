@@ -544,27 +544,36 @@ def per_process_files(solver_config):
 
     Every process runs MaNTA and writes its output, so on a shared filesystem
     they would all write one file. Process 0 keeps the configured names, so
-    what a single-process run would write is where it always was. A restart
-    file is read from the process's own copy when it has one -- the primal
-    run it was written by was this process's -- and from the named file
-    otherwise, which every process can read at once.
+    what a single-process run would write is where it always was.
+
+    Every process *reads* its restart from process 0's file, the configured
+    `RestartFile`, never from its own `_p<i>` copy. The processes run one
+    solve redundantly and shard its physics batches between them, so they
+    must start from one state; reading their own copies, a stale `_p<i>`
+    file left by an earlier job (another equilibrium, a killed run) was
+    preferred over the fresh shared one, and the processes fed different
+    states into the same collectives -- a silently mixed run or a hang.
+
+    Reading process 0's file needs process 0 to have finished writing it,
+    which nothing else orders: a process that reaches its next run first
+    would read the previous state or a half-written file. Hence the barrier,
+    which every process reaches because every one builds and reconfigures
+    the same cases in the same order.
     """
-    i = jax.process_index()
-    if jax.process_count() == 1 or i == 0:
+    if jax.process_count() == 1:
         return solver_config
     out = dict(solver_config)
+    if out.get("restart"):
+        # MaNTA falls back to OutputFilename + ".restart.nc" (PyRunner.cpp),
+        # which below becomes this process's own copy: name process 0's
+        if not out.get("RestartFile") and "OutputFilename" in out:
+            out["RestartFile"] = out["OutputFilename"] + ".restart.nc"
+        multihost_utils.sync_global_devices("stellarator: restart file written")
+    i = jax.process_index()
+    if i == 0:
+        return out
     if "OutputFilename" in out:
         out["OutputFilename"] = f"{out['OutputFilename']}_p{i}"
-    restart = out.get("RestartFile")
-    if restart:
-        stem, suffix = (
-            (restart[: -len(".restart.nc")], ".restart.nc")
-            if restart.endswith(".restart.nc")
-            else os.path.splitext(restart)
-        )
-        own = f"{stem}_p{i}{suffix}"
-        if os.path.exists(own):
-            out["RestartFile"] = own
     return out
 
 
