@@ -28,6 +28,7 @@ Not run. `desc`, `yancc` and `interpax` are not installable in the environment
 this repository is tested in; see the README.
 """
 
+import itertools
 import os
 
 # These two used to be set by FFIRunner at import. They moved here when that
@@ -538,6 +539,39 @@ def check_batch_size(batch_size, use_batching, ndevices=None):
         )
 
 
+# one barrier id per restart read: every process reads in the same order, so
+# the counters agree, and no id is ever reused
+_restart_barriers = itertools.count()
+
+# how long a process waits at the barrier for the slowest one to finish the
+# run before (the processes do the same work, so this is a hang detector)
+RESTART_BARRIER_TIMEOUT_MS = 60 * 60 * 1000
+
+
+def _restart_barrier():
+    """Block until every process reaches the same restart read.
+
+    A host-level barrier on jax.distributed's coordination service, not
+    multihost_utils.sync_global_devices: that one is an all-gather of device
+    arrays and fails on tracers, and the restart is read while DESC traces
+    the objective (ObjectiveFromUser.build runs it under jax.eval_shape) as
+    well as eagerly. The client is a private attribute of jax.distributed;
+    a JAX without it fails here by name rather than racing the read.
+    """
+    from jax._src import distributed
+
+    client = distributed.global_state.client
+    if client is None:
+        raise RuntimeError(
+            "several JAX processes but no jax.distributed client to hold the "
+            "restart barrier on"
+        )
+    client.wait_at_barrier(
+        f"stellarator-restart-{next(_restart_barriers)}",
+        RESTART_BARRIER_TIMEOUT_MS,
+    )
+
+
 def per_process_files(solver_config):
     """`solver_config` with each process past the first writing files of its
     own: `name_p<i>.nc` and so on.
@@ -558,7 +592,8 @@ def per_process_files(solver_config):
     which nothing else orders: a process that reaches its next run first
     would read the previous state or a half-written file. Hence the barrier,
     which every process reaches because every one builds and reconfigures
-    the same cases in the same order.
+    the same cases in the same order (`_restart_barrier`, a host barrier, so
+    it holds under DESC's tracing too).
     """
     if jax.process_count() == 1:
         return solver_config
@@ -568,7 +603,7 @@ def per_process_files(solver_config):
         # which below becomes this process's own copy: name process 0's
         if not out.get("RestartFile") and "OutputFilename" in out:
             out["RestartFile"] = out["OutputFilename"] + ".restart.nc"
-        multihost_utils.sync_global_devices("stellarator: restart file written")
+        _restart_barrier()
     i = jax.process_index()
     if i == 0:
         return out
