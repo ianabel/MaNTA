@@ -149,6 +149,41 @@ BOOST_AUTO_TEST_CASE( nodal_basis_test )
 
 }
 
+// ProjectOntoBasis runs one Gauss rule per basis function over the same cell,
+// so it would ask for f at the same points k + 1 times; it asks once per point,
+// and returns the k + 1 integrals taken directly -- to round-off, since the
+// compiler may contract the two loops' products into fused multiply-adds
+// differently.
+template <class Basis>
+void checkProjectionAsksOncePerPoint(Basis const &basis, Index k)
+{
+    Interval const I(0.3, 0.55);
+    int calls = 0;
+    std::function<double(double)> f = [&calls](double x)
+    {
+        ++calls;
+        return std::exp(x) * std::sin(7.0 * x);
+    };
+    Vector const projected = basis.ProjectOntoBasis(I, f);
+
+    BOOST_TEST(calls == 30); // boost::math::quadrature::gauss<double, 30>
+    // The reference is the projection as it was written before: the same
+    // std::function, called afresh at every point of every basis function's rule.
+    double const scale = projected.cwiseAbs().maxCoeff();
+    for (Index i = 0; i < k + 1; i++)
+    {
+        auto u = [&](double x) { return f(x) * basis.Evaluate(I, i, x); };
+        BOOST_TEST(std::abs(projected(i) - Basis::integrator.integrate(u, I.x_l, I.x_u)) <= 1e-14 * scale);
+    }
+}
+
+BOOST_AUTO_TEST_CASE( projection_asks_for_each_point_once )
+{
+    checkProjectionAsksOncePerPoint(NodalBasis::getBasis(4), 4);
+    checkProjectionAsksOncePerPoint(LegendreBasis::getBasis(3), 3);
+    checkProjectionAsksOncePerPoint(ChebyshevBasis::getBasis(3), 3);
+}
+
 BOOST_AUTO_TEST_CASE( dg_approx_construction )
 {
     Grid testGrid( 0.0, 1.0, 4 );
