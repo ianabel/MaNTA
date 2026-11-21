@@ -10,7 +10,7 @@
 
 set -e
 
-SUNDIALS_VERSION=${SUNDIALS_VERSION:-7.5.0}
+SUNDIALS_VERSION=${SUNDIALS_VERSION:-7.9.0}
 SUNDIALS_ROOT=$(realpath "${SUNDIALS_ROOT:-./sundials}")
 SUNDIALS_URL="https://github.com/LLNL/sundials/releases/download/v${SUNDIALS_VERSION}/sundials-${SUNDIALS_VERSION}.tar.gz"
 

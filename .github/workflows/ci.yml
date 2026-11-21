@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SUNDIALS_VERSION: 7.5.0
+  SUNDIALS_VERSION: 7.9.0
 
 jobs:
   # One job per compiler, because conformance bugs and gcc-specific flag
