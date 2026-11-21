@@ -366,6 +366,41 @@ BOOST_AUTO_TEST_CASE(a_mixed_end_receives_its_datum)
     BOOST_TEST(a.sys.L_global(cells) == -0.5);
 }
 
+// For a Python case every boundary value is a call into the interpreter, and
+// the trace rows read each Dirichlet value 2(k + 1) times. They are asked for
+// once per variable and end; the tests around this one check what they fill.
+class CountedBoundaries : public MixedDiffusion
+{
+public:
+    using MixedDiffusion::MixedDiffusion;
+    Value LowerBoundary(Index i, Time t) const override
+    {
+        ++lowerCalls;
+        return MixedDiffusion::LowerBoundary(i, t);
+    }
+    Value UpperBoundary(Index i, Time t) const override
+    {
+        ++upperCalls;
+        return MixedDiffusion::UpperBoundary(i, t);
+    }
+    mutable int lowerCalls = 0, upperCalls = 0;
+};
+
+BOOST_AUTO_TEST_CASE(boundary_data_asks_for_each_value_once)
+{
+    for (auto kind : {BoundaryKind::Dirichlet, BoundaryKind::Neumann})
+    {
+        CountedBoundaries sys(kind, kind);
+        sys.cLower = 0.75;
+        sys.cUpper = -0.5;
+        Assembled a(sys, k, cells);
+        sys.lowerCalls = sys.upperCalls = 0;
+        a.sys.updateBoundaryConditions(0.3);
+        BOOST_TEST(sys.lowerCalls == 1);
+        BOOST_TEST(sys.upperCalls == 1);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(the_datum_matches_neumanns_exactly)
 {
     // Same statement as the matrix equivalence, for the right-hand side: with
