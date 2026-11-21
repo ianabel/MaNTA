@@ -2159,10 +2159,19 @@ void SystemSolver::updateBoundaryConditions(double t) { assembleBoundaryData(t, 
 // boundary terms contribute to dF/dt at fixed state.
 void SystemSolver::assembleBoundaryData(double t, bool timeDerivative)
 {
-    auto lower = [&](Index var)
-    { return timeDerivative ? problem->dLowerBoundary_dt(var, t) : problem->LowerBoundary(var, t); };
-    auto upper = [&](Index var)
-    { return timeDerivative ? problem->dUpperBoundary_dt(var, t) : problem->UpperBoundary(var, t); };
+    // Each variable's boundary value once, not once per basis function and
+    // term below: for a Python case every one is a call into the interpreter,
+    // 2(k + 1) of them per Dirichlet variable and end on every residual.
+    // Every variable reaches one of the two branches at each end, so this asks
+    // for exactly the values the loops read.
+    Vector gLower(nVars), gUpper(nVars);
+    for (Index var = 0; var < nVars; var++)
+    {
+        gLower(var) = timeDerivative ? problem->dLowerBoundary_dt(var, t) : problem->LowerBoundary(var, t);
+        gUpper(var) = timeDerivative ? problem->dUpperBoundary_dt(var, t) : problem->UpperBoundary(var, t);
+    }
+    auto lower = [&](Index var) { return gLower(var); };
+    auto upper = [&](Index var) { return gUpper(var); };
 
     L_global.setZero();
     for (unsigned int i = 0; i < nCells; i++)
