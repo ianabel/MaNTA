@@ -115,6 +115,9 @@ package SUNDIALS 7:
 cmake --preset default -DSUNDIALS_ROOT=/path/to/sundials/install
 ```
 
+`-DSUNDIALS_DIR=` works too, naming either that install prefix or a SUNDIALS
+build directory.
+
 ...unless you used the bundled `./build_sundials`, which installs into
 `./sundials/install`; the configure step looks there on its own, so a checkout
 that ran it needs no arguments at all.
