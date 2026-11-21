@@ -13,27 +13,19 @@ int MatZero( SUNMatrix mat )
 void MatDestroy( SUNMatrix mat  )
 {
 	delete reinterpret_cast<SunMatrixWrapper*>( mat->content );
-	mat->ops = nullptr;
+	mat->content = nullptr;
 	SUNMatFreeEmpty( mat );
 }
 
-struct _generic_SUNMatrix_Ops MatOps {
-	.getid = MatGetID,
-	.clone = nullptr,
-	.destroy = MatDestroy,
-	.zero = MatZero,
-	.copy = nullptr,
-	.scaleadd = nullptr,
-	.scaleaddi = nullptr,
-	.matvecsetup = nullptr,
-	.matvec = nullptr,
-	.space = nullptr,
-};
-
 SUNMatrix SunMatrixNew(SUNContext ctx)
 {
+	// As SunLinSolWrapper::SunLinSol: the operations this matrix provides, on
+	// the table SUNMatNewEmpty allocated, so a member SUNDIALS adds or drops
+	// (`space`, in 8.0) changes nothing here.
 	SUNMatrix mat = SUNMatNewEmpty(ctx);
 	mat->content = new SunMatrixWrapper();
-	mat->ops = &MatOps;
+	mat->ops->getid = MatGetID;
+	mat->ops->destroy = MatDestroy;
+	mat->ops->zero = MatZero;
 	return mat;
 }
