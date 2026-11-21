@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <utility>
+#include <functional>
 #include <map>
+#include <vector>
 
 #include "Types.hpp"
 #include "gridStructures.hpp"
@@ -18,6 +20,33 @@
 
 
 class Interval;
+
+// f, remembering its value at each point it has been asked for. ProjectOntoBasis
+// runs the same Gauss rule over the cell once per basis function, so without
+// this it asks for f at the same 30 points k + 1 times -- and f is a case's
+// InitialValue, InitialDerivative or InitialAuxValue, which for a Python case is
+// a call into the interpreter each time, and for some an iterative solve.
+// Lookup is by exact equality, which is what the rule's repeated abscissae give,
+// and every integral is the sum it always was over the values f returns there.
+class RememberedFunction
+{
+public:
+    explicit RememberedFunction(std::function<double(double)> const &f) : f(f) {}
+
+    double operator()(double x) const
+    {
+        for (auto const &[at, value] : seen)
+            if (at == x)
+                return value;
+        const double value = f(x);
+        seen.emplace_back(x, value);
+        return value;
+    }
+
+private:
+    std::function<double(double)> const &f;
+    mutable std::vector<std::pair<double, double>> seen;
+};
 
 class LegendreBasis
 {
@@ -98,9 +127,10 @@ class LegendreBasis
         Vector ProjectOntoBasis( Interval const& I, std::function<double(double)> f ) const
         {
             Vector out( k + 1 );
+            RememberedFunction const fx( f );
             for( Index i = 0; i < k + 1; i++ )
             {
-                auto u = [&](double x) { return f(x) * Evaluate(I, i, x); };
+                auto u = [&](double x) { return fx(x) * Evaluate(I, i, x); };
                 out( i ) = integrator.integrate(u, I.x_l, I.x_u);
             }
             return out;
@@ -267,9 +297,10 @@ class ChebyshevBasis
         Vector ProjectOntoBasis( Interval const& I, std::function<double(double)> f ) const
         {
             Vector out( k + 1 );
+            RememberedFunction const fx( f );
             for( Index i = 0; i < k + 1; i++ )
             {
-                auto u = [&](double x) { return f(x) * Evaluate(I, i, x); };
+                auto u = [&](double x) { return fx(x) * Evaluate(I, i, x); };
                 out( i ) = integrator.integrate(u, I.x_l, I.x_u);
             }
             return out;
@@ -561,8 +592,9 @@ class NodalBasis
         Vector ProjectOntoBasis( Interval const& I, std::function<double(double)> f ) const
         {
             Vector out( k + 1 );
+            RememberedFunction const fx( f );
             for( Index i = 0; i < k + 1; i++ ) {
-                auto u = [&](double x) { return f(x) * Evaluate(I, i, x); };
+                auto u = [&](double x) { return fx(x) * Evaluate(I, i, x); };
                 out( i ) = integrator.integrate(u, I.x_l, I.x_u);
             }
             return out;
