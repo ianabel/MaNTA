@@ -144,6 +144,17 @@ explicitly whenever `OMP_NUM_THREADS` is set, and note the two want opposite
 things: BLAS threading is the *only* thing that helps the k=4 case (1.39x) and it
 hurts the k=10 one (1.7x slower).
 
+**A Python case wants `MKL_NUM_THREADS=1`, without `MANTA_OPENMP` too.** The
+dispatching `libblas.so.3` is `libmkl_rt.so` here, and MKL threads by default,
+on a team of one thread per physical core whose idle members spin. MaNTA's own
+products are far too small to gain from it (per-cell blocks of a few dozen rows),
+and in a process that also runs JAX, whose XLA runtime has its own thread pool,
+the spinning team takes the cores the physics wants. On the mirror case (24
+cells, k = 3, a shared 16-core box), two copies of one run side by side: with
+`MKL_NUM_THREADS=1` it evaluated 99 residuals a minute, and with MKL's default 16,
+spending three quarters of its wall time outside the physics, where `perf`
+found seven threads doing nothing but spin in `libomp`.
+
 **Nothing in CI builds with `MANTA_OPENMP=ON`**, which is why all of the above
 survived to be found by hand. The `utility_tests` cases are the guard, but they
 only bite in a build that sets it.
