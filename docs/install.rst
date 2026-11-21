@@ -129,6 +129,9 @@ installs into ``./sundials/install``, where the configure step looks on its own:
 
    cmake --preset default -DSUNDIALS_ROOT=/somewhere/else/sundials/install
 
+``-DSUNDIALS_DIR`` works too, naming either that install prefix or a SUNDIALS
+build directory.
+
 Anything else somewhere unusual is named the same way: ``-DEigen3_ROOT``,
 ``-DBOOST_ROOT``, or ``-DCMAKE_PREFIX_PATH="/opt/a;/opt/b"`` for several at once.
 The quotes on that last one matter — the semicolon is CMake's list separator, not

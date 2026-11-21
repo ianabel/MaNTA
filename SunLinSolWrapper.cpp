@@ -74,33 +74,25 @@ int SunLinSolWrapper::LSsolve(SUNLinearSolver LS, SUNMatrix M, N_Vector x, N_Vec
 int SunLinSolWrapper::LSfree(SUNLinearSolver LS)
 {
 	delete LSWrapper( LS );
-	LS->ops = nullptr;
+	LS->content = nullptr;
 	SUNLinSolFreeEmpty( LS );
 	return SUN_SUCCESS;
 }
 
-struct _generic_SUNLinearSolver_Ops LSOps = 
-{
-	.gettype = SunLinSolWrapper::LSGetType,
-	.getid = SunLinSolWrapper::LSGetID,
-	.setatimes = nullptr,
-	.setpreconditioner = nullptr,
-	.setscalingvectors = nullptr,
-	.initialize = SunLinSolWrapper::LSinitialize,
-	.setup = SunLinSolWrapper::LSsetup,
-	.solve = SunLinSolWrapper::LSsolve,
-	.numiters = nullptr,
-	.resnorm = nullptr,
-	.lastflag = nullptr,
-	.space = nullptr,
-	.resid = nullptr,
-	.free = SunLinSolWrapper::LSfree,
-};
-
 SUNLinearSolver SunLinSolWrapper::SunLinSol( SystemSolver* solver, void *mem, SUNContext ctx )
 {
+	// Only the operations this solver provides, set on the ops table
+	// SUNLinSolNewEmpty allocated with every entry null, rather than a whole
+	// table of our own: an aggregate naming every member stops compiling when
+	// SUNDIALS adds, removes or reorders one -- `space` goes in 8.0 -- and
+	// replacing the allocated table leaked it.
 	SUNLinearSolver LS = SUNLinSolNewEmpty(ctx);
 	LS->content = new SunLinSolWrapper(solver);
-	LS->ops = &LSOps;
+	LS->ops->gettype = SunLinSolWrapper::LSGetType;
+	LS->ops->getid = SunLinSolWrapper::LSGetID;
+	LS->ops->initialize = SunLinSolWrapper::LSinitialize;
+	LS->ops->setup = SunLinSolWrapper::LSsetup;
+	LS->ops->solve = SunLinSolWrapper::LSsolve;
+	LS->ops->free = SunLinSolWrapper::LSfree;
 	return LS;
 }

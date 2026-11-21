@@ -211,6 +211,26 @@ if(NOT DEFINED SUNDIALS_ROOT AND NOT DEFINED ENV{SUNDIALS_ROOT}
   message(STATUS "Using the SUNDIALS built by ./build_sundials: ${SUNDIALS_ROOT}")
 endif()
 
+# SUNDIALS_DIR may name an install prefix as well as a build directory. CMake
+# reads <Package>_DIR as the directory holding SUNDIALSConfig.cmake, which is
+# the top level of a SUNDIALS build directory but lib/cmake/sundials (or lib64,
+# or lib/<triple>) of an install -- so a prefix there used to fail with "Could
+# not find a package configuration file", although everything was installed.
+# SUNDIALS_ROOT, a prefix by definition, never had the problem.
+if(DEFINED SUNDIALS_DIR AND IS_DIRECTORY "${SUNDIALS_DIR}"
+   AND NOT EXISTS "${SUNDIALS_DIR}/SUNDIALSConfig.cmake")
+  file(GLOB _manta_sundials_configs
+       "${SUNDIALS_DIR}/*/cmake/sundials/SUNDIALSConfig.cmake"
+       "${SUNDIALS_DIR}/*/*/cmake/sundials/SUNDIALSConfig.cmake")
+  if(_manta_sundials_configs)
+    list(GET _manta_sundials_configs 0 _manta_sundials_config)
+    get_filename_component(_manta_sundials_dir "${_manta_sundials_config}" DIRECTORY)
+    message(STATUS "SUNDIALS_DIR names an install prefix; using ${_manta_sundials_dir}")
+    set(SUNDIALS_DIR "${_manta_sundials_dir}" CACHE PATH
+        "The directory containing SUNDIALSConfig.cmake" FORCE)
+  endif()
+endif()
+
 find_package(SUNDIALS 7.1.0 REQUIRED
              COMPONENTS core ida kinsol nvecserial sunnonlinsolnewton sunlinsolspgmr)
 target_link_libraries(manta_deps INTERFACE
