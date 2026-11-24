@@ -162,7 +162,11 @@ tau = 0.2
 # alpha = 0 alone cut the network's core Q there 3x while its surface
 # average fell 1.4x. ITG_N_ALPHA (8, 4 per half-circle) is within 5% of a
 # converged average, 16 within 1.6%. [0.0] restores the single alpha = 0 line.
-itg_alpha = itg_field_lines(ITG_N_ALPHA)
+# 4 here, not ITG_N_ALPHA: the Jacobian's one 50-row pullback holds ~8 GB of
+# GPU memory per field line (39 radii, nz_internal 201, extrapolated from
+# small sizes), which beside ~30 GB of neoclassical fits ~5 lines on 80 GB.
+# 4 per full circle is 2 per half: +-alpha pairs, coarser than the 5% of 8.
+itg_alpha = itg_field_lines(4)
 
 nodes = rho_upper - 1.0 / np.logspace(1, npoints - 1, base=base, num=npoints - 4)
 nodes = np.concatenate(([0, 0.05, 0.15, 0.3], nodes, [rho_upper]))
