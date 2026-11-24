@@ -54,7 +54,35 @@ def _release_if_concrete(st, outputs):
     # A concrete evaluation is between Jacobians (DESC's trust region
     # evaluates each trial point before differentiating at it), so at most
     # one Jacobian's eager compilations are ever held
-    _drop_eager_compilations()
+    if _CLEAR_EAGER_CACHE:
+        _drop_eager_compilations()
+
+
+def _clear_eager_cache_default():
+    """Whether `_release_if_concrete` empties JAX's eager primitive cache.
+
+    STELLARATOR_CLEAR_EAGER_CACHE=0/1 decides; unset, it is on except on
+    Perlmutter (NERSC_HOST). The clear is a trade, not a fix. It bounds the
+    memory the per-evaluation programs hold (see _drop_eager_compilations),
+    but it also drops every program that *would* be hit again: DESC's
+    compute backward, the yancc Field ops and the ITG geometry's pullback,
+    all dispatched op by op because the objective is built with
+    use_jit=False. Since the Jacobian became one eager vmapped pullback
+    (no scan), those are the bulk of it. Measured on DESC's side alone
+    (diagnostics/time_desc_rev_jac.py's stand-in, L=M=N=4, 9x11 grid, A2000
+    GPU): a warm Jacobian 1.5 s and 1 compile, after a clear 8.0 s and 279
+    compiles. Perlmutter's nodes have the memory to keep them, and this
+    laptop has not.
+    """
+    import os
+
+    flag = os.environ.get("STELLARATOR_CLEAR_EAGER_CACHE")
+    if flag is not None:
+        return flag.strip().lower() not in ("0", "false", "no", "off", "")
+    return os.environ.get("NERSC_HOST", "").lower() != "perlmutter"
+
+
+_CLEAR_EAGER_CACHE = _clear_eager_cache_default()
 
 
 def _drop_eager_compilations():
