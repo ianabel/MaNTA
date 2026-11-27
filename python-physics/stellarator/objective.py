@@ -569,6 +569,10 @@ class ObjectiveHistory:
 
         def compute(params, constants=None):
             f = inner(params, constants)
+            # a PrimalCache hit underneath is a repeat of the evaluation
+            # already recorded, not a new one
+            if getattr(term, "_primal_cache_hit", False):
+                return f
             if not isinstance(f, jax.core.Tracer):
                 x = term.things[0].pack_params(params)
                 self.evaluations.append((np.asarray(x), np.asarray(f)))
@@ -617,3 +621,63 @@ class ObjectiveHistory:
             [np.full(width, np.nan) if f is None else np.ravel(f) for f in rows]
         ).squeeze()
         return result
+
+
+class PrimalCache:
+    """Return a sub-objective's last concrete value again at the same params.
+
+    Under ProximalProjection, a scalar optimizer (fmintr, fmintr-bfgs, the
+    scipy methods) evaluates each trial point and then, once it is accepted,
+    calls `grad` there -- and `grad` evaluates the objective at that point a
+    second time before its vjp (`g = compute_scaled_error(xg)`). The
+    equilibrium solve is cached by the projection; the MaNTA run, the yancc
+    fields and the ITG geometry are not. This wraps `term.compute` so that the
+    second call returns the first's value.
+
+    One entry, deliberately. The vjp's forward pass is the gradient run,
+    which restarts from the restart file the last *primal* run wrote. A hit
+    on anything older than the latest evaluation would hand the gradient run
+    a restart file from another point; with one entry a hit is only ever at
+    the point that wrote it. Keys are the packed params byte for byte: the
+    projection hands `grad` the same stored state its trial evaluation saw,
+    so the repeat is exact, and anything not exact is a different point.
+
+    Tracer calls (Jacobians, vjps) pass straight through and leave the entry
+    alone. `hits` counts the evaluations saved. ObjectiveHistory skips hits,
+    in either wrapping order.
+    """
+
+    def __init__(self, term):
+        self.term = term
+        self.hits = 0
+        self._key = None
+        self._value = None
+        inner = term.compute
+
+        def compute(params, constants=None):
+            term._primal_cache_hit = False
+            leaves = jax.tree.leaves(params)
+            if any(isinstance(leaf, jax.core.Tracer) for leaf in leaves):
+                return inner(params, constants)
+            x = np.asarray(term.things[0].pack_params(params))
+            key = (x.shape, x.dtype.str, x.tobytes())
+            if key == self._key:
+                self.hits += 1
+                term._primal_cache_hit = True
+                return self._value
+            f = inner(params, constants)
+            if isinstance(f, jax.core.Tracer):
+                return f
+            self._key, self._value = key, f
+            return f
+
+        term.compute = compute
+        if "compute" not in term._static_attrs:
+            term._static_attrs += ["compute"]
+        if "_primal_cache_hit" not in term._static_attrs:
+            term._static_attrs += ["_primal_cache_hit"]
+        term._primal_cache_hit = False
+
+    def clear(self):
+        """Forget the entry, e.g. when something outside DESC changed the case."""
+        self._key = self._value = None

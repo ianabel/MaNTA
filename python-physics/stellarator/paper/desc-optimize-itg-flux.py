@@ -29,7 +29,12 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 sys.path.append("..")
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective, ObjectiveFromUserWithParams, ObjectiveHistory
+from objective import (
+    make_objective,
+    ObjectiveFromUserWithParams,
+    ObjectiveHistory,
+    PrimalCache,
+)
 from itg_wrapper import (
     make_itg_builder,
     itg_at,
@@ -593,6 +598,9 @@ objective.build(use_jit=False)
 # DESC returns the iterates but not the objective at each; record the MaNTA
 # term (objective_from_user_fun's 1/g) as it is evaluated
 stored_energy_history = ObjectiveHistory(objectives[-1])
+# fmintr's grad evaluates the objective again at the point it has just
+# accepted; return that value instead of running MaNTA a second time
+manta_primal_cache = PrimalCache(objectives[-1])
 
 k = 5
 # #

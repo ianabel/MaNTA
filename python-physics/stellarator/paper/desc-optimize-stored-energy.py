@@ -5,7 +5,12 @@ sys.path.append("..")
 # uncomment to run test flux
 # os.environ["TEST_STELLARATOR"] = "true"
 from stellarator_multichannel import StellaratorTransport
-from objective import make_objective, ObjectiveFromUserWithParams, ObjectiveHistory
+from objective import (
+    make_objective,
+    ObjectiveFromUserWithParams,
+    ObjectiveHistory,
+    PrimalCache,
+)
 from itg_wrapper import make_itg_builder, itg_at, with_itg, itg_rho_at_nodes
 from config import rescale_config, field_norm_from_eq
 
@@ -824,6 +829,9 @@ objective.build(use_jit=False)
 # DESC returns the iterates but not the objective at each; record the MaNTA
 # term (objective_from_user_fun's 1/g) as it is evaluated
 stored_energy_history = ObjectiveHistory(objectives[-1])
+# fmintr's grad evaluates the objective again at the point it has just
+# accepted; return that value instead of running MaNTA a second time
+manta_primal_cache = PrimalCache(objectives[-1])
 
 k = 5
 # #
